@@ -1,0 +1,6 @@
+testdata/private/
+spike/
+dist/
+*.log
+.DS_Store
+docs/research/

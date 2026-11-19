@@ -1,0 +1,32 @@
+name: core
+on:
+  push:
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: spofy-app
+      - id: rev
+        run: echo "rev=$(cat spofy-app/core/XRAY_REV)" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v7
+        with:
+          repository: SpofyJet/xray-core
+          ref: ${{ steps.rev.outputs.rev }}
+          path: spofy-xray-core
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: spofy-app/core/go.mod
+          cache-dependency-path: spofy-app/core/go.sum
+      - working-directory: spofy-app/core
+        run: |
+          go vet ./...
+          go test -race -count=1 ./...
+      - working-directory: spofy-app/core
+        run: |
+          for target in linux/amd64 windows/amd64 android/arm64; do
+            GOOS=${target%/*} GOARCH=${target#*/} CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -checklinkname=0" -o /tmp/out-${target%/*} ./cmd/spofy-core
+            ls -l /tmp/out-${target%/*}
+          done

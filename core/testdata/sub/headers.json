@@ -1,0 +1,11 @@
+{
+ "Content-Type": "application/json; charset=utf-8",
+ "Profile-Title": "base64:8J+boSBTcG9meSBWUE4=",
+ "Subscription-Userinfo": "upload=1048576; download=452716590; total=107374182400; expire=1798761600",
+ "Profile-Update-Interval": "1",
+ "Support-Url": "https://support.example.test",
+ "Profile-Web-Page-Url": "https://sub.example.test/TESTSHORTUUID",
+ "Announce": "base64:0KLQtdGB0YLQvtCy0L7QtSDQvtCx0YrRj9Cy0LvQtdC90LjQtQ==",
+ "Etag": "W/\"fixture-1\"",
+ "X-Hwid-Active": "true"
+}

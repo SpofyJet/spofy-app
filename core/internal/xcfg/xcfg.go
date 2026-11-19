@@ -1,0 +1,225 @@
+package xcfg
+
+import (
+	"encoding/json"
+	"errors"
+	"slices"
+)
+
+type Mode int
+
+const (
+	ModeTun Mode = iota
+	ModeProxy
+)
+
+const (
+	TagTun   = "tun"
+	TagProxy = "socks"
+)
+
+type Tun struct {
+	Name     string
+	MTU      int
+	Gateway  []string
+	DNS      []string
+	Routes   []string
+	OutIface string
+	WfpBlock []string
+}
+
+type Proxy struct {
+	Listen string
+	Port   int
+	User   string
+	Pass   string
+}
+
+type Options struct {
+	Mode     Mode
+	Tun      Tun
+	Proxy    Proxy
+	LogLevel string
+}
+
+var ErrConfig = errors.New("xcfg: invalid server config")
+
+var kept = []string{"dns", "fakedns", "routing", "outbounds", "policy", "observatory", "burstObservatory"}
+
+var defaultSniffing = json.RawMessage(`{"enabled":true,"routeOnly":false,"destOverride":["http","tls","quic"]}`)
+
+func Build(server json.RawMessage, o Options) ([]byte, error) {
+	var in map[string]json.RawMessage
+	if err := json.Unmarshal(server, &in); err != nil {
+		return nil, ErrConfig
+	}
+	var outbounds []json.RawMessage
+	if json.Unmarshal(in["outbounds"], &outbounds) != nil || len(outbounds) == 0 {
+		return nil, ErrConfig
+	}
+	out := map[string]json.RawMessage{}
+	for _, k := range kept {
+		if v, ok := in[k]; ok && string(v) != "null" {
+			out[k] = v
+		}
+	}
+	sniffing, oldTags := inspect(in["inbounds"])
+	inbound, tag, err := inboundFor(o, sniffing)
+	if err != nil {
+		return nil, err
+	}
+	out["inbounds"] = mustJSON([]any{inbound})
+	if r, ok := out["routing"]; ok {
+		fixed, err := retag(r, oldTags, tag)
+		if err != nil {
+			return nil, err
+		}
+		out["routing"] = fixed
+	}
+	level := o.LogLevel
+	if level == "" {
+		level = "warning"
+	}
+	out["log"] = mustJSON(map[string]string{"loglevel": level})
+	out["stats"] = json.RawMessage(`{}`)
+	policy, err := withStats(out["policy"])
+	if err != nil {
+		return nil, err
+	}
+	out["policy"] = policy
+	return json.Marshal(out)
+}
+
+func inspect(raw json.RawMessage) (json.RawMessage, []string) {
+	var inbounds []struct {
+		Tag      string          `json:"tag"`
+		Sniffing json.RawMessage `json:"sniffing"`
+	}
+	sniffing := defaultSniffing
+	if json.Unmarshal(raw, &inbounds) != nil {
+		return sniffing, nil
+	}
+	var tags []string
+	found := false
+	for _, in := range inbounds {
+		if in.Tag != "" {
+			tags = append(tags, in.Tag)
+		}
+		if !found && len(in.Sniffing) > 0 && string(in.Sniffing) != "null" {
+			sniffing, found = in.Sniffing, true
+		}
+	}
+	return sniffing, tags
+}
+
+func inboundFor(o Options, sniffing json.RawMessage) (map[string]any, string, error) {
+	switch o.Mode {
+	case ModeTun:
+		t := o.Tun
+		settings := map[string]any{}
+		put := func(k string, v []string) {
+			if len(v) > 0 {
+				settings[k] = v
+			}
+		}
+		if t.Name != "" {
+			settings["name"] = t.Name
+		}
+		if t.MTU > 0 {
+			settings["mtu"] = t.MTU
+		}
+		put("gateway", t.Gateway)
+		put("dns", t.DNS)
+		put("autoSystemRoutingTable", t.Routes)
+		put("autoSystemWfpBlockLeak", t.WfpBlock)
+		if t.OutIface != "" {
+			settings["autoOutboundsInterface"] = t.OutIface
+		}
+		return map[string]any{"tag": TagTun, "protocol": "tun", "port": 0, "settings": settings, "sniffing": sniffing}, TagTun, nil
+	case ModeProxy:
+		p := o.Proxy
+		if p.Port <= 0 || p.Port > 65535 || p.User == "" || p.Pass == "" {
+			return nil, "", ErrConfig
+		}
+		listen := p.Listen
+		if listen == "" {
+			listen = "127.0.0.1"
+		}
+		settings := map[string]any{
+			"auth":     "password",
+			"accounts": []map[string]string{{"user": p.User, "pass": p.Pass}},
+			"udp":      true,
+		}
+		return map[string]any{"tag": TagProxy, "protocol": "socks", "listen": listen, "port": p.Port, "settings": settings, "sniffing": sniffing}, TagProxy, nil
+	}
+	return nil, "", ErrConfig
+}
+
+func retag(raw json.RawMessage, old []string, tag string) (json.RawMessage, error) {
+	var routing map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &routing); err != nil {
+		return nil, ErrConfig
+	}
+	var rules []map[string]json.RawMessage
+	if len(routing["rules"]) == 0 || string(routing["rules"]) == "null" {
+		return raw, nil
+	}
+	if err := json.Unmarshal(routing["rules"], &rules); err != nil {
+		return nil, ErrConfig
+	}
+	changed := false
+	for _, rule := range rules {
+		v, ok := rule["inboundTag"]
+		if !ok {
+			continue
+		}
+		var tags []string
+		if err := json.Unmarshal(v, &tags); err != nil {
+			return nil, ErrConfig
+		}
+		var next []string
+		for _, t := range tags {
+			if slices.Contains(old, t) {
+				t = tag
+			}
+			if !slices.Contains(next, t) {
+				next = append(next, t)
+			}
+		}
+		rule["inboundTag"] = mustJSON(next)
+		changed = true
+	}
+	if !changed {
+		return raw, nil
+	}
+	routing["rules"] = mustJSON(rules)
+	return json.Marshal(routing)
+}
+
+func withStats(raw json.RawMessage) (json.RawMessage, error) {
+	policy := map[string]json.RawMessage{}
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &policy); err != nil {
+			return nil, ErrConfig
+		}
+	}
+	system := map[string]json.RawMessage{}
+	if len(policy["system"]) > 0 {
+		if err := json.Unmarshal(policy["system"], &system); err != nil {
+			return nil, ErrConfig
+		}
+	}
+	for _, k := range []string{"statsInboundUplink", "statsInboundDownlink", "statsOutboundUplink", "statsOutboundDownlink"} {
+		system[k] = json.RawMessage(`true`)
+	}
+	policy["system"] = mustJSON(system)
+	return json.Marshal(policy)
+}
+
+func mustJSON(v any) json.RawMessage {
+	b, err := json.Marshal(v)
+	if err != nil {
+		panic(err)
+	}
+	return b
+}
