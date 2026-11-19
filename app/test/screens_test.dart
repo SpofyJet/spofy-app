@@ -8,6 +8,7 @@ import 'package:spofy/ui/app.dart';
 import 'package:spofy/ui/home.dart';
 import 'package:spofy/ui/settings.dart';
 import 'package:spofy/ui/strings.dart';
+import 'package:spofy/ui/subscription.dart';
 import 'package:spofy/ui/widgets.dart';
 
 import 'scenes.dart';
@@ -261,6 +262,50 @@ void main() {
     await tester.pump();
     expect(on.transport.sent.single, '{"id":1,"op":"set","key":"killSwitch","value":false}');
     expect(find.text(S.version('0.1.0')), findsOneWidget);
+  });
+
+  testWidgets('an app link opens the form with the address; only the person adds it', (tester) async {
+    const address = 'https://sub.example.test/sub/TESTTOKEN0123456789';
+    final scene = Scene();
+    await show(tester, scene, phone);
+    scene.model.offer('spofy://add/$address');
+    await tester.pump();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.text(S.subscription), findsOneWidget);
+    expect(tester.widget<EditableText>(find.byType(EditableText)).controller.text, address);
+    expect(scene.model.offered, isNull);
+    expect(scene.transport.sent, isEmpty);
+    expect(find.text(S.offeredHint), findsOneWidget);
+    await golden(tester, 'subscription_offered_360');
+    await tester.tap(find.bySemanticsLabel(S.add));
+    await tester.pump();
+    expect(scene.transport.sent, ['{"id":1,"op":"subscribe","url":"$address"}']);
+  });
+
+  testWidgets('an app link with a subscription in place asks before replacing it', (tester) async {
+    const address = 'https://other.example.test/sub/TESTTOKEN0123456789';
+    final scene = home(VpnState.idle);
+    await show(tester, scene, phone);
+    scene.model.offer('spofy://add/$address');
+    await tester.pump();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.text(S.replaceConfirm), findsOneWidget);
+    expect(find.text(S.replaceFrom(address)), findsOneWidget);
+    expect(S.replaceFrom(address), contains('other.example.test'));
+    await golden(tester, 'subscription_replace_360');
+    await tester.tap(find.bySemanticsLabel(S.cancel));
+    await tester.pump();
+    expect(find.text(S.replaceConfirm), findsNothing);
+    expect(scene.transport.sent, isEmpty);
+    scene.model.offer('spofy://add/$address');
+    await tester.pump();
+    expect(find.text(S.replaceConfirm), findsOneWidget);
+    expect(find.byType(SubscriptionScreen), findsOneWidget);
+    await tester.tap(find.bySemanticsLabel(S.replace));
+    await tester.pump();
+    expect(scene.transport.sent, ['{"id":1,"op":"subscribe","url":"$address"}']);
   });
 
   testWidgets('settings fit a 320 px phone with 130 % text', (tester) async {

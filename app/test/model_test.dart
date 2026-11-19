@@ -185,6 +185,47 @@ void main() {
     expect(absent.fault, AppModel.coreClosed);
   });
 
+  test('an app link offers a subscription address and never adds it by itself', () async {
+    const address = 'https://sub.example.test/sub/TESTTOKEN0123456789';
+    expect(offeredAddress('spofy://add/$address'), address);
+    expect(offeredAddress(' spofy://add?url=${Uri.encodeQueryComponent(address)} '), address);
+    expect(offeredAddress('spofy://add/$address?x=1#frag'), '$address?x=1#frag');
+    for (final bad in [
+      '',
+      address,
+      'spofy://add',
+      'spofy://add/',
+      'spofy://add/http://sub.example.test/sub/x',
+      'spofy://add?url=file:///etc/passwd',
+      'spofy://remove/$address',
+      'spofy://addmore/$address',
+      'other://add/$address',
+      'spofy://add/https://',
+      'spofy://add/https://sub.example.test/${'x' * 2100}',
+    ]) {
+      expect(offeredAddress(bad), isNull, reason: bad);
+    }
+    final transport = ReplayTransport(Transcript.load().exchanges);
+    final model = AppModel(CoreClient(transport));
+    await model.start();
+    var changes = 0;
+    model.addListener(() => changes++);
+    model.offer('spofy://add/http://sub.example.test/x');
+    expect(model.offered, isNull);
+    expect(changes, 0);
+    model.offer('spofy://add/$address');
+    expect(model.offered, address);
+    expect(changes, 1);
+    expect(transport.position, 1);
+    model.decline();
+    expect(model.offered, isNull);
+    expect(changes, 2);
+    model.offer('spofy://add/$address');
+    expect(model.take(), address);
+    expect(model.take(), isNull);
+    expect(transport.position, 1);
+  });
+
   test('connect asks for the permission first, a refusal sends nothing and is kept as the reason', () async {
     final transcript = Transcript.load();
     final transport = ReplayTransport(transcript.exchanges);

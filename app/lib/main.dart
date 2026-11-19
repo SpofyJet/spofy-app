@@ -24,13 +24,11 @@ void main() {
     );
   }
   final platform = host();
-  runApp(
-    SpofyApp(
-      model: AppModel.opening(
-        () async => CoreClient(await platform.open()),
-        permit: platform.permit,
-        always: platform.always,
-      ),
-    ),
+  final model = AppModel.opening(
+    () async => CoreClient(await platform.open()),
+    permit: platform.permit,
+    always: platform.always,
   );
+  platform.links(model.offer);
+  runApp(SpofyApp(model: model));
 }

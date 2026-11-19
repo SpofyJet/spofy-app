@@ -24,6 +24,7 @@ class _SpofyAppState extends State<SpofyApp> with WidgetsBindingObserver {
   final _navigator = GlobalKey<NavigatorState>();
   Timer? _poll;
   bool _visible = true;
+  bool _subscription = false;
 
   @override
   void initState() {
@@ -62,6 +63,10 @@ class _SpofyAppState extends State<SpofyApp> with WidgetsBindingObserver {
   }
 
   void _schedule() {
+    if (widget.model.offered != null && !_subscription) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _subscribe());
+      WidgetsBinding.instance.scheduleFrame();
+    }
     final wanted = _visible && widget.model.connection.state.protecting;
     if (wanted && _poll == null) {
       widget.model.poll();
@@ -72,9 +77,19 @@ class _SpofyAppState extends State<SpofyApp> with WidgetsBindingObserver {
     }
   }
 
-  void _open(Widget Function(VoidCallback done) screen) {
+  Future<void> _open(Widget Function(VoidCallback done) screen) {
     final navigator = _navigator.currentState!;
-    navigator.push(_route<void>((context) => screen(() => navigator.maybePop())));
+    return navigator.push(_route<void>((context) => screen(() => navigator.maybePop())));
+  }
+
+  void _subscribe() {
+    if (_subscription || !mounted || _navigator.currentState == null) {
+      return;
+    }
+    _subscription = true;
+    final model = widget.model;
+    _open((done) => SubscriptionScreen(model: model, now: widget.now, onDone: done))
+        .whenComplete(() => _subscription = false);
   }
 
   static PageRoute<T> _route<T>(WidgetBuilder builder, [RouteSettings? settings]) {
@@ -110,7 +125,7 @@ class _SpofyAppState extends State<SpofyApp> with WidgetsBindingObserver {
         model: model,
         now: widget.now,
         onServers: () => _open((done) => ServersScreen(model: model, onDone: done)),
-        onSubscription: () => _open((done) => SubscriptionScreen(model: model, now: widget.now, onDone: done)),
+        onSubscription: _subscribe,
         onSettings: () => _open((done) => SettingsScreen(model: model, onDone: done)),
       ),
     );

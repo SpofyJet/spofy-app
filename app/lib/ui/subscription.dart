@@ -51,12 +51,29 @@ class _AddForm extends StatefulWidget {
 class _AddFormState extends State<_AddForm> {
   final _link = TextEditingController();
   final _focus = FocusNode();
+  bool _given = false;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.model.addListener(_offered);
+    _offered();
+  }
 
   @override
   void dispose() {
+    widget.model.removeListener(_offered);
     _link.dispose();
     _focus.dispose();
     super.dispose();
+  }
+
+  void _offered() {
+    final target = widget.model.take();
+    if (target != null) {
+      _link.text = target;
+      _given = true;
+    }
   }
 
   Future<void> _paste() async {
@@ -85,7 +102,7 @@ class _AddFormState extends State<_AddForm> {
     return ListView(
       padding: const EdgeInsets.fromLTRB(Ink.gutter, 4, Ink.gutter, 16),
       children: [
-        Text(S.noSubscriptionHint, style: Ink.note),
+        Text(_given ? S.offeredHint : S.noSubscriptionHint, style: Ink.note),
         const SizedBox(height: 16),
         Panel(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
@@ -142,6 +159,13 @@ class _Details extends StatefulWidget {
 class _DetailsState extends State<_Details> {
   bool _removing = false;
 
+  Future<void> _replace() async {
+    final target = widget.model.take();
+    if (target != null) {
+      await widget.model.subscribe(target);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final model = widget.model;
@@ -150,9 +174,42 @@ class _DetailsState extends State<_Details> {
     final failure = model.failure;
     final expiry = S.expiry(s, now);
     final left = S.lifetime(s) || s.expire <= 0 ? 99 : S.daysLeft(s, now);
+    final offered = model.offered;
     return ListView(
       padding: const EdgeInsets.fromLTRB(Ink.gutter, 4, Ink.gutter, 16),
       children: [
+        if (offered != null || model.running(Task.subscribe)) ...[
+          Panel(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(S.replaceConfirm, style: Ink.strong),
+                if (offered != null) ...[
+                  const SizedBox(height: 4),
+                  Text(S.replaceFrom(offered), style: Ink.note, maxLines: 2, overflow: TextOverflow.ellipsis),
+                ],
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: QuietButton(label: S.cancel, onTap: offered == null ? null : model.decline),
+                    ),
+                    Expanded(
+                      child: QuietButton(
+                        label: S.replace,
+                        color: Ink.accent,
+                        busy: model.running(Task.subscribe),
+                        onTap: _replace,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
+        ],
+        if (failure?.task == Task.subscribe) ...[Notice(S.failure(failure!)), const SizedBox(height: 8)],
         Panel(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,

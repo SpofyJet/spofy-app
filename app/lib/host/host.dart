@@ -15,6 +15,8 @@ abstract interface class Host {
   Future<bool> permit();
 
   void Function()? get always;
+
+  void links(void Function(String link) hear);
 }
 
 Host host() => Platform.isAndroid ? const AndroidHost() : const DesktopHost();
@@ -38,6 +40,30 @@ class AndroidHost implements Host {
   @override
   void Function()? get always =>
       () => unawaited(_channel.invokeMethod<void>('always'));
+
+  @override
+  void links(void Function(String link) hear) {
+    _channel.setMethodCallHandler((call) async {
+      final link = call.arguments;
+      if (call.method == 'link' && link is String) {
+        hear(link);
+      }
+    });
+    unawaited(_first(hear));
+  }
+
+  Future<void> _first(void Function(String link) hear) async {
+    try {
+      final link = await _channel.invokeMethod<String>('link');
+      if (link != null) {
+        hear(link);
+      }
+    } on PlatformException {
+      return;
+    } on MissingPluginException {
+      return;
+    }
+  }
 }
 
 class DesktopHost implements Host {
@@ -85,4 +111,7 @@ class DesktopHost implements Host {
 
   @override
   void Function()? get always => null;
+
+  @override
+  void links(void Function(String link) hear) {}
 }

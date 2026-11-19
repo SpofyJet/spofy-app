@@ -44,6 +44,28 @@ class AppModel extends ChangeNotifier {
   bool ready = false;
   String fault = '';
   Failure? failure;
+  String? offered;
+
+  void offer(String link) {
+    final target = offeredAddress(link);
+    if (target == null || _disposed) {
+      return;
+    }
+    offered = target;
+    notifyListeners();
+  }
+
+  String? take() {
+    final target = offered;
+    offered = null;
+    return target;
+  }
+
+  void decline() {
+    if (take() != null && !_disposed) {
+      notifyListeners();
+    }
+  }
 
   Connection get connection => snapshot.connection;
 
@@ -244,4 +266,24 @@ class AppModel extends ChangeNotifier {
       notifyListeners();
     }
   }
+}
+
+String? offeredAddress(String link) {
+  const prefix = 'spofy://add';
+  final text = link.trim();
+  if (!text.startsWith(prefix)) {
+    return null;
+  }
+  final rest = text.substring(prefix.length);
+  var target = '';
+  if (rest.startsWith('/')) {
+    target = rest.substring(1);
+  } else if (rest.startsWith('?')) {
+    target = Uri.tryParse(text)?.queryParameters['url'] ?? '';
+  }
+  final address = Uri.tryParse(target);
+  if (address == null || address.scheme != 'https' || address.host.isEmpty || target.length > 2048) {
+    return null;
+  }
+  return target;
 }

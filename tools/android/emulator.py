@@ -12,6 +12,7 @@ failed = []
 started = []
 remote = {}
 seen = []
+asked = []
 os.makedirs(OUT, exist_ok=True)
 
 
@@ -111,6 +112,8 @@ class Site(http.server.BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
+        if self.path.startswith("/sub/"):
+            asked.append(self.path)
         if self.path == "/generate_204":
             self.reply(204)
         elif self.path == "/ip":
@@ -246,14 +249,26 @@ def engines():
     return [pid for pid, (_, args) in processes().items() if args.rstrip().endswith("libspofycore.so engine")]
 
 
+def role(args):
+    return "interface" if args.strip() == PACKAGE else "service" if args.strip() == PACKAGE + ":core" else "engine" if args.rstrip().endswith(" engine") else "core"
+
+
 def memory():
     total = {}
     for pid, (_, args) in processes().items():
         text = shell("dumpsys meminfo %d" % pid, limit=60)
         m = re.search(r"TOTAL PSS:\s+(\d+)", text) or re.search(r"TOTAL\s+(\d+)", text)
-        name = "interface" if args.strip() == PACKAGE else "service" if args.strip() == PACKAGE + ":core" else "engine" if args.rstrip().endswith(" engine") else "core"
         if m:
-            total[name] = total.get(name, 0) + int(m.group(1)) // 1024
+            total[role(args)] = total.get(role(args), 0) + int(m.group(1)) // 1024
+    return total
+
+
+def cpu():
+    total = {}
+    for pid, (_, args) in processes().items():
+        fields = shell("cat /proc/%d/stat" % pid).rsplit(")", 1)[-1].split()
+        if len(fields) > 12:
+            total[role(args)] = total.get(role(args), 0) + (int(fields[11]) + int(fields[12])) * 10
     return total
 
 
@@ -417,13 +432,41 @@ def scenario():
     expect("disconnect after a start by the system removes the tunnel and the notification", d["ok"] and bool(gone))
     later.s.close()
 
+    tile = "%s/%s.QuickTile" % (PACKAGE, PACKAGE)
+    shell("cmd statusbar add-tile %s" % tile)
+    time.sleep(2)
+    shell("cmd statusbar click-tile %s" % tile)
+    began = time.time()
+    up = until(lambda: tunnel() != "" and through(), 40, 0.2)
+    took = time.time() - began
+    shell("cmd statusbar expand-settings")
+    time.sleep(2)
+    screen("7-tile")
+    shell("cmd statusbar collapse")
+    expect("the quick settings tile turns the VPN on", bool(up), "s=%.1f" % took)
+    before = cpu()
+    time.sleep(30)
+    after = cpu()
+    print("30 s with the VPN on and the screen idle, CPU ms: %s" % {k: after.get(k, 0) - before.get(k, 0) for k in after}, flush=True)
+    shell("cmd statusbar click-tile %s" % tile)
+    gone = until(lambda: tunnel() == "", 15)
+    expect("the same tile turns it off", bool(gone))
+
+    shell("am force-stop %s" % PACKAGE)
+    before = len(asked)
+    shell("am start -W -a android.intent.action.VIEW -d 'spofy://add/https://%s:8443/sub/OTHERTOKEN' %s" % (GATE, PACKAGE), limit=120)
+    time.sleep(8)
+    screen("8-link")
+    opened = [args.strip() for _, args in processes().values()]
+    expect("a link opens the app and adds nothing by itself", PACKAGE in opened and "/sub/OTHERTOKEN" not in asked[before:], "asked=%s" % asked[before:])
+
     if RELEASE:
         adb("uninstall", PACKAGE, limit=120)
         code, out = run("adb", "install", "-g", RELEASE, limit=300)
         need("the release build installs", code == 0 and "Success" in out, out[-300:])
         times = started_in()
         time.sleep(3)
-        screen("7-release")
+        screen("9-release")
         usage = memory()
         expect("the release build starts and its core listens", len(times) == 3 and "core.sock" in shell("ls %s/files" % DATA), "ms=%s" % times)
         print("release build: apk %.1f MB, cold start %s ms, memory %s MB" % (os.path.getsize(RELEASE) / 1e6, times, usage), flush=True)

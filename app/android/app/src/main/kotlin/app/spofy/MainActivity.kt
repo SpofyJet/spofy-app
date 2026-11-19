@@ -9,6 +9,7 @@ import android.content.ServiceConnection
 import android.content.pm.PackageManager
 import android.net.VpnService
 import android.os.Build
+import android.os.Bundle
 import android.os.IBinder
 import android.provider.Settings
 import io.flutter.embedding.android.FlutterActivity
@@ -18,6 +19,8 @@ import io.flutter.plugin.common.MethodChannel
 class MainActivity : FlutterActivity() {
     private val starting = mutableListOf<MethodChannel.Result>()
     private var asking: MethodChannel.Result? = null
+    private var channel: MethodChannel? = null
+    private var offered: String? = null
     private var binding = false
     private var bound = false
 
@@ -33,12 +36,39 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    override fun onCreate(savedInstanceState: Bundle?) {
+        keep(intent)
+        super.onCreate(savedInstanceState)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        keep(intent)
+        val fresh = offered ?: return
+        val live = channel ?: return
+        offered = null
+        live.invokeMethod("link", fresh)
+    }
+
+    private fun keep(intent: Intent?) {
+        val data = intent?.data ?: return
+        if (intent?.action == Intent.ACTION_VIEW && data.scheme == "spofy") {
+            offered = data.toString()
+        }
+    }
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "app.spofy/host").setMethodCallHandler { call, result ->
+        val host = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "app.spofy/host")
+        channel = host
+        host.setMethodCallHandler { call, result ->
             when (call.method) {
                 "start" -> start(result)
                 "prepare" -> prepare(result)
+                "link" -> {
+                    result.success(offered)
+                    offered = null
+                }
                 "always" -> {
                     try {
                         startActivity(Intent(Settings.ACTION_VPN_SETTINGS))
@@ -97,6 +127,7 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun onDestroy() {
+        channel = null
         if (binding) {
             unbindService(link)
             binding = false

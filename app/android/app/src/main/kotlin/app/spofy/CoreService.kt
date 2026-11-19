@@ -5,6 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -19,6 +20,7 @@ import android.net.VpnService
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
+import android.service.quicksettings.TileService
 import android.util.Log
 import java.io.File
 import java.io.FileDescriptor
@@ -46,8 +48,6 @@ class CoreService : VpnService() {
     @Volatile
     private var wanted = false
 
-    @Volatile
-    private var state = "idle"
     private var watching = false
     private var ready = false
     private val waiting = ArrayDeque<JSONObject>()
@@ -192,8 +192,17 @@ class CoreService : VpnService() {
         }
     }
 
+    private fun tell(state: String) {
+        now = state
+        try {
+            TileService.requestListeningState(this, ComponentName(this, QuickTile::class.java))
+        } catch (e: Exception) {
+        }
+    }
+
     private fun release() {
         asks.execute { ready = false }
+        tell("idle")
         if (closing || !wanted) {
             lower()
         }
@@ -223,8 +232,9 @@ class CoreService : VpnService() {
     private fun handle(message: JSONObject) {
         if (!message.has("ask")) {
             if (message.optString("ev") == "connection") {
-                state = message.getJSONObject("connection").optString("state")
+                val state = message.getJSONObject("connection").optString("state")
                 note("state $state")
+                tell(state)
                 if (state == "idle") {
                     wanted = false
                     lower()
@@ -336,12 +346,11 @@ class CoreService : VpnService() {
     }
 
     private fun again() {
-        if (wanted && state == "failed") {
+        if (wanted && now == "failed") {
             request("connect")
         }
     }
 
-    @Synchronized
     @Synchronized
     private fun watch(on: Boolean) {
         if (on == watching) {
@@ -372,15 +381,7 @@ class CoreService : VpnService() {
     }
 
     private fun show(state: String) {
-        val title = when (state) {
-            "connected" -> R.string.state_connected
-            "connecting", "measuring" -> R.string.state_connecting
-            "switching" -> R.string.state_switching
-            "stalled" -> R.string.state_stalled
-            "offline" -> R.string.state_offline
-            "failed" -> R.string.state_failed
-            else -> return
-        }
+        val title = title(state) ?: return
         if (shown) {
             val text = when (state) {
                 "stalled" -> getString(R.string.stalled_hint)
@@ -470,6 +471,20 @@ class CoreService : VpnService() {
         private const val PENDING = 8
         private val ROOTS = listOf("/apex/com.android.conscrypt/cacerts", "/system/etc/security/cacerts")
 
+        @Volatile
+        var now = "idle"
+            private set
+
         fun socket(context: Context) = File(context.filesDir, "core.sock")
+
+        fun title(state: String): Int? = when (state) {
+            "connected" -> R.string.state_connected
+            "connecting", "measuring" -> R.string.state_connecting
+            "switching" -> R.string.state_switching
+            "stalled" -> R.string.state_stalled
+            "offline" -> R.string.state_offline
+            "failed" -> R.string.state_failed
+            else -> null
+        }
     }
 }

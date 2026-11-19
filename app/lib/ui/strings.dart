@@ -32,6 +32,11 @@ abstract final class S {
   static const remove = 'Удалить подписку';
   static const removeConfirm = 'Удалить подписку с этого устройства?';
   static const cancel = 'Отмена';
+  static const offeredHint = 'Ссылка получена. Проверьте её и нажмите «Добавить»';
+  static const replaceConfirm = 'Заменить подписку?';
+  static const replace = 'Заменить';
+
+  static String replaceFrom(String address) => 'Новая ссылка: ${Uri.tryParse(address)?.host ?? ''}';
   static const support = 'Поддержка';
   static const measure = 'Проверить скорость';
   static const measuring = 'Проверяем серверы';
