@@ -2,6 +2,7 @@ package engine
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"os"
 	"runtime"
@@ -40,11 +41,13 @@ func (e *Error) Unwrap() error { return e.Err }
 type Traffic struct {
 	Up   int64 `json:"up"`
 	Down int64 `json:"down"`
+	Back int64 `json:"back,omitempty"`
 }
 
 type Instance struct {
 	inst  *core.Instance
 	stats stats.Manager
+	far   []string
 	once  sync.Once
 }
 
@@ -129,11 +132,34 @@ func start(cfg []byte) (*Instance, error) {
 		inst.Close()
 		return nil, classify(err, CodeStart)
 	}
-	i := &Instance{inst: inst}
+	i := &Instance{inst: inst, far: far(cfg)}
 	if m, ok := inst.GetFeature(stats.ManagerType()).(stats.Manager); ok {
 		i.stats = m
 	}
 	return i, nil
+}
+
+func far(cfg []byte) []string {
+	var shape struct {
+		Outbounds []struct {
+			Tag      string `json:"tag"`
+			Protocol string `json:"protocol"`
+		} `json:"outbounds"`
+	}
+	if json.Unmarshal(cfg, &shape) != nil {
+		return nil
+	}
+	var tags []string
+	for _, o := range shape.Outbounds {
+		switch o.Protocol {
+		case "freedom", "blackhole", "dns", "loopback":
+		default:
+			if o.Tag != "" {
+				tags = append(tags, o.Tag)
+			}
+		}
+	}
+	return tags
 }
 
 func (i *Instance) Close() error {
@@ -150,13 +176,20 @@ func (i *Instance) Traffic(tag string) Traffic {
 	if i.stats == nil {
 		return Traffic{}
 	}
-	read := func(dir string) int64 {
-		if c := i.stats.GetCounter("inbound>>>" + tag + ">>>traffic>>>" + dir); c != nil {
+	read := func(side, tag, dir string) int64 {
+		if c := i.stats.GetCounter(side + ">>>" + tag + ">>>traffic>>>" + dir); c != nil {
 			return c.Value()
 		}
 		return 0
 	}
-	return Traffic{Up: read("uplink"), Down: read("downlink")}
+	t := Traffic{Up: read("inbound", tag, "uplink"), Down: read("inbound", tag, "downlink")}
+	for _, out := range i.far {
+		t.Back += read("outbound", out, "downlink")
+	}
+	if len(i.far) == 0 {
+		t.Back = t.Down
+	}
+	return t
 }
 
 func classify(err error, fallback Code) *Error {

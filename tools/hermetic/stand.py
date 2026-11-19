@@ -447,6 +447,7 @@ def platform():
 
     other = [n for n in SERVERS if n != first][0]
     noise = spawn("client", ["sh", "-c", "while :; do curl -s -m 1 -o /dev/null http://10.77.1.2/ip; done"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    calm = spawn("client", ["sh", "-c", "while :; do curl -s -m 1 -o /dev/null http://10.77.2.2/ip; sleep 0.3; done"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     c = ui.call("connect", server=other)
     code, body = fetch("http://foreign.test/ip")
     expect("platform: another server on the same tunnel", c["ok"] and body == SERVERS[other] and len(asked("tun")) == 1 and device in links(),
@@ -502,6 +503,8 @@ def platform():
            "ms=%d state=%s server=%s" % (on["ms"], now["state"], now["server"]))
     noise.kill()
     noise.wait()
+    calm.kill()
+    calm.wait()
     foreign = [l for l in questions()[before:] if l[0] == CLIENT and l[1].rstrip(".") in FOREIGN]
     expect("platform: nothing left the client directly while the tunnel was up", counter("foreign_direct") == 0 and not foreign,
            "packets=%d dns=%d" % (counter("foreign_direct"), len(foreign)))

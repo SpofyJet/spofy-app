@@ -16,11 +16,11 @@ class Failure {
 }
 
 class AppModel extends ChangeNotifier {
-  AppModel(CoreClient client, {this.reopen, this.permit}) {
+  AppModel(CoreClient client, {this.reopen, this.permit, this.always}) {
     _attach(client);
   }
 
-  AppModel.opening(Future<CoreClient> Function() open, {this.permit}) : reopen = open {
+  AppModel.opening(Future<CoreClient> Function() open, {this.permit, this.always}) : reopen = open {
     unawaited(revive());
   }
 
@@ -30,6 +30,7 @@ class AppModel extends ChangeNotifier {
 
   final Future<CoreClient> Function()? reopen;
   final Future<bool> Function()? permit;
+  final VoidCallback? always;
 
   CoreClient? _client;
   StreamSubscription<Event>? _events;

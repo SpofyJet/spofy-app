@@ -15,13 +15,13 @@ type stall struct {
 	seen  engine.Traffic
 	since time.Time
 	sends int
-	until time.Time
+	fired time.Time
 	rest  time.Duration
 }
 
 func (w *stall) step(t engine.Traffic, quiet time.Duration, now time.Time) bool {
-	sent, got := t.Up > w.seen.Up, t.Down > w.seen.Down
-	back := t.Up < w.seen.Up || t.Down < w.seen.Down
+	sent, got := t.Up > w.seen.Up, t.Back > w.seen.Back
+	back := t.Up < w.seen.Up || t.Back < w.seen.Back
 	w.seen = t
 	if got || back {
 		w.since, w.sends, w.rest = time.Time{}, 0, 0
@@ -33,11 +33,11 @@ func (w *stall) step(t engine.Traffic, quiet time.Duration, now time.Time) bool 
 		}
 		w.sends++
 	}
-	if w.sends < 2 || now.Sub(w.since) < quiet || now.Before(w.until) {
+	if w.sends < 2 || now.Sub(w.since) < quiet || (!w.fired.IsZero() && now.Sub(w.fired) < max(w.rest, stallRest)) {
 		return false
 	}
 	w.rest = min(max(2*w.rest, stallRest), stallRestMax)
-	w.until = now.Add(w.rest)
+	w.fired = now
 	w.since, w.sends = time.Time{}, 0
 	return true
 }

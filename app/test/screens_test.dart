@@ -264,12 +264,25 @@ void main() {
   });
 
   testWidgets('settings fit a 320 px phone with 130 % text', (tester) async {
-    await show(tester, home(VpnState.idle), const Size(320, 568), textScale: 1.3);
+    await show(tester, home(VpnState.idle, always: () {}), const Size(320, 568), textScale: 1.3);
     await open(tester, S.settings);
     expect(tester.takeException(), isNull);
+    expect(find.text(S.alwaysOn), findsOneWidget);
     for (final text in tester.renderObjectList<RenderParagraph>(find.byType(RichText))) {
       expect(text.didExceedMaxLines, isFalse, reason: text.text.toPlainText());
     }
+  });
+
+  testWidgets('where the system can hold the VPN itself the settings lead to it', (tester) async {
+    var opened = 0;
+    await show(tester, home(VpnState.idle, always: () => opened++), phone);
+    await open(tester, S.settings);
+    await golden(tester, 'settings_system_360');
+    await tester.tap(find.bySemanticsLabel(RegExp('^${S.alwaysOn}')));
+    expect(opened, 1);
+    await show(tester, home(VpnState.idle), phone);
+    await open(tester, S.settings);
+    expect(find.text(S.alwaysOn), findsNothing);
   });
 
   testWidgets('the power control sends connect, then disconnect', (tester) async {

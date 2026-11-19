@@ -512,7 +512,7 @@ func TestUnsubscribe(t *testing.T) {
 func TestTrafficAndEvents(t *testing.T) {
 	b := newBench(t, nil)
 	b.tunnel.Count(10, 20)
-	if tr := b.app.Traffic(); tr.Up != 10 || tr.Down != 20 {
+	if tr := b.app.Traffic(); tr != (engine.Traffic{Up: 10, Down: 20}) {
 		t.Fatalf("traffic = %+v", tr)
 	}
 	for ev, want := range map[string]string{

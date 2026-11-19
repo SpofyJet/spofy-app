@@ -42,6 +42,10 @@ class SettingsScreen extends StatelessWidget {
                       value: settings[killSwitchKey] == true,
                       onChanged: (value) => model.set(killSwitchKey, value),
                     ),
+                    if (model.always != null) ...[
+                      const SizedBox(height: 8),
+                      Tile(title: S.alwaysOn, subtitle: S.alwaysOnHint, wrap: true, onTap: model.always),
+                    ],
                     const SizedBox(height: 20),
                     Text(S.version(model.snapshot.version), style: Ink.label, textAlign: TextAlign.center),
                   ],

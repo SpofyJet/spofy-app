@@ -11,6 +11,8 @@ abstract final class S {
   static const autoConnect = 'Включать VPN при запуске';
   static const autoConnectHint = 'Открыли приложение — VPN уже работает';
   static const killSwitch = 'Без VPN — без интернета';
+  static const alwaysOn = 'Постоянная VPN';
+  static const alwaysOnHint = 'В настройках Android: VPN включается сама, без неё интернет закрыт';
   static const killSwitchHint = 'Если серверы не отвечают, интернет останавливается, а не идёт напрямую';
 
   static String version(String number) => 'Версия $number';

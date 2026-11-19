@@ -13,6 +13,8 @@ abstract interface class Host {
   Future<Transport> open();
 
   Future<bool> permit();
+
+  void Function()? get always;
 }
 
 Host host() => Platform.isAndroid ? const AndroidHost() : const DesktopHost();
@@ -32,6 +34,10 @@ class AndroidHost implements Host {
   Future<bool> permit() async {
     return await _channel.invokeMethod<bool>('prepare') ?? false;
   }
+
+  @override
+  void Function()? get always =>
+      () => unawaited(_channel.invokeMethod<void>('always'));
 }
 
 class DesktopHost implements Host {
@@ -76,4 +82,7 @@ class DesktopHost implements Host {
 
   @override
   Future<bool> permit() async => true;
+
+  @override
+  void Function()? get always => null;
 }

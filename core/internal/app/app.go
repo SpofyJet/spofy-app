@@ -212,7 +212,7 @@ func (a *App) watch() {
 		if now.State != session.Connected && now.State != session.Stalled {
 			continue
 		}
-		if w.step(a.Traffic(), a.cfg.Quiet, time.Now()) {
+		if w.step(a.flow(), a.cfg.Quiet, time.Now()) {
 			a.sess.Suspect(a.ctx)
 		}
 	}
@@ -399,6 +399,11 @@ func on(st store.State, key string) bool {
 }
 
 func (a *App) Traffic() engine.Traffic {
+	t := a.flow()
+	return engine.Traffic{Up: t.Up, Down: t.Down}
+}
+
+func (a *App) flow() engine.Traffic {
 	tag := xcfg.TagTun
 	if a.cfg.Run.Mode == xcfg.ModeProxy {
 		tag = xcfg.TagProxy

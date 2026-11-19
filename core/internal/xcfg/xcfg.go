@@ -27,6 +27,7 @@ type Tun struct {
 	Routes   []string
 	OutIface string
 	WfpBlock []string
+	Resolver []string
 }
 
 type Proxy struct {
@@ -79,6 +80,13 @@ func Build(server json.RawMessage, o Options) ([]byte, error) {
 				return nil, err
 			}
 			out["routing"] = fixed
+		}
+		if o.Mode == ModeTun && len(o.Tun.Resolver) > 0 {
+			outs, routing, err := resolver(outbounds, out["routing"], o.Tun.Resolver)
+			if err != nil {
+				return nil, err
+			}
+			out["outbounds"], out["routing"] = mustJSON(outs), routing
 		}
 	}
 	level := o.LogLevel
@@ -170,6 +178,42 @@ func inboundFor(o Options, sniffing json.RawMessage) (map[string]any, string, er
 		return map[string]any{"tag": TagProxy, "protocol": "socks", "listen": listen, "port": p.Port, "settings": settings, "sniffing": sniffing}, TagProxy, nil
 	}
 	return nil, "", ErrConfig
+}
+
+func resolver(outbounds []json.RawMessage, raw json.RawMessage, addrs []string) ([]json.RawMessage, json.RawMessage, error) {
+	find := func(protocol, fallback string) string {
+		for _, o := range outbounds {
+			var shape struct {
+				Tag      string `json:"tag"`
+				Protocol string `json:"protocol"`
+			}
+			if json.Unmarshal(o, &shape) == nil && shape.Protocol == protocol && shape.Tag != "" {
+				return shape.Tag
+			}
+		}
+		outbounds = append(outbounds, mustJSON(map[string]string{"tag": fallback, "protocol": protocol}))
+		return fallback
+	}
+	dns, drop := find("dns", "spofy-dns"), find("blackhole", "spofy-drop")
+	routing := map[string]json.RawMessage{}
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &routing); err != nil {
+			return nil, nil, ErrConfig
+		}
+	}
+	var rules []json.RawMessage
+	if len(routing["rules"]) > 0 && string(routing["rules"]) != "null" {
+		if err := json.Unmarshal(routing["rules"], &rules); err != nil {
+			return nil, nil, ErrConfig
+		}
+	}
+	own := []json.RawMessage{
+		mustJSON(map[string]any{"type": "field", "inboundTag": []string{TagTun}, "ip": addrs, "port": "53", "outboundTag": dns}),
+		mustJSON(map[string]any{"type": "field", "inboundTag": []string{TagTun}, "ip": addrs, "outboundTag": drop}),
+	}
+	routing["rules"] = mustJSON(append(own, rules...))
+	fixed, err := json.Marshal(routing)
+	return outbounds, fixed, err
 }
 
 func retag(raw json.RawMessage, old []string, tag string) (json.RawMessage, error) {

@@ -145,6 +145,8 @@ func remember(st *store.Store) func([]session.Candidate, []supervisor.Measuremen
 	}
 }
 
+const resolver = "172.19.0.2"
+
 func tunnel(mode string, port int, level string) (xcfg.Options, error) {
 	opts := xcfg.Options{Mode: xcfg.ModeTun, LogLevel: level, Tun: xcfg.Tun{
 		Name: "spofy0", MTU: 1500, Gateway: []string{"172.19.0.1/30"}, Routes: []string{"0.0.0.0/1", "128.0.0.0/1"},
@@ -213,10 +215,10 @@ func serve(args []string) int {
 		}
 		platform = &host.Platform{}
 		t := &host.Tun{Platform: platform, Spec: host.Spec{
-			Name: opts.Tun.Name, MTU: opts.Tun.MTU, Addresses: []string{"172.19.0.1/30", "fdfe:5f0f::1/126"}, Routes: []string{"0.0.0.0/0", "::/0"}, DNS: []string{"172.19.0.2"},
+			Name: opts.Tun.Name, MTU: opts.Tun.MTU, Addresses: []string{"172.19.0.1/30", "fdfe:5f0f::1/126"}, Routes: []string{"0.0.0.0/0", "::/0"}, DNS: []string{resolver},
 		}}
 		g, carried = t, t.File
-		opts.Tun = xcfg.Tun{Name: opts.Tun.Name, MTU: opts.Tun.MTU}
+		opts.Tun = xcfg.Tun{Name: opts.Tun.Name, MTU: opts.Tun.MTU, Resolver: []string{resolver}}
 	}
 	var a *app.App
 	var checks sync.WaitGroup

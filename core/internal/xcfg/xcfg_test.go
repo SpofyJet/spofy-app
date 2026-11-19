@@ -75,6 +75,57 @@ func TestBuildTunKeepsServerLogic(t *testing.T) {
 	}
 }
 
+func TestBuildTunGivesTheResolverAddressToTheNameHandlerAndRefusesTheRest(t *testing.T) {
+	type shape struct {
+		Outbounds []struct {
+			Tag      string `json:"tag"`
+			Protocol string `json:"protocol"`
+		} `json:"outbounds"`
+		Routing struct {
+			Strategy string `json:"domainStrategy"`
+			Rules    []struct {
+				In   []string `json:"inboundTag"`
+				IP   []string `json:"ip"`
+				Port string   `json:"port"`
+				Out  string   `json:"outboundTag"`
+			} `json:"rules"`
+		} `json:"routing"`
+	}
+	options := Options{Mode: ModeTun, Tun: Tun{Name: "spofy0", MTU: 1500, Resolver: []string{"172.19.0.2"}}}
+	build := func(server string) shape {
+		t.Helper()
+		built, err := Build(json.RawMessage(server), options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var s shape
+		if err := json.Unmarshal(built, &s); err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	bare := build(`{"outbounds":[{"tag":"proxy","protocol":"vless"}]}`)
+	if n := len(bare.Outbounds); n != 3 || bare.Outbounds[0].Tag != "proxy" || bare.Outbounds[1].Protocol != "dns" || bare.Outbounds[2].Protocol != "blackhole" {
+		t.Fatalf("outbounds = %+v", bare.Outbounds)
+	}
+	if r := bare.Routing.Rules; len(r) != 2 || r[0].Port != "53" || r[0].Out != bare.Outbounds[1].Tag || r[0].IP[0] != "172.19.0.2" || r[0].In[0] != TagTun ||
+		r[1].Port != "" || r[1].Out != bare.Outbounds[2].Tag || r[1].IP[0] != "172.19.0.2" {
+		t.Fatalf("rules = %+v", r)
+	}
+	full := build(`{"outbounds":[{"tag":"proxy","protocol":"vless"},{"tag":"names","protocol":"dns"},{"tag":"none","protocol":"blackhole"}],
+		"routing":{"domainStrategy":"IPIfNonMatch","rules":[{"type":"field","port":"53","outboundTag":"names"}]}}`)
+	if n := len(full.Outbounds); n != 3 {
+		t.Fatalf("outbounds = %+v", full.Outbounds)
+	}
+	if r := full.Routing.Rules; len(r) != 3 || r[0].Out != "names" || r[1].Out != "none" || r[2].Out != "names" || r[2].IP != nil || full.Routing.Strategy != "IPIfNonMatch" {
+		t.Fatalf("rules = %+v", r)
+	}
+	probe, err := Build(json.RawMessage(`{"outbounds":[{"tag":"proxy","protocol":"vless"}]}`), Options{Mode: ModeProbe, Tun: options.Tun})
+	if err != nil || bytes.Contains(probe, []byte("172.19.0.2")) {
+		t.Fatalf("probe config: %v %s", err, probe)
+	}
+}
+
 func TestBuildDropsDangerousSections(t *testing.T) {
 	raw := json.RawMessage(`{
 		"api":{"tag":"api","listen":"0.0.0.0:10813"},

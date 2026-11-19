@@ -12,10 +12,11 @@ func TestStallAsksForACheckOnlyWhenTrafficGoesOutAndNothingComesBack(t *testing.
 	quiet := 6 * time.Second
 	var w stall
 	var up, down int64
+	var local int64
 	step := func(after time.Duration, sent, got int64) bool {
 		at = at.Add(after)
 		up, down = up+sent, down+got
-		return w.step(engine.Traffic{Up: up, Down: down}, quiet, at)
+		return w.step(engine.Traffic{Up: up, Down: down + local, Back: down}, quiet, at)
 	}
 	fired := func(want bool, got bool, what string) {
 		t.Helper()
@@ -50,6 +51,17 @@ func TestStallAsksForACheckOnlyWhenTrafficGoesOutAndNothingComesBack(t *testing.
 	fired(false, step(2*time.Second, 300, 4000), "an answer came")
 	fired(false, step(2*time.Second, 300, 0), "a new unanswered send")
 	fired(false, step(4*time.Second, 0, 100), "answered within the limit")
+	fired(false, step(40*time.Second, 300, 4000), "an answer came")
+	local = 700
+	fired(false, step(2*time.Second, 300, 0), "a send; the device answered by itself, the server did not")
+	local = 1400
+	fired(false, step(2*time.Second, 300, 0), "a second one, the same way")
+	local = 2100
+	fired(false, step(2*time.Second, 300, 0), "4 s without the server")
+	local = 2800
+	fired(true, step(2*time.Second, 300, 0), "answers that never came from a server do not hide its silence, and the long pause ended with the answer")
+	local = 0
+	fired(false, step(40*time.Second, 300, 4000), "an answer came")
 	up, down = 0, 0
 	fired(false, step(2*time.Second, 50, 0), "counters started again with a new engine")
 	fired(false, step(6*time.Second, 0, 0), "the send right after the restart was the baseline")

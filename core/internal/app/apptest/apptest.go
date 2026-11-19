@@ -240,7 +240,7 @@ func (t *Tunnel) Kill(ids ...string) {
 
 func (t *Tunnel) Count(up, down int64) {
 	t.mu.Lock()
-	t.traffic = engine.Traffic{Up: up, Down: down}
+	t.traffic = engine.Traffic{Up: up, Down: down, Back: down}
 	t.mu.Unlock()
 }
 

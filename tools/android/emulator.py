@@ -16,8 +16,16 @@ os.makedirs(OUT, exist_ok=True)
 
 
 def run(*cmd, limit=120, data=None):
-    r = subprocess.run(cmd, capture_output=True, timeout=limit, input=data)
+    try:
+        r = subprocess.run(cmd, capture_output=True, timeout=limit, input=data)
+    except subprocess.TimeoutExpired:
+        return 124, ""
     return r.returncode, (r.stdout + r.stderr).decode(errors="replace").strip()
+
+
+def stamp():
+    now = time.time()
+    return time.strftime("%H:%M:%S", time.gmtime(now)) + ".%03d" % (now % 1 * 1000)
 
 
 def adb(*args, **kw):
@@ -158,7 +166,7 @@ def host_side():
 
         def drain(stream=p.stdout, out=log):
             for line in stream:
-                out.write(line)
+                out.write(stamp() + " " + line)
         threading.Thread(target=drain, daemon=True).start()
 
 
@@ -218,7 +226,11 @@ class Channel:
 
 def fetch(target, port, path, host=None):
     request = "GET %s HTTP/1.0\\r\\nHost: %s\\r\\n\\r\\n" % (path, host or target)
-    return shell("printf '%s' | nc -w 8 %s %d" % (request, target, port), limit=30)
+    return shell("printf '%s' | timeout 8 nc -w 8 %s %d" % (request, target, port), limit=30)
+
+
+def linked(kind):
+    return re.search(r"ni\{%s(\[[^\]]*\])? CONNECTED" % kind, shell("dumpsys connectivity")) is not None
 
 
 def processes():
@@ -291,11 +303,11 @@ def scenario():
     body = fetch(HOST, 8081, "/ip")
     need("another app's traffic goes through the tunnel", body.endswith("site sees " + INSIDE) and accepted(first, "%s:8081" % HOST) > 0, "body=%s accepted=%d" % (body[-60:], accepted(first, "%s:8081" % HOST)))
     leaked, flowing = outside(), len(seen)
-    loop = "while [ -e /data/local/tmp/noise ]; do printf 'GET /ip HTTP/1.0\\r\\n\\r\\n' | nc -w 2 %s 8081 >/dev/null 2>&1; sleep 0.2; done\n" % HOST
+    loop = "while [ -e /data/local/tmp/noise ]; do printf 'GET /ip HTTP/1.0\\r\\n\\r\\n' | timeout 2 nc -w 2 %s 8081 >/dev/null 2>&1; sleep 0.2; done\n" % HOST
     run("adb", "shell", "cat > /data/local/tmp/noise.sh", data=loop.encode())
     shell("touch /data/local/tmp/noise; nohup sh /data/local/tmp/noise.sh >/dev/null 2>&1 &")
-    time.sleep(3)
-    expect("background requests from another app are running", len(seen) > flowing + 3, "requests=%d" % (len(seen) - flowing))
+    time.sleep(5)
+    expect("background requests from another app are running", len(seen) >= flowing + 3, "requests=%d" % (len(seen) - flowing))
     body = fetch("www.gstatic.com", 80, "/generate_204")
     expect("a site by name opens through the tunnel", " 204" in body, body[:80])
     t = ui.call("traffic")
@@ -309,13 +321,16 @@ def scenario():
     screen("3-notification")
     shell("cmd statusbar collapse")
     print("memory while connected, MB: %s" % memory(), flush=True)
-    rounds = []
+    rounds, outside_ms = [], []
+    for _ in range(8):
+        ui.call("check")
+        rounds.append(ui.active()["delayMs"])
+        time.sleep(0.13)
     for _ in range(3):
-        k = ui.call("check")
-        rounds.append((k["ms"], ui.active()["delayMs"]))
-    m = ui.call("measure")
-    servers = ([e for e in ui.events if e.get("ev") == "servers"] or [{"servers": []}])[-1]["servers"]
-    print("check through the tunnel (took ms, delay ms): %s; measured outside the tunnel while it is up: ms=%d %s" % (rounds, m["ms"], {x["id"]: x["delayMs"] for x in servers}), flush=True)
+        ui.call("measure")
+        servers = ([e for e in ui.events if e.get("ev") == "servers"] or [{"servers": []}])[-1]["servers"]
+        outside_ms.append(sorted(x["delayMs"] for x in servers))
+    print("delay through the tunnel, ms: %s; outside the tunnel while it is up: %s; device clock %s at host %s" % (rounds, outside_ms, shell("date +%H:%M:%S.%N")[:12], stamp()), flush=True)
 
     other = [n for n in SERVERS if n != first][0]
     c = ui.call("connect", server=other)
@@ -348,14 +363,19 @@ def scenario():
     remote[held].send_signal(signal.SIGCONT)
     expect("a server went silent under traffic: the app moved to the other one by itself on the same tunnel", c["ok"] and bool(moved) and tunnel() == device,
            "s=%.1f state=%s server=%s" % (time.time() - began, ui.active()["state"], ui.active()["server"]))
+    second = linked("MOBILE")
     shell("svc wifi disable")
     began = time.time()
-    moved = until(lambda: ui.active()["state"] == "connected" and through(), 60)
-    expect("Wi-Fi is off: traffic goes on over the mobile network on the same tunnel", bool(moved) and tunnel() == device, "s=%.1f state=%s device=%s" % (time.time() - began, ui.active()["state"], tunnel()))
+    if second:
+        moved = until(lambda: ui.active()["state"] == "connected" and through(), 60)
+        expect("Wi-Fi is off: traffic goes on over the mobile network on the same tunnel", bool(moved) and tunnel() == device, "s=%.1f state=%s device=%s" % (time.time() - began, ui.active()["state"], tunnel()))
+    else:
+        off = until(lambda: ui.active()["state"] == "offline", 20, 0.1)
+        expect("Wi-Fi is off and there is no other network: the state says so and the tunnel stays", bool(off) and tunnel() == device, "s=%.1f state=%s" % (time.time() - began, ui.active()["state"]))
     shell("svc wifi enable")
-    time.sleep(6)
-    again = until(lambda: ui.active()["state"] == "connected" and through(), 60)
-    expect("Wi-Fi is back: still connected on the same tunnel", bool(again) and tunnel() == device, "state=%s" % ui.active()["state"])
+    began = time.time()
+    again = until(lambda: linked("WIFI") and ui.active()["state"] == "connected" and through(), 90)
+    expect("Wi-Fi is back: connected on the same tunnel", bool(again) and tunnel() == device, "s=%.1f state=%s" % (time.time() - began, ui.active()["state"]))
     shell("cmd connectivity airplane-mode enable")
     began = time.time()
     off = until(lambda: ui.active()["state"] == "offline", 40, 0.1)

@@ -76,8 +76,9 @@ class Scene {
     Traffic traffic = const Traffic(),
     String fault = '',
     Failure? failure,
+    VoidCallback? always,
   }) : transport = SilentTransport() {
-    model = AppModel(CoreClient(transport))
+    model = AppModel(CoreClient(transport), always: always)
       ..snapshot = Snapshot(
         version: '0.1.0',
         connection: connection,
@@ -104,7 +105,9 @@ Scene home(
   int delay = 0,
   String code = '',
   Map<String, Object?> settings = const {},
+  VoidCallback? always,
 }) => Scene(
+  always: always,
   connection: Connection(state: state, choice: choice, server: server, delayMs: delay, code: code),
   subscription: subscription(),
   servers: servers(),

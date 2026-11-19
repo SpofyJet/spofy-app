@@ -10,6 +10,7 @@ import android.content.pm.PackageManager
 import android.net.VpnService
 import android.os.Build
 import android.os.IBinder
+import android.provider.Settings
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -38,6 +39,13 @@ class MainActivity : FlutterActivity() {
             when (call.method) {
                 "start" -> start(result)
                 "prepare" -> prepare(result)
+                "always" -> {
+                    try {
+                        startActivity(Intent(Settings.ACTION_VPN_SETTINGS))
+                    } catch (e: Exception) {
+                    }
+                    result.success(null)
+                }
                 else -> result.notImplemented()
             }
         }

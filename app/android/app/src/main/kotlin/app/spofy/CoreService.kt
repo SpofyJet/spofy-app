@@ -13,6 +13,8 @@ import android.net.ConnectivityManager
 import android.net.LocalSocket
 import android.net.LocalSocketAddress
 import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.VpnService
 import android.os.Binder
 import android.os.Build
@@ -21,6 +23,7 @@ import android.util.Log
 import java.io.File
 import java.io.FileDescriptor
 import java.io.IOException
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
@@ -49,22 +52,21 @@ class CoreService : VpnService() {
     private var ready = false
     private val waiting = ArrayDeque<JSONObject>()
 
-    private val network = object : ConnectivityManager.NetworkCallback() {
-        private var current: Network? = null
+    private val live = ConcurrentHashMap.newKeySet<Network>()
 
+    private val network = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
-            note("network $network is the default")
-            current = network
+            live.add(network)
+            note("network $network is up, ${live.size} in all")
             request("online") { it.put("online", true) }
             again()
         }
 
         override fun onLost(network: Network) {
-            note("network $network is lost, the default was $current")
-            if (network == current) {
-                current = null
-                request("online") { it.put("online", false) }
-            }
+            live.remove(network)
+            note("network $network is lost, ${live.size} left")
+            val online = live.isNotEmpty()
+            request("online") { it.put("online", online) }
         }
     }
 
@@ -340,6 +342,7 @@ class CoreService : VpnService() {
     }
 
     @Synchronized
+    @Synchronized
     private fun watch(on: Boolean) {
         if (on == watching) {
             return
@@ -348,7 +351,9 @@ class CoreService : VpnService() {
         val connectivity = getSystemService(ConnectivityManager::class.java)
         try {
             if (on) {
-                connectivity.registerDefaultNetworkCallback(network)
+                live.clear()
+                val outside = NetworkRequest.Builder().addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET).build()
+                connectivity.registerNetworkCallback(outside, network)
                 val filter = IntentFilter(Intent.ACTION_SCREEN_ON)
                 if (Build.VERSION.SDK_INT >= 33) {
                     registerReceiver(screen, filter, RECEIVER_NOT_EXPORTED)

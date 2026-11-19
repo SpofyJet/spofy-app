@@ -193,6 +193,7 @@ class Tile extends StatelessWidget {
     this.arrow = true,
     this.semantic,
     this.trailingColor = Ink.muted,
+    this.wrap = false,
   });
 
   final String title;
@@ -204,6 +205,7 @@ class Tile extends StatelessWidget {
   final bool arrow;
   final String? semantic;
   final Color trailingColor;
+  final bool wrap;
 
   @override
   Widget build(BuildContext context) {
@@ -240,8 +242,8 @@ class Tile extends StatelessWidget {
                           ],
                         ),
                         style: Ink.note,
-                        maxLines: tight ? 2 : 1,
-                        overflow: TextOverflow.ellipsis,
+                        maxLines: wrap ? null : (tight ? 2 : 1),
+                        overflow: wrap ? TextOverflow.clip : TextOverflow.ellipsis,
                       ),
                     ),
                 ],

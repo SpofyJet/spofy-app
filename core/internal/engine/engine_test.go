@@ -2,6 +2,7 @@ package engine
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -91,6 +92,35 @@ func TestStartStopProxyMode(t *testing.T) {
 			c.Close()
 			t.Fatalf("round %d: port still open after close", round)
 		}
+	}
+}
+
+func TestOnlyOutboundsThatLeadToAServerCountAsItsAnswers(t *testing.T) {
+	got := far([]byte(`{"outbounds":[
+		{"tag":"proxy","protocol":"vless"},{"tag":"direct","protocol":"freedom"},{"tag":"block","protocol":"blackhole"},
+		{"tag":"dns-out","protocol":"dns"},{"protocol":"trojan"},{"tag":"second","protocol":"hysteria"},{"tag":"loop","protocol":"loopback"}]}`))
+	if len(got) != 2 || got[0] != "proxy" || got[1] != "second" {
+		t.Fatalf("far = %v", got)
+	}
+	if got := far([]byte(`{`)); got != nil {
+		t.Fatalf("far of a broken config = %v", got)
+	}
+	inst, err := Start([]byte(probeConfig))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer inst.Close()
+	if len(inst.far) != 0 {
+		t.Fatalf("far = %v", inst.far)
+	}
+	srv := probeTarget(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := inst.Probe(ctx, srv.URL+"/generate_204", ""); err != nil {
+		t.Fatal(err)
+	}
+	if tr := inst.Traffic("none"); tr.Back != tr.Down {
+		t.Fatalf("with no outbound to a server the answers are what came into the tunnel: %+v", tr)
 	}
 }
 
