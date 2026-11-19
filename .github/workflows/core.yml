@@ -32,3 +32,8 @@ jobs:
           done
       - timeout-minutes: 10
         run: spofy-app/tools/hermetic.sh /tmp/out-linux
+      - timeout-minutes: 20
+        run: |
+          mkdir -p spofy-app/dist "$RUNNER_TEMP/flutter-cache"
+          cp /tmp/out-linux spofy-app/dist/spofy-core-linux-amd64
+          FLUTTER_CACHE="$RUNNER_TEMP/flutter-cache" spofy-app/tools/app-check.sh
