@@ -7,6 +7,13 @@ abstract final class S {
   static const autoHint = 'Самый быстрый сервер';
   static const server = 'Сервер';
   static const servers = 'Серверы';
+  static const settings = 'Настройки';
+  static const autoConnect = 'Включать VPN при запуске';
+  static const autoConnectHint = 'Открыли приложение — VPN уже работает';
+  static const killSwitch = 'Без VPN — без интернета';
+  static const killSwitchHint = 'Если серверы не отвечают, интернет останавливается, а не идёт напрямую';
+
+  static String version(String number) => 'Версия $number';
   static const subscription = 'Подписка';
   static const addSubscription = 'Добавить подписку';
   static const noSubscriptionTitle = 'Подписки пока нет';
@@ -197,7 +204,7 @@ abstract final class S {
     VpnState.failed => 'Нет подключения',
   };
 
-  static String hint(Connection c, {required Traffic traffic, required bool guarded}) => switch (c.state) {
+  static String hint(Connection c, {required Traffic traffic}) => switch (c.state) {
     VpnState.idle => 'Нажмите, чтобы включить',
     VpnState.measuring => 'Проверяем, какой быстрее',
     VpnState.connecting => 'Ждём ответа сервера',
@@ -206,7 +213,7 @@ abstract final class S {
           ? '↓ ${bytes(traffic.down)}   ↑ ${bytes(traffic.up)}'
           : 'Нажмите, чтобы выключить',
     VpnState.switching => 'Прежний перестал отвечать',
-    VpnState.stalled => guarded ? 'Трафик не идёт мимо VPN. Пробуем снова' : 'Пробуем снова',
+    VpnState.stalled => 'Трафик не идёт мимо VPN. Пробуем снова',
     VpnState.offline => 'VPN включится сам, когда сеть вернётся',
     VpnState.failed => reason(c.code),
   };

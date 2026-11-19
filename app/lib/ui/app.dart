@@ -5,6 +5,7 @@ import 'package:flutter/widgets.dart';
 import '../state/model.dart';
 import 'home.dart';
 import 'servers.dart';
+import 'settings.dart';
 import 'strings.dart';
 import 'subscription.dart';
 import 'theme.dart';
@@ -110,6 +111,7 @@ class _SpofyAppState extends State<SpofyApp> with WidgetsBindingObserver {
         now: widget.now,
         onServers: () => _open((done) => ServersScreen(model: model, onDone: done)),
         onSubscription: () => _open((done) => SubscriptionScreen(model: model, now: widget.now, onDone: done)),
+        onSettings: () => _open((done) => SettingsScreen(model: model, onDone: done)),
       ),
     );
   }

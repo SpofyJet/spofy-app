@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -10,6 +11,22 @@ import 'package:spofy/state/model.dart';
 Future<String> fetch(String url) async {
   final result = await Process.run('curl', ['-s', '-m', '5', url]);
   return (result.stdout as String).trim();
+}
+
+Future<void> until(AppModel model, bool Function() done) {
+  if (done()) {
+    return Future.value();
+  }
+  final waiting = Completer<void>();
+  void look() {
+    if (done() && !waiting.isCompleted) {
+      model.removeListener(look);
+      waiting.complete();
+    }
+  }
+
+  model.addListener(look);
+  return waiting.future.timeout(const Duration(seconds: 20));
 }
 
 void main() {
@@ -93,16 +110,19 @@ void main() {
     expect(await model.refresh(), isTrue);
     expect(model.snapshot.servers, hasLength(servers.length));
 
+    await model.set('autoConnect', true);
+    expect(model.snapshot.settings['autoConnect'], isTrue);
     await transport.close();
     expect(await transport.exitCode, 0);
 
     (transport, model, seen) = await timed('restart', launch);
-    expect(model.connection.state, VpnState.idle);
     expect(model.connection.choice, other);
     expect(model.subscription, isNotNull);
     expect(model.snapshot.servers.every((s) => s.delayMs > 0), isTrue);
-    expect(await timed('connect again', model.connect), isTrue, reason: '${model.failure}');
+    final restored = model;
+    await timed('auto-connect', () => until(restored, () => restored.connection.state == VpnState.connected));
     expect(model.connection.server, other);
+    await model.set('autoConnect', false);
     expect(await fetch('http://foreign.test/ip'), servers[other]);
 
     expect(await timed('disconnect', model.disconnect), isTrue);

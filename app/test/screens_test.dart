@@ -6,6 +6,7 @@ import 'package:spofy/core/protocol.dart';
 import 'package:spofy/state/model.dart';
 import 'package:spofy/ui/app.dart';
 import 'package:spofy/ui/home.dart';
+import 'package:spofy/ui/settings.dart';
 import 'package:spofy/ui/strings.dart';
 import 'package:spofy/ui/widgets.dart';
 
@@ -38,7 +39,7 @@ void main() {
     'home_connecting': () => home(VpnState.connecting, server: 'nl'),
     'home_connected': () => home(VpnState.connected, server: 'nl', delay: 38),
     'home_switching': () => home(VpnState.switching, server: 'de'),
-    'home_stalled': () => home(VpnState.stalled, server: 'nl', code: 'no_server', guarded: true),
+    'home_stalled': () => home(VpnState.stalled, server: 'nl', code: 'no_server'),
     'home_offline': () => home(VpnState.offline, server: 'nl'),
     'home_failed': () => home(VpnState.failed, code: 'no_server'),
     'home_core_lost': () => Scene(ready: false, fault: AppModel.coreClosed),
@@ -95,7 +96,7 @@ void main() {
       await show(tester, scene(), small, textScale: 1.5);
       expect(tester.takeException(), isNull);
     }
-    await show(tester, home(VpnState.stalled, server: 'nl', guarded: true), const Size(320, 480), textScale: 1.5);
+    await show(tester, home(VpnState.stalled, server: 'nl'), const Size(320, 480), textScale: 1.5);
     expect(tester.takeException(), isNull);
   });
 
@@ -232,6 +233,41 @@ void main() {
       '{"id":1,"op":"subscribe","url":"https://sub.example.test/sub/TESTTOKEN0123456789"}',
     );
     expect(find.textContaining(S.noLink, findRichText: true), findsNothing);
+  });
+
+  testWidgets('settings show what the core holds and ask the core to change it', (tester) async {
+    final scene = home(VpnState.idle);
+    await show(tester, scene, phone);
+    await open(tester, S.settings);
+    await golden(tester, 'settings_360');
+    expect(tester.widgetList<Toggle>(find.byType(Toggle)).map((t) => t.value), [false, false]);
+    await tester.tap(find.bySemanticsLabel(S.autoConnect));
+    await tester.tap(find.bySemanticsLabel(S.killSwitch));
+    await tester.pump();
+    expect(scene.transport.sent, [
+      '{"id":1,"op":"set","key":"autoConnect","value":true}',
+      '{"id":2,"op":"set","key":"killSwitch","value":true}',
+    ]);
+    expect(tester.widgetList<Toggle>(find.byType(Toggle)).map((t) => t.value), [false, false]);
+
+    final on = home(VpnState.idle, settings: {autoConnectKey: true, killSwitchKey: true});
+    await show(tester, on, phone);
+    await open(tester, S.settings);
+    await golden(tester, 'settings_on_360');
+    expect(tester.widgetList<Toggle>(find.byType(Toggle)).map((t) => t.value), [true, true]);
+    await tester.tap(find.bySemanticsLabel(S.killSwitch));
+    await tester.pump();
+    expect(on.transport.sent.single, '{"id":1,"op":"set","key":"killSwitch","value":false}');
+    expect(find.text(S.version('0.1.0')), findsOneWidget);
+  });
+
+  testWidgets('settings fit a 320 px phone with 130 % text', (tester) async {
+    await show(tester, home(VpnState.idle), const Size(320, 568), textScale: 1.3);
+    await open(tester, S.settings);
+    expect(tester.takeException(), isNull);
+    for (final text in tester.renderObjectList<RenderParagraph>(find.byType(RichText))) {
+      expect(text.didExceedMaxLines, isFalse, reason: text.text.toPlainText());
+    }
   });
 
   testWidgets('the power control sends connect, then disconnect', (tester) async {

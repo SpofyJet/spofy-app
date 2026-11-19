@@ -32,6 +32,11 @@ const (
 )
 
 const (
+	KeyKillSwitch  = "killSwitch"
+	KeyAutoConnect = "autoConnect"
+)
+
+const (
 	CodeNoSubscription engine.Code = "no_subscription"
 	CodeBadURL         engine.Code = "sub_bad_url"
 	CodeUnreachable    engine.Code = "sub_unreachable"
@@ -172,7 +177,7 @@ func New(cfg Config) *App {
 		OnEvent:   a.onState,
 		OnMeasure: a.onMeasure,
 		Online:    a.online.Load,
-		Strict:    cfg.Strict,
+		Strict:    cfg.Strict || on(cfg.Store.Get(), KeyKillSwitch),
 		Bypass:    cfg.Bypass,
 		URL:       cfg.URL,
 		Timeout:   cfg.Timeout,
@@ -325,6 +330,9 @@ func (a *App) Set(key string, value json.RawMessage) error {
 	if key == "" || len(key) > 64 || len(value) > 4096 || (len(value) > 0 && !json.Valid(value)) {
 		return fail(CodeValue, "bad setting")
 	}
+	if v := string(value); (key == KeyKillSwitch || key == KeyAutoConnect) && v != "" && v != "null" && v != "true" && v != "false" {
+		return fail(CodeValue, "bad setting")
+	}
 	err := a.save(func(s *store.State) {
 		if len(value) == 0 || string(value) == "null" {
 			delete(s.Settings, key)
@@ -338,8 +346,23 @@ func (a *App) Set(key string, value json.RawMessage) error {
 	if err != nil {
 		return err
 	}
+	if key == KeyKillSwitch {
+		a.sess.SetStrict(a.cfg.Strict || on(a.cfg.Store.Get(), KeyKillSwitch))
+	}
 	a.emit(Event{Ev: EvSettings, Settings: settings(a.cfg.Store.Get())})
 	return nil
+}
+
+func (a *App) Resume() error {
+	st := a.cfg.Store.Get()
+	if st.Profile == nil || !on(st, KeyAutoConnect) {
+		return nil
+	}
+	return a.Connect("")
+}
+
+func on(st store.State, key string) bool {
+	return string(st.Settings[key]) == "true"
 }
 
 func (a *App) Traffic() engine.Traffic {

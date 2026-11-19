@@ -313,6 +313,34 @@ def scenario():
     states = core.states()
     code, body = fetch("http://foreign.test/ip")
     expect("connect from memory", c["ok"] and "measuring" not in states and body in SERVERS.values(), "states=%s" % states)
+
+    def links(how):
+        for name in SERVERS:
+            run("ip", "-n", "hub", "link", "set", "v-" + name, how)
+
+    def silent_start():
+        core.call("disconnect")
+        began = time.time()
+        c = core.call("connect")
+        fetch("http://10.77.1.2/ip", 2)
+        return c, core.active()["state"], inside("client", "ip", "-o", "link", "show", check=False), time.time() - began
+    links("down")
+    inside("hub", "nft", "reset", "counter", "inet", "hub", "foreign_direct")
+    c, state, tun, took = silent_start()
+    expect("strict: no server answers at the start: tunnel and block stay", not c["ok"] and state == "stalled" and "spofy0" in tun and counter("foreign_direct") == 0,
+           "s=%.1f state=%s packets=%d" % (took, state, counter("foreign_direct")))
+    core.call("set", key="killSwitch", value=False)
+    c, state, tun, took = silent_start()
+    expect("not strict: no server answers at the start: the tunnel is removed", not c["ok"] and state == "failed" and "spofy0" not in tun, "s=%.1f state=%s" % (took, state))
+    links("up")
+    core.call("set", key="autoConnect", value=True)
+    core.p.stdin.close()
+    core.p.wait(timeout=15)
+    core = Core()
+    began = time.time()
+    up = until(lambda: core.active()["state"] == "connected", 30, 0.3)
+    code, body = fetch("http://foreign.test/ip")
+    expect("auto-connect: the tunnel is up after a restart without a command", bool(up) and body in SERVERS.values(), "s=%.1f seen=%s" % (time.time() - began, body))
     os.kill(core.service(), 9)
     gone = until(lambda: not alive("spofy-core serve") and len(alive("spofy-core engine")) == len(SERVERS), 10)
     tun = inside("client", "ip", "-o", "link", "show", check=False)

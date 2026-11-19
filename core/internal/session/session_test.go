@@ -290,6 +290,36 @@ func TestStrictKeepsTheBlockWhenConnectFails(t *testing.T) {
 	}
 }
 
+func TestStrictHoldsTheBlockWhenNoServerAnswersTheMeasurement(t *testing.T) {
+	f := &fake{dead: down("de", "nl")}
+	s, tr := setup(f, Options{Strict: true})
+	if err := s.Connect(context.Background(), cands("de", "nl"), ""); codeOf(err) != CodeNoServer {
+		t.Fatalf("err = %v", err)
+	}
+	same(t, tr.states(), []string{"measuring", "connecting:de", "stalled"})
+	if f.now() != "de" || len(f.starts()) != 1 || f.stops() != 0 {
+		t.Fatalf("running %q, starts %v, stops %d", f.now(), f.starts(), f.stops())
+	}
+	f.set(func() { f.delays, f.dead = speeds(10, 20, 30), down("de") })
+	if err := s.Check(context.Background()); err != nil || s.State() != Connected || f.now() != "nl" {
+		t.Fatalf("err %v, state %s, running %q", err, s.State(), f.now())
+	}
+}
+
+func TestSetStrictAppliesToTheNextConnection(t *testing.T) {
+	f := &fake{dead: down("de", "nl")}
+	s, _ := setup(f, Options{})
+	s.SetStrict(true)
+	if err := s.Connect(context.Background(), cands("de", "nl"), ""); codeOf(err) != CodeNoServer || s.State() != Stalled || f.now() == "" {
+		t.Fatalf("strict: err %v, state %s, running %q", err, s.State(), f.now())
+	}
+	s.Disconnect()
+	s.SetStrict(false)
+	if err := s.Connect(context.Background(), cands("de", "nl"), ""); codeOf(err) != CodeNoServer || s.State() != Failed || f.now() != "" {
+		t.Fatalf("not strict: err %v, state %s, running %q", err, s.State(), f.now())
+	}
+}
+
 func TestReserveTierOnlyWhenMainTierIsDown(t *testing.T) {
 	c := cands("de", "nl", "bypass")
 	c[2].Tier = 1

@@ -354,6 +354,67 @@ func TestMeasure(t *testing.T) {
 	}
 }
 
+func TestKillSwitchSetting(t *testing.T) {
+	b := newBench(t, nil).subscribed()
+	b.tunnel.Answer(nil)
+	if err := b.app.Connect(Auto); code(err) != session.CodeNoServer || b.tunnel.Running() != "" || b.app.Snapshot().Connection.State != session.Failed {
+		t.Fatalf("switch off: err %v, running %q, state %s", err, b.tunnel.Running(), b.app.Snapshot().Connection.State)
+	}
+	for _, key := range []string{KeyKillSwitch, KeyAutoConnect} {
+		for _, bad := range []string{`"yes"`, `1`, `[true]`, `{}`} {
+			if err := b.app.Set(key, json.RawMessage(bad)); code(err) != CodeValue {
+				t.Fatalf("%s = %s: err %v", key, bad, err)
+			}
+		}
+	}
+	if err := b.app.Set(KeyKillSwitch, json.RawMessage(`true`)); err != nil {
+		t.Fatal(err)
+	}
+	stalls := func(when string) {
+		t.Helper()
+		if err := b.app.Connect(Auto); code(err) != session.CodeNoServer || b.tunnel.Running() == "" || b.app.Snapshot().Connection.State != session.Stalled {
+			t.Fatalf("%s: err %v, running %q, state %s", when, err, b.tunnel.Running(), b.app.Snapshot().Connection.State)
+		}
+		if err := b.app.Disconnect(); err != nil || b.tunnel.Running() != "" {
+			t.Fatalf("%s: disconnect: err %v, running %q", when, err, b.tunnel.Running())
+		}
+	}
+	stalls("switch on")
+	b.open(nil)
+	stalls("after restart")
+	if err := b.app.Set(KeyKillSwitch, json.RawMessage(`false`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.app.Connect(Auto); code(err) != session.CodeNoServer || b.tunnel.Running() != "" {
+		t.Fatalf("switch off again: err %v, running %q", err, b.tunnel.Running())
+	}
+}
+
+func TestResume(t *testing.T) {
+	b := newBench(t, nil)
+	if err := b.app.Set(KeyAutoConnect, json.RawMessage(`true`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.app.Resume(); err != nil || len(b.tunnel.Starts()) != 0 {
+		t.Fatalf("no subscription: err %v, starts %v", err, b.tunnel.Starts())
+	}
+	b.subscribed()
+	b.open(nil)
+	if err := b.app.Resume(); err != nil || b.tunnel.Running() != "обход1" || b.app.Snapshot().Connection.State != session.Connected {
+		t.Fatalf("switch on: err %v, running %q", err, b.tunnel.Running())
+	}
+	if err := b.app.Disconnect(); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.app.Set(KeyAutoConnect, json.RawMessage(`false`)); err != nil {
+		t.Fatal(err)
+	}
+	b.open(nil)
+	if err := b.app.Resume(); err != nil || b.tunnel.Running() != "" {
+		t.Fatalf("switch off: err %v, running %q", err, b.tunnel.Running())
+	}
+}
+
 func TestSettings(t *testing.T) {
 	b := newBench(t, nil)
 	for _, bad := range []struct {

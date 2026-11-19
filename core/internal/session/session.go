@@ -79,6 +79,7 @@ type Session struct {
 	active  int
 	up      bool
 	held    bool
+	strict  bool
 	pinned  bool
 	state   State
 	last    time.Duration
@@ -94,7 +95,13 @@ func New(o Options) *Session {
 	if o.Parallel == 0 {
 		o.Parallel = 4
 	}
-	return &Session{opts: o, active: -1, state: Idle}
+	return &Session{opts: o, active: -1, state: Idle, strict: o.Strict}
+}
+
+func (s *Session) SetStrict(on bool) {
+	s.mu.Lock()
+	s.strict = on
+	s.mu.Unlock()
 }
 
 func (s *Session) State() State {
@@ -146,22 +153,35 @@ func (s *Session) Connect(parent context.Context, cands []Candidate, pinned stri
 		s.install(cands, quick, false)
 		tried = quick[0]
 		limit := min(max(5*cands[tried].Known, 2*time.Second), s.opts.Timeout)
-		err := s.try(ctx, Connecting, tried, limit, s.opts.Retries[:1])
-		switch {
-		case err == nil:
-			return nil
-		case ctx.Err() != nil:
-			return ctx.Err()
-		case errors.Is(err, supervisor.ErrSuperseded):
+		if err, ok := settled(ctx, s.try(ctx, Connecting, tried, limit, s.opts.Retries[:1])); ok {
 			return err
 		}
 	}
-	order, err := s.rank(ctx, cands, tried)
+	order, answered, err := s.rank(ctx, cands, tried)
 	if err != nil {
 		return err
 	}
 	s.install(cands, order, false)
-	return s.walk(ctx, Connecting, order)
+	if answered {
+		return s.walk(ctx, Connecting, order)
+	}
+	err, ok := settled(ctx, s.try(ctx, Connecting, order[0], min(2*time.Second, s.opts.Timeout), s.opts.Retries[:1]))
+	if ok {
+		return err
+	}
+	return s.lost(ctx, CodeNoServer, err)
+}
+
+func settled(ctx context.Context, err error) (error, bool) {
+	switch {
+	case err == nil:
+		return nil, true
+	case ctx.Err() != nil:
+		return ctx.Err(), true
+	case errors.Is(err, supervisor.ErrSuperseded):
+		return err, true
+	}
+	return err, false
 }
 
 func (s *Session) install(cands []Candidate, order []int, pinned bool) {
@@ -170,9 +190,9 @@ func (s *Session) install(cands []Candidate, order []int, pinned bool) {
 	s.mu.Unlock()
 }
 
-func (s *Session) rank(ctx context.Context, cands []Candidate, tried int) ([]int, error) {
+func (s *Session) rank(ctx context.Context, cands []Candidate, tried int) ([]int, bool, error) {
 	s.mu.Lock()
-	up, held := s.up, s.held
+	up, held, strict := s.up, s.held, s.strict
 	s.mu.Unlock()
 	if up && !s.opts.Bypass {
 		if held {
@@ -185,7 +205,7 @@ func (s *Session) rank(ctx context.Context, cands []Candidate, tried int) ([]int
 			if tried >= 0 {
 				order = append(order, tried)
 			}
-			return order, nil
+			return order, true, nil
 		}
 		s.opts.Tunnel.Stop()
 		s.mu.Lock()
@@ -195,7 +215,7 @@ func (s *Session) rank(ctx context.Context, cands []Candidate, tried int) ([]int
 	s.set(Event{State: Measuring})
 	measured := s.Measure(ctx, cands)
 	if ctx.Err() != nil {
-		return nil, ctx.Err()
+		return nil, false, ctx.Err()
 	}
 	if s.opts.OnMeasure != nil {
 		s.opts.OnMeasure(cands, measured)
@@ -205,10 +225,13 @@ func (s *Session) rank(ctx context.Context, cands []Candidate, tried int) ([]int
 		results[i] = Result{Tier: cands[i].Tier, Delay: m.Delay, OK: m.OK()}
 	}
 	order := Order(results, -1)
-	if len(order) == 0 {
-		return nil, s.lost(ctx, CodeNoServer, errors.New("no server answered"))
+	if len(order) > 0 {
+		return order, true, nil
 	}
-	return order, nil
+	if strict {
+		return remembered(cands, true), false, nil
+	}
+	return nil, false, s.lost(ctx, CodeNoServer, errors.New("no server answered"))
 }
 
 func remembered(cands []Candidate, all bool) []int {
@@ -328,13 +351,8 @@ func (s *Session) walk(ctx context.Context, during State, order []int) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		err := s.try(ctx, during, i, s.opts.Timeout, waits)
-		switch {
-		case err == nil:
-			return nil
-		case ctx.Err() != nil:
-			return ctx.Err()
-		case errors.Is(err, supervisor.ErrSuperseded):
+		err, ok := settled(ctx, s.try(ctx, during, i, s.opts.Timeout, waits))
+		if ok {
 			return err
 		}
 		last = err
@@ -356,7 +374,7 @@ func (s *Session) try(ctx context.Context, during State, i int, limit time.Durat
 	}
 	s.mu.Lock()
 	s.up, s.active, s.last = true, i, 0
-	s.held = s.held || s.opts.Strict
+	s.held = s.held || s.strict
 	s.mu.Unlock()
 	delay, err := s.confirm(ctx, limit, waits)
 	if err != nil {

@@ -223,6 +223,11 @@ func serve(args []string) int {
 		Version: version,
 		Strict:  *strict,
 	})
+	checks.Add(1)
+	go func() {
+		defer checks.Done()
+		a.Resume()
+	}()
 	err = ipc.Serve(context.Background(), os.Stdin, out, a)
 	a.Close()
 	checks.Wait()

@@ -14,12 +14,14 @@ class HomeScreen extends StatelessWidget {
     required this.now,
     required this.onServers,
     required this.onSubscription,
+    required this.onSettings,
   });
 
   final AppModel model;
   final DateTime Function() now;
   final VoidCallback onServers;
   final VoidCallback onSubscription;
+  final VoidCallback onSettings;
 
   @override
   Widget build(BuildContext context) {
@@ -30,7 +32,10 @@ class HomeScreen extends StatelessWidget {
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const Header(title: S.app),
+              Header(
+                title: S.app,
+                action: model.ready ? RoundButton(glyph: Glyph.settings, label: S.settings, onTap: onSettings) : null,
+              ),
               if (model.fault.isNotEmpty)
                 Padding(
                   padding: const EdgeInsets.fromLTRB(Ink.gutter, 4, Ink.gutter, 0),
@@ -238,8 +243,7 @@ class _Status extends StatelessWidget {
     final current = model.current;
     final chosen = connection.auto ? null : model.snapshot.server(connection.choice);
     final shown = current ?? chosen;
-    final guarded = model.snapshot.settings['killSwitch'] == true;
-    final hint = S.hint(connection, traffic: model.traffic, guarded: guarded);
+    final hint = S.hint(connection, traffic: model.traffic);
     final failure = model.failure;
     final delay = state == VpnState.connected ? connection.delayMs : (shown?.delayMs ?? 0);
     final subscription = model.subscription!;

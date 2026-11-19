@@ -103,12 +103,12 @@ Scene home(
   String server = '',
   int delay = 0,
   String code = '',
-  bool guarded = false,
+  Map<String, Object?> settings = const {},
 }) => Scene(
   connection: Connection(state: state, choice: choice, server: server, delayMs: delay, code: code),
   subscription: subscription(),
   servers: servers(),
-  settings: {'killSwitch': guarded},
+  settings: settings,
   traffic: state.protecting ? const Traffic(up: 83 * 1024 * 1024, down: 1288490188) : const Traffic(),
 );
 

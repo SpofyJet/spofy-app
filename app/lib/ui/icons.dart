@@ -2,7 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/widgets.dart';
 
-enum Glyph { power, forward, back, check, warning, refresh, plus, close }
+enum Glyph { power, forward, back, check, warning, refresh, plus, close, settings }
 
 class GlyphIcon extends StatelessWidget {
   const GlyphIcon(this.glyph, {super.key, required this.color, this.size = 24, this.stroke = 2});
@@ -69,6 +69,13 @@ class _GlyphPainter extends CustomPainter {
       case Glyph.close:
         canvas.drawLine(const Offset(6, 6), const Offset(18, 18), line);
         canvas.drawLine(const Offset(18, 6), const Offset(6, 18), line);
+      case Glyph.settings:
+        canvas.drawLine(const Offset(4, 8), const Offset(11.5, 8), line);
+        canvas.drawLine(const Offset(18.5, 8), const Offset(20, 8), line);
+        canvas.drawCircle(const Offset(15, 8), 2.5, line);
+        canvas.drawLine(const Offset(4, 16), const Offset(5.5, 16), line);
+        canvas.drawLine(const Offset(12.5, 16), const Offset(20, 16), line);
+        canvas.drawCircle(const Offset(9, 16), 2.5, line);
     }
   }
 

@@ -101,6 +101,86 @@ class Panel extends StatelessWidget {
   }
 }
 
+class Toggle extends StatelessWidget {
+  const Toggle({super.key, required this.value});
+
+  final bool value;
+
+  @override
+  Widget build(BuildContext context) {
+    const time = Duration(milliseconds: 140);
+    return AnimatedContainer(
+      duration: time,
+      width: 48,
+      height: 28,
+      padding: const EdgeInsets.all(3),
+      decoration: BoxDecoration(
+        color: value ? Ink.accent : Ink.raised,
+        borderRadius: const BorderRadius.all(Radius.circular(14)),
+      ),
+      child: AnimatedAlign(
+        duration: time,
+        curve: Curves.easeOutCubic,
+        alignment: value ? Alignment.centerRight : Alignment.centerLeft,
+        child: AnimatedContainer(
+          duration: time,
+          width: 22,
+          height: 22,
+          decoration: BoxDecoration(color: value ? Ink.onAccent : Ink.muted, shape: BoxShape.circle),
+        ),
+      ),
+    );
+  }
+}
+
+class SwitchTile extends StatelessWidget {
+  const SwitchTile({
+    super.key,
+    required this.title,
+    required this.subtitle,
+    required this.value,
+    required this.onChanged,
+  });
+
+  final String title;
+  final String subtitle;
+  final bool value;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      toggled: value,
+      hint: subtitle,
+      child: Pressable(
+        label: title,
+        onTap: () => onChanged(!value),
+        child: Panel(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title, style: Ink.strong),
+                    Padding(
+                      padding: const EdgeInsets.only(top: 3),
+                      child: Text(subtitle, style: Ink.note),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 14),
+              Toggle(value: value),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class Tile extends StatelessWidget {
   const Tile({
     super.key,

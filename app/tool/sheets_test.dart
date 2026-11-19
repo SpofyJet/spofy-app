@@ -17,11 +17,28 @@ Future<void> sheet(
   Size frame = const Size(360, 800),
   double scale = 1,
 }) async {
-  final out = Platform.environment['SPOFY_SHEETS'] ?? 'build/sheets';
-  Directory(out).createSync(recursive: true);
+  final env = Platform.environment;
+  final out = Directory(env['SPOFY_SHEETS'] ?? 'build/sheets')..createSync(recursive: true);
+  final per = int.tryParse(env['SPOFY_SHEETS_PER'] ?? '') ?? frames.length;
+  final ratio = double.tryParse(env['SPOFY_SHEETS_RATIO'] ?? '') ?? 1;
+  for (var from = 0; from < frames.length; from += per) {
+    final part = frames.sublist(from, from + per > frames.length ? frames.length : from + per);
+    final suffix = per < frames.length ? '-${from ~/ per + 1}' : '';
+    await page(tester, '${out.absolute.path}/$name$suffix.png', part, frame, scale, ratio);
+  }
+}
+
+Future<void> page(
+  WidgetTester tester,
+  String path,
+  List<(String, Scene, String?)> frames,
+  Size frame,
+  double scale,
+  double ratio,
+) async {
   final size = Size(24 + frames.length * (frame.width + 24), frame.height + 76);
-  tester.view.devicePixelRatio = 1;
-  tester.view.physicalSize = size;
+  tester.view.devicePixelRatio = ratio;
+  tester.view.physicalSize = size * ratio;
   addTearDown(tester.view.reset);
   final keys = [for (final _ in frames) GlobalKey()];
   await tester.pumpWidget(
@@ -77,7 +94,7 @@ Future<void> sheet(
       }
     }
   }
-  await expectLater(find.byType(Directionality).first, matchesGoldenFile('${Directory(out).absolute.path}/$name.png'));
+  await expectLater(find.byType(Directionality).first, matchesGoldenFile(path));
 }
 
 void main() {
@@ -94,7 +111,7 @@ void main() {
 
   testWidgets('trouble', (tester) async {
     await sheet(tester, '2-trouble', [
-      ('Сервер замолчал', home(VpnState.stalled, server: 'nl', code: 'no_server', guarded: true), null),
+      ('Сервер замолчал', home(VpnState.stalled, server: 'nl', code: 'no_server'), null),
       ('Нет интернета', home(VpnState.offline, server: 'nl'), null),
       ('Не подключились', home(VpnState.failed, code: 'no_server'), null),
       ('Подписка заканчивается', Scene(subscription: subscription(days: 2, used: 96000), servers: servers()), null),
@@ -122,9 +139,20 @@ void main() {
   testWidgets('large text', (tester) async {
     await sheet(tester, '6-large-text', frame: const Size(320, 568), scale: 1.3, [
       ('320 × 568, шрифт 130 %', home(VpnState.connected, server: 'nl', delay: 38), null),
-      ('Сервер замолчал', home(VpnState.stalled, server: 'nl', code: 'no_server', guarded: true), null),
+      ('Сервер замолчал', home(VpnState.stalled, server: 'nl', code: 'no_server'), null),
       ('Первый запуск', Scene(), null),
       ('Подписка', Scene(subscription: subscription(days: 2, used: 96000), servers: servers()), S.subscription),
+    ]);
+  });
+
+  testWidgets('settings', (tester) async {
+    await sheet(tester, '7-settings', [
+      ('Настройки', home(VpnState.idle), S.settings),
+      (
+        'Настройки, всё включено',
+        home(VpnState.connected, server: 'nl', delay: 38, settings: {'autoConnect': true, 'killSwitch': true}),
+        S.settings,
+      ),
     ]);
   });
 
