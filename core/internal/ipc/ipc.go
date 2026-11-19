@@ -7,10 +7,12 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"os"
 	"sync"
 
 	"github.com/SpofyJet/spofy-app/core/internal/app"
 	"github.com/SpofyJet/spofy-app/core/internal/engine"
+	"github.com/SpofyJet/spofy-app/core/internal/host"
 )
 
 const (
@@ -28,6 +30,10 @@ type Request struct {
 	Key    string          `json:"key,omitempty"`
 	Value  json.RawMessage `json:"value,omitempty"`
 	Online *bool           `json:"online,omitempty"`
+	Answer uint64          `json:"answer,omitempty"`
+	OK     bool            `json:"ok,omitempty"`
+	Error  string          `json:"error,omitempty"`
+	File   bool            `json:"file,omitempty"`
 }
 
 type Reply struct {
@@ -40,7 +46,7 @@ type Reply struct {
 	Traffic  *engine.Traffic `json:"traffic,omitempty"`
 }
 
-func Serve(ctx context.Context, r io.Reader, w io.Writer, a *app.App) error {
+func Serve(ctx context.Context, r io.Reader, w io.Writer, a *app.App, p *host.Platform) error {
 	ctx, cancel := context.WithCancel(ctx)
 	var out sync.Mutex
 	var jobs sync.WaitGroup
@@ -54,11 +60,15 @@ func Serve(ctx context.Context, r io.Reader, w io.Writer, a *app.App) error {
 		out.Unlock()
 	}
 	stop := a.Listen(func(e app.Event) { send(e) })
+	detach := func() {}
 	defer func() {
+		detach()
 		cancel()
 		jobs.Wait()
 		stop()
 	}()
+	files, _ := r.(interface{ TakeFile(string) *os.File })
+	attached := false
 	answer := func(id uint64, err error) {
 		var e *engine.Error
 		switch {
@@ -87,11 +97,34 @@ func Serve(ctx context.Context, r io.Reader, w io.Writer, a *app.App) error {
 		var req Request
 		dec := json.NewDecoder(bytes.NewReader(line))
 		dec.DisallowUnknownFields()
-		if err := dec.Decode(&req); err != nil || req.ID == 0 || req.Op == "" {
+		err := dec.Decode(&req)
+		if err == nil && req.Answer != 0 {
+			var file *os.File
+			if req.File && files != nil {
+				file = files.TakeFile("tun")
+			}
+			if attached {
+				p.Answer(req.Answer, host.Answer{OK: req.OK, Error: req.Error, File: file})
+			} else if file != nil {
+				file.Close()
+			}
+			continue
+		}
+		if err != nil || req.ID == 0 || req.Op == "" {
 			send(Reply{Re: req.ID, Code: CodeRequest, Error: "bad request"})
 			continue
 		}
 		switch req.Op {
+		case "platform":
+			if p == nil {
+				send(Reply{Re: req.ID, Code: CodeOp, Error: "unknown operation"})
+				continue
+			}
+			if !attached {
+				attached = true
+				detach = p.Attach(func(ask host.Ask) { send(ask) })
+			}
+			send(Reply{Re: req.ID, OK: true})
 		case "hello":
 			snap := a.Snapshot()
 			send(Reply{Re: req.ID, OK: true, Snapshot: &snap})

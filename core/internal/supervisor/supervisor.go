@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"os"
 	"os/exec"
 	"sync"
 	"sync/atomic"
@@ -47,6 +48,7 @@ type Options struct {
 	Command     func() *exec.Cmd
 	Guard       Guard
 	HoldGuard   bool
+	Tunnel      func() *os.File
 	OnEvent     func(Event)
 	ReadyWait   time.Duration
 	StartWait   time.Duration
@@ -274,12 +276,24 @@ func (s *Supervisor) bringUp(cfg []byte) (time.Duration, error) {
 		return 0, err
 	}
 	p.armed.Store(false)
-	r, err := p.call(engine.Request{Op: "start", Config: cfg}, s.opts.StartWait)
+	req := engine.Request{Op: "start", Config: cfg}
+	var tun *os.File
+	if s.opts.Tunnel != nil {
+		if tun = s.opts.Tunnel(); tun == nil {
+			return 0, &engine.Error{Code: CodeGuard, Err: errors.New("the platform gave no tunnel")}
+		}
+		req.Tun = true
+	}
+	r, err := p.ask(context.Background(), req, tun, s.opts.StartWait)
 	if err != nil {
 		p.kill()
 		return 0, &engine.Error{Code: CodeUnavailable, Err: err}
 	}
 	if !r.OK {
+		if tun != nil {
+			p.kill()
+			<-p.done
+		}
 		return 0, &engine.Error{Code: r.Code, Err: errors.New(r.Error)}
 	}
 	p.armed.Store(true)
@@ -377,12 +391,14 @@ type process struct {
 
 func (s *Supervisor) spawn() (*process, error) {
 	cmd := s.opts.Command()
-	in, err := cmd.StdinPipe()
+	in, started, err := feed(cmd, s.opts.Tunnel != nil)
 	if err != nil {
 		return nil, err
 	}
 	out, err := cmd.StdoutPipe()
 	if err != nil {
+		started()
+		in.Close()
 		return nil, err
 	}
 	p := &process{
@@ -394,7 +410,10 @@ func (s *Supervisor) spawn() (*process, error) {
 		pending: map[uint64]chan engine.Reply{},
 	}
 	cmd.Stderr = p.stderr
-	if err := cmd.Start(); err != nil {
+	err = cmd.Start()
+	started()
+	if err != nil {
+		in.Close()
 		return nil, err
 	}
 	drained := make(chan struct{})
@@ -451,13 +470,21 @@ func (p *process) call(req engine.Request, wait time.Duration) (engine.Reply, er
 }
 
 func (p *process) callContext(ctx context.Context, req engine.Request, wait time.Duration) (engine.Reply, error) {
+	return p.ask(ctx, req, nil, wait)
+}
+
+func (p *process) ask(ctx context.Context, req engine.Request, with *os.File, wait time.Duration) (engine.Reply, error) {
 	ch := make(chan engine.Reply, 1)
 	p.mu.Lock()
 	p.next++
 	req.ID = p.next
 	p.pending[req.ID] = ch
 	line, err := json.Marshal(req)
-	if err == nil {
+	switch {
+	case err != nil:
+	case with != nil:
+		err = hand(p.in, append(line, '\n'), with)
+	default:
 		_, err = p.in.Write(append(line, '\n'))
 	}
 	p.mu.Unlock()

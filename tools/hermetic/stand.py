@@ -1,4 +1,4 @@
-import base64, json, os, shutil, subprocess, sys, tempfile, threading, time
+import base64, json, os, shutil, socket, subprocess, sys, tempfile, threading, time
 
 CORE = os.path.abspath(sys.argv[1])
 DRIVER = sys.argv[2:]
@@ -376,6 +376,136 @@ def driven():
     expect("nothing is left running", bool(gone))
 
 
+class Channel:
+    def __init__(self, path):
+        self.s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.s.connect(path)
+        self.f = self.s.makefile("r")
+        self.n = 0
+        self.events = []
+
+    def call(self, op, **fields):
+        self.n += 1
+        began = time.time()
+        self.s.sendall((json.dumps({"id": self.n, "op": op, **fields}) + "\n").encode())
+        while True:
+            line = self.f.readline()
+            if not line:
+                raise SystemExit("the core closed the socket during %s: %s" % (op, open(WORK + "/core.err").read()[-600:]))
+            m = json.loads(line)
+            if m.get("re") == self.n:
+                m["ms"] = int((time.time() - began) * 1000)
+                return m
+            self.events.append(m)
+
+    def active(self):
+        return self.call("hello")["snapshot"]["connection"]
+
+
+def platform():
+    app = "1000"
+    home = WORK + "/app"
+    os.makedirs(home)
+    os.chown(home, int(app), int(app))
+    sock = home + "/core.sock"
+    drop = "import os,sys; os.setgroups([]); os.setgid(%s); os.setuid(%s); os.execv(sys.argv[1], sys.argv[1:])" % (app, app)
+    env = dict(os.environ, SPOFY_STATE_KEY=KEY, SSL_CERT_FILE=WORK + "/cert.pem")
+    core = spawn("client", [sys.executable, "-c", drop, CORE, "serve", "-state", home + "/state", "-listen", sock, "-platform"],
+                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=open(WORK + "/core.err", "a"), text=True, bufsize=1, env=env)
+    need("platform: the core listens on its socket", "listening" in core.stdout.readline())
+    service = spawn("client", [sys.executable, HERE + "/platform.py", sock, app, WORK], stderr=open(WORK + "/platform.err", "w"))
+
+    def asked(op=None):
+        if not os.path.exists(WORK + "/platform.log"):
+            return []
+        return [m for m in map(json.loads, open(WORK + "/platform.log")) if op is None or m["op"] == op]
+
+    def links():
+        return inside("client", "ip", "-o", "link", "show", check=False)
+
+    def engines():
+        return [pid for pid in map(int, run("pgrep", "-f", "spofy-core engine", check=False).split())
+                if ("Uid:\t%s" % app) in open("/proc/%d/status" % pid).read()]
+    ui = Channel(sock)
+    need("platform: fresh start", ui.call("hello")["snapshot"]["servers"] == [])
+    s = ui.call("subscribe", url="https://sub.local.test/sub/HERMETICTOKEN")
+    need("platform: subscribe", s["ok"], "ms=%d %s" % (s["ms"], s.get("error", "")))
+    need("platform: measure", ui.call("measure")["ok"])
+    inside("hub", "nft", "reset", "counter", "inet", "hub", "foreign_direct")
+    before = len(questions())
+    c = ui.call("connect", server="auto")
+    first = ui.active()["server"]
+    device = (asked("tun") or [{}])[-1].get("device", "?")
+    need("platform: connect on the tunnel the platform made", c["ok"] and first in SERVERS and device in links(), "ms=%d server=%s device=%s %s" % (c["ms"], first, device, c.get("error", "")))
+    code, body = fetch("http://foreign.test/ip")
+    expect("platform: foreign site sees the server address", body == SERVERS.get(first), "seen=%s" % body)
+    code, _ = fetch("http://www.gstatic.com/generate_204")
+    expect("platform: site by name through the tunnel", code == "204", "code=%s" % code)
+    code, body = fetch("http://local.test/ip")
+    expect("platform: direct site sees the client address", body == CLIENT, "seen=%s" % body)
+    expect("platform: the engine runs without root", len(engines()) == 1, "engines=%d" % len(engines()))
+
+    other = [n for n in SERVERS if n != first][0]
+    noise = spawn("client", ["sh", "-c", "while :; do curl -s -m 1 -o /dev/null http://10.77.1.2/ip; done"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    c = ui.call("connect", server=other)
+    code, body = fetch("http://foreign.test/ip")
+    expect("platform: another server on the same tunnel", c["ok"] and body == SERVERS[other] and len(asked("tun")) == 1 and device in links(),
+           "ms=%d seen=%s asked=%d" % (c["ms"], body, len(asked("tun"))))
+    kills = 0
+    for _ in range(3):
+        for pid in engines():
+            os.kill(pid, 9)
+            kills += 1
+        time.sleep(0.7)
+    back = until(lambda: fetch("http://foreign.test/ip", 2)[0] == "200", 10)
+    expect("platform: engine killed three times: traffic is back on the same tunnel", kills == 3 and bool(back) and len(asked("tun")) == 1 and device in links(),
+           "kills=%d asked=%d" % (kills, len(asked("tun"))))
+
+    def state(want):
+        ui.call("check")
+        return ui.active()["state"] == want
+    for name in SERVERS:
+        run("ip", "-n", "hub", "link", "set", "v-" + name, "down")
+    stalled = until(lambda: state("stalled"), 60, 0.5)
+    expect("platform: every server silent: the tunnel stays", bool(stalled) and device in links() and len(asked("untun")) == 0, "asked=%d" % len(asked("tun")))
+    for name in SERVERS:
+        run("ip", "-n", "hub", "link", "set", "v-" + name, "up")
+    again = until(lambda: state("connected"), 40, 0.5)
+    expect("platform: servers are back: connected again", bool(again))
+    noise.kill()
+    noise.wait()
+    foreign = [l for l in questions()[before:] if l[0] == CLIENT and l[1].rstrip(".") in FOREIGN]
+    expect("platform: nothing left the client directly while the tunnel was up", counter("foreign_direct") == 0 and not foreign,
+           "packets=%d dns=%d" % (counter("foreign_direct"), len(foreign)))
+
+    d = ui.call("disconnect")
+    rules = inside("client", "ip", "rule", "show")
+    gone = until(lambda: device not in links(), 5, 0.1)
+    expect("platform: disconnect closes the tunnel and tells the platform", d["ok"] and bool(gone) and len(asked("untun")) == 1 and "lookup 100" not in rules, "ms=%d" % d["ms"])
+    open(WORK + "/platform.refuse", "w").close()
+    c = ui.call("connect")
+    now = ui.active()
+    expect("platform: the platform refuses the tunnel: no connection, the reason is given", not c["ok"] and c.get("code") == "guard_failed" and now["state"] in ("failed", "idle")
+           and "spofy0" not in links(), "code=%s state=%s error=%s" % (c.get("code"), now["state"], c.get("error")))
+    os.remove(WORK + "/platform.refuse")
+    c = ui.call("connect")
+    code, body = fetch("http://foreign.test/ip")
+    device = asked("tun")[-1].get("device", "?")
+    expect("platform: connect again on a new tunnel", c["ok"] and body in SERVERS.values() and device in links(), "ms=%d seen=%s" % (c["ms"], body))
+
+    service.kill()
+    service.wait()
+    c = ui.call("connect", server=[n for n in SERVERS if n != ui.active()["server"]][0])
+    code, body = fetch("http://foreign.test/ip")
+    expect("platform: the platform is gone: the tunnel it gave keeps working", c["ok"] and body in SERVERS.values(), "seen=%s" % body)
+    core.stdin.close()
+    code = core.wait(timeout=15)
+    left = until(lambda: not engines() and "spofy0" not in links(), 5, 0.1)
+    expect("platform: the core stops when its input closes: engine and tunnel are gone", code == 0 and bool(left), "exit=%s" % code)
+    expect("platform: saved state belongs to the app and has nothing in the clear",
+           os.stat(home + "/state/state").st_uid == int(app) and b"HERMETICTOKEN" not in open(home + "/state/state", "rb").read())
+
+
 def diagnose():
     checks = [
         ("client to server a", ["ip", "netns", "exec", "client", "curl", "-s", "-m", "3", "-o", "/dev/null", "-w", "%{http_code} %{errormsg}", "http://10.77.0.11:443/"]),
@@ -413,12 +543,17 @@ began = time.time()
 try:
     build()
     serve_side()
-    driven() if DRIVER else scenario()
+    if DRIVER:
+        driven()
+    elif os.environ.get("HERMETIC_ONLY") != "platform":
+        scenario()
+    if not DRIVER and not failed:
+        platform()
 except Abort:
     pass
 finally:
     if failed:
-        for name in ("core.err", "site.err", "server-a.err", "server-b.err"):
+        for name in ("core.err", "site.err", "server-a.err", "server-b.err", "platform.err", "platform.log"):
             path = WORK + "/" + name
             if os.path.exists(path):
                 print("--- %s\n%s" % (name, open(path).read()[-1500:]))

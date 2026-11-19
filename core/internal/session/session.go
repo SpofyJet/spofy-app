@@ -153,7 +153,7 @@ func (s *Session) Connect(parent context.Context, cands []Candidate, pinned stri
 		s.install(cands, quick, false)
 		tried = quick[0]
 		limit := min(max(5*cands[tried].Known, 2*time.Second), s.opts.Timeout)
-		if err, ok := settled(ctx, s.try(ctx, Connecting, tried, limit, s.opts.Retries[:1])); ok {
+		if err, ok := s.settle(ctx, s.try(ctx, Connecting, tried, limit, s.opts.Retries[:1])); ok {
 			return err
 		}
 	}
@@ -165,11 +165,22 @@ func (s *Session) Connect(parent context.Context, cands []Candidate, pinned stri
 	if answered {
 		return s.walk(ctx, Connecting, order)
 	}
-	err, ok := settled(ctx, s.try(ctx, Connecting, order[0], min(2*time.Second, s.opts.Timeout), s.opts.Retries[:1]))
+	err, ok := s.settle(ctx, s.try(ctx, Connecting, order[0], min(2*time.Second, s.opts.Timeout), s.opts.Retries[:1]))
 	if ok {
 		return err
 	}
 	return s.lost(ctx, CodeNoServer, err)
+}
+
+func (s *Session) settle(ctx context.Context, err error) (error, bool) {
+	if err, ok := settled(ctx, err); ok {
+		return err, true
+	}
+	var e *engine.Error
+	if errors.As(err, &e) && (e.Code == supervisor.CodeGuard || e.Code == engine.CodePermission) {
+		return s.lost(ctx, e.Code, e.Err), true
+	}
+	return err, false
 }
 
 func settled(ctx context.Context, err error) (error, bool) {
@@ -351,7 +362,7 @@ func (s *Session) walk(ctx context.Context, during State, order []int) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		err, ok := settled(ctx, s.try(ctx, during, i, s.opts.Timeout, waits))
+		err, ok := s.settle(ctx, s.try(ctx, during, i, s.opts.Timeout, waits))
 		if ok {
 			return err
 		}

@@ -17,6 +17,7 @@ type Request struct {
 	Tag     string          `json:"tag,omitempty"`
 	URL     string          `json:"url,omitempty"`
 	Timeout int64           `json:"timeout,omitempty"`
+	Tun     bool            `json:"tun,omitempty"`
 }
 
 type Reply struct {
@@ -90,7 +91,17 @@ func Serve(r io.Reader, w io.Writer) error {
 		case "start":
 			began := time.Now()
 			stop()
-			next, err := Start(req.Config)
+			tun := -1
+			if req.Tun {
+				if in, ok := r.(interface{ Take() int }); ok {
+					tun = in.Take()
+				}
+				if tun < 0 {
+					send(Reply{Re: req.ID, Code: CodeStart, Error: "the tunnel did not come with the request"})
+					continue
+				}
+			}
+			next, err := StartOn(req.Config, tun)
 			if err != nil {
 				send(failure(req.ID, err))
 				continue

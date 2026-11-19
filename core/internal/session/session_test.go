@@ -24,12 +24,17 @@ type fake struct {
 	measured int
 	probes   int
 	limits   []time.Duration
+	refuse   error
 }
 
 func (f *fake) Start(cfg []byte) (time.Duration, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.log = append(f.log, "start:"+string(cfg))
+	if f.refuse != nil {
+		f.running = ""
+		return 0, f.refuse
+	}
 	if f.broken[string(cfg)] {
 		f.running = ""
 		return 0, &engine.Error{Code: engine.CodeConfig, Err: errors.New("bad config")}
@@ -683,4 +688,33 @@ func TestBypassMeasuresWhileConnected(t *testing.T) {
 		t.Fatalf("measured %d, stops %d", f.measured, f.stops())
 	}
 	same(t, tr.states()[2:], []string{"measuring", "connecting:nl", "connected:nl"})
+}
+
+func TestTunnelRefusalEndsTheConnectWithItsOwnCode(t *testing.T) {
+	for _, code := range []engine.Code{supervisor.CodeGuard, engine.CodePermission} {
+		f := &fake{delays: speeds(10, 20, 30), refuse: &engine.Error{Code: code, Err: errors.New("the user did not allow the tunnel")}}
+		s, tr := setup(f, Options{})
+		err := s.Connect(context.Background(), cands("de", "nl", "us"), "")
+		if codeOf(err) != code || err.Error() != string(code)+": the user did not allow the tunnel" {
+			t.Fatalf("%s: err = %v", code, err)
+		}
+		same(t, f.starts(), []string{"de"})
+		same(t, tr.states(), []string{"measuring", "connecting:de", "failed"})
+		f.set(func() { f.refuse = nil })
+		if err := s.Connect(context.Background(), cands("de", "nl", "us"), ""); err != nil {
+			t.Fatal(err)
+		}
+		s.Disconnect()
+		f.set(func() { f.refuse, f.log, f.measured = &engine.Error{Code: code, Err: errors.New("no")}, nil, 0 })
+		known := cands("de", "nl", "us")
+		for i := range known {
+			known[i].Known = time.Duration(10*(i+1)) * time.Millisecond
+		}
+		if err := s.Connect(context.Background(), known, ""); codeOf(err) != code {
+			t.Fatalf("%s from memory: err = %v", code, err)
+		}
+		if len(f.starts()) != 1 || f.measured != 0 || s.State() != Failed {
+			t.Fatalf("%s from memory: starts %v, measured %d, state %s", code, f.starts(), f.measured, s.State())
+		}
+	}
 }

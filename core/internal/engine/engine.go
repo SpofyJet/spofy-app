@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"errors"
 	"os"
+	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -11,6 +13,7 @@ import (
 
 	applog "github.com/xtls/xray-core/app/log"
 	clog "github.com/xtls/xray-core/common/log"
+	"github.com/xtls/xray-core/common/platform"
 	"github.com/xtls/xray-core/core"
 	"github.com/xtls/xray-core/features/stats"
 	"github.com/xtls/xray-core/infra/conf/serial"
@@ -86,10 +89,26 @@ func Validate(cfg []byte) error {
 }
 
 func Start(cfg []byte) (*Instance, error) {
+	return StartOn(cfg, -1)
+}
+
+func StartOn(cfg []byte, tun int) (*Instance, error) {
 	if !running.CompareAndSwap(false, true) {
+		if tun >= 0 {
+			shut(tun)
+		}
 		return nil, &Error{Code: CodeBusy, Err: errors.New("another instance is running in this process")}
 	}
+	if tun >= 0 {
+		os.Setenv(platform.TunFdKey, strconv.Itoa(tun))
+	}
 	i, err := start(cfg)
+	if tun >= 0 {
+		os.Unsetenv(platform.TunFdKey)
+		if runtime.GOOS == "android" {
+			shut(tun)
+		}
+	}
 	if err != nil {
 		running.Store(false)
 	}

@@ -62,7 +62,7 @@ func newRig(t *testing.T) *rig {
 	outR, outW := io.Pipe()
 	r.in = inW
 	go func() {
-		r.done <- Serve(context.Background(), inR, outW, r.app)
+		r.done <- Serve(context.Background(), inR, outW, r.app, nil)
 		outW.Close()
 	}()
 	go func() {

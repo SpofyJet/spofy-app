@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/SpofyJet/spofy-app/core/internal/app"
 	"github.com/SpofyJet/spofy-app/core/internal/engine"
+	"github.com/SpofyJet/spofy-app/core/internal/host"
 	"github.com/SpofyJet/spofy-app/core/internal/ipc"
 	"github.com/SpofyJet/spofy-app/core/internal/session"
 	"github.com/SpofyJet/spofy-app/core/internal/store"
@@ -35,7 +37,7 @@ func main() {
 	switch os.Args[1] {
 	case "engine":
 		ctl := controlChannel()
-		if err := engine.Serve(os.Stdin, ctl); err != nil {
+		if err := engine.Serve(host.Stdin(), ctl); err != nil {
 			os.Exit(1)
 		}
 	case "serve":
@@ -168,6 +170,11 @@ func serve(args []string) int {
 	strict := fs.Bool("strict", false, "keep the block when the first connection fails")
 	marked := fs.Bool("lab-identity", false, "run the engine under the lab group id")
 	hwid := fs.String("hwid", "", "device id sent to the subscription server")
+	system := fs.String("os", "Linux", "system name sent to the subscription server")
+	release := fs.String("os-version", "lab", "system version sent to the subscription server")
+	model := fs.String("model", "lab", "device model sent to the subscription server")
+	socket := fs.String("listen", "", "serve the channel on this unix socket, the core stops when its input closes")
+	given := fs.Bool("platform", false, "take the tunnel from the platform, needs -listen")
 	fs.Parse(args)
 
 	out := controlChannel()
@@ -195,11 +202,25 @@ func serve(args []string) int {
 	if *guarded && opts.Mode == xcfg.ModeTun {
 		g = labGuard(opts.Tun.Name)
 	}
+	var platform *host.Platform
+	var carried func() *os.File
+	if *given {
+		if *socket == "" || opts.Mode != xcfg.ModeTun {
+			return fail(errors.New("-platform needs -listen and the tun mode"))
+		}
+		platform = &host.Platform{}
+		t := &host.Tun{Platform: platform, Spec: host.Spec{
+			Name: opts.Tun.Name, MTU: opts.Tun.MTU, Addresses: []string{"172.19.0.1/30", "fdfe:5f0f::1/126"}, Routes: []string{"0.0.0.0/0", "::/0"}, DNS: []string{"172.19.0.2"},
+		}}
+		g, carried = t, t.File
+		opts.Tun = xcfg.Tun{Name: opts.Tun.Name, MTU: opts.Tun.MTU}
+	}
 	var a *app.App
 	var checks sync.WaitGroup
 	sv := supervisor.New(supervisor.Options{
 		Guard:     g,
 		HoldGuard: true,
+		Tunnel:    carried,
 		Command:   cmd,
 		OnEvent: func(e supervisor.Event) {
 			switch e.Kind {
@@ -218,7 +239,7 @@ func serve(args []string) int {
 	a = app.New(app.Config{
 		Store:   st,
 		Tunnel:  sv,
-		Device:  sub.Device{HWID: *hwid, OS: "Linux", OSVersion: "lab", Model: "lab", AppVersion: version},
+		Device:  sub.Device{HWID: *hwid, OS: *system, OSVersion: *release, Model: *model, AppVersion: version},
 		Run:     opts,
 		Version: version,
 		Strict:  *strict,
@@ -228,7 +249,17 @@ func serve(args []string) int {
 		defer checks.Done()
 		a.Resume()
 	}()
-	err = ipc.Serve(context.Background(), os.Stdin, out, a)
+	if *socket != "" {
+		ctx, cancel := context.WithCancel(context.Background())
+		go func() {
+			io.Copy(io.Discard, os.Stdin)
+			cancel()
+		}()
+		err = listen(ctx, *socket, a, platform, func() { fmt.Fprintln(out, `{"ev":"listening"}`) })
+		cancel()
+	} else {
+		err = ipc.Serve(context.Background(), os.Stdin, out, a, nil)
+	}
 	a.Close()
 	checks.Wait()
 	if err != nil {
