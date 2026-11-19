@@ -52,6 +52,6 @@
 
 `core/go.mod` подключает форк из соседней папки `../spofy-xray-core`, нужная ревизия записана в `core/XRAY_REV`. Сборка и тесты идут в контейнере с пределом памяти и процессора: `tools/go.sh`, `tools/build.sh <система> <архитектура>`.
 
-Android собирается в GitHub Actions: `tools/android-core.sh` собирает ядро под три архитектуры компилятором NDK, затем Flutter собирает APK. Там же эмулятор проходит весь путь: `tools/android/emulator.py`.
+Android собирается в GitHub Actions: `tools/android-core.sh` собирает ядро под три архитектуры компилятором NDK, затем Flutter собирает APK. Там же эмулятор проходит весь путь: `tools/android/emulator.py`. Код службы на Kotlin проверяется и локально, за 5 секунд: `tools/android/kotlin-check.sh` компилирует его против платформы Android и оболочки Flutter тех же версий.
 
 Интерфейс собирается и проверяется в контейнере с Flutter той же версии, что в GitHub Actions: `tools/flutter.sh <команда>`, проверка — `tools/app-check.sh`, листы экранов для просмотра глазами — `tools/sheets.sh`.

@@ -21,4 +21,5 @@ CGO_ENABLED=1 BUILD_MEM=3g "$ROOT/tools/go.sh" sh -c 'test -z "$(gofmt -l .)" ||
 "$ROOT/tools/hermetic.sh" | tail -1 | grep -q "^HERMETIC OK" || { echo "FAIL: tools/hermetic.sh"; exit 1; }
 "$ROOT/tools/app-check.sh" | tail -1 | grep -q "^APP OK" || { echo "FAIL: tools/app-check.sh"; exit 1; }
 "$ROOT/tools/app-stand.sh" | tail -1 | grep -q "^HERMETIC OK" || { echo "FAIL: tools/app-stand.sh"; exit 1; }
+"$ROOT/tools/android/kotlin-check.sh" | tail -1 | grep -q "^KOTLIN OK" || { "$ROOT/tools/android/kotlin-check.sh" || true; echo "FAIL: tools/android/kotlin-check.sh"; exit 1; }
 echo "CHECK OK"
