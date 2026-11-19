@@ -11,6 +11,7 @@ type Mode int
 const (
 	ModeTun Mode = iota
 	ModeProxy
+	ModeProbe
 )
 
 const (
@@ -63,24 +64,28 @@ func Build(server json.RawMessage, o Options) ([]byte, error) {
 			out[k] = v
 		}
 	}
-	sniffing, oldTags := inspect(in["inbounds"])
-	inbound, tag, err := inboundFor(o, sniffing)
-	if err != nil {
-		return nil, err
-	}
-	out["inbounds"] = mustJSON([]any{inbound})
-	if r, ok := out["routing"]; ok {
-		fixed, err := retag(r, oldTags, tag)
+	if o.Mode == ModeProbe {
+		out["inbounds"] = json.RawMessage(`[]`)
+	} else {
+		sniffing, oldTags := inspect(in["inbounds"])
+		inbound, tag, err := inboundFor(o, sniffing)
 		if err != nil {
 			return nil, err
 		}
-		out["routing"] = fixed
+		out["inbounds"] = mustJSON([]any{inbound})
+		if r, ok := out["routing"]; ok {
+			fixed, err := retag(r, oldTags, tag)
+			if err != nil {
+				return nil, err
+			}
+			out["routing"] = fixed
+		}
 	}
 	level := o.LogLevel
 	if level == "" {
 		level = "warning"
 	}
-	out["log"] = mustJSON(map[string]string{"loglevel": level})
+	out["log"] = mustJSON(map[string]string{"loglevel": level, "access": "none"})
 	out["stats"] = json.RawMessage(`{}`)
 	policy, err := withStats(out["policy"])
 	if err != nil {
@@ -88,6 +93,18 @@ func Build(server json.RawMessage, o Options) ([]byte, error) {
 	}
 	out["policy"] = policy
 	return json.Marshal(out)
+}
+
+func MainTag(server json.RawMessage) string {
+	var in struct {
+		Outbounds []struct {
+			Tag string `json:"tag"`
+		} `json:"outbounds"`
+	}
+	if json.Unmarshal(server, &in) != nil || len(in.Outbounds) == 0 {
+		return ""
+	}
+	return in.Outbounds[0].Tag
 }
 
 func inspect(raw json.RawMessage) (json.RawMessage, []string) {

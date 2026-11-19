@@ -2,6 +2,7 @@ package engine
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -10,10 +11,12 @@ import (
 )
 
 type Request struct {
-	ID     uint64          `json:"id"`
-	Op     string          `json:"op"`
-	Config json.RawMessage `json:"config,omitempty"`
-	Tag    string          `json:"tag,omitempty"`
+	ID      uint64          `json:"id"`
+	Op      string          `json:"op"`
+	Config  json.RawMessage `json:"config,omitempty"`
+	Tag     string          `json:"tag,omitempty"`
+	URL     string          `json:"url,omitempty"`
+	Timeout int64           `json:"timeout,omitempty"`
 }
 
 type Reply struct {
@@ -27,7 +30,10 @@ type Reply struct {
 	Line    string   `json:"line,omitempty"`
 }
 
-const maxLine = 4 << 20
+const (
+	maxLine   = 4 << 20
+	probeWait = 5 * time.Second
+)
 
 func Serve(r io.Reader, w io.Writer) error {
 	var mu sync.Mutex
@@ -41,13 +47,35 @@ func Serve(r io.Reader, w io.Writer) error {
 	defer SetLogSink(nil)
 
 	var inst *Instance
+	var probes sync.WaitGroup
+	live, cancel := context.WithCancel(context.Background())
 	stop := func() {
+		cancel()
+		probes.Wait()
+		live, cancel = context.WithCancel(context.Background())
 		if inst != nil {
 			inst.Close()
 			inst = nil
 		}
 	}
-	defer stop()
+	defer func() {
+		stop()
+		cancel()
+	}()
+	timed := func(parent context.Context, ms int64) (context.Context, context.CancelFunc) {
+		wait := probeWait
+		if ms > 0 {
+			wait = time.Duration(ms) * time.Millisecond
+		}
+		return context.WithTimeout(parent, wait)
+	}
+	answer := func(id uint64, took time.Duration, err error) {
+		if err != nil {
+			send(failure(id, err))
+			return
+		}
+		send(Reply{Re: id, OK: true, Ms: took.Milliseconds()})
+	}
 
 	send(Reply{Ev: "ready"})
 	sc := bufio.NewScanner(r)
@@ -78,6 +106,24 @@ func Serve(r io.Reader, w io.Writer) error {
 				t = inst.Traffic(req.Tag)
 			}
 			send(Reply{Re: req.ID, OK: true, Traffic: &t})
+		case "probe":
+			if inst == nil {
+				send(Reply{Re: req.ID, Code: CodeIdle, Error: "not started"})
+				continue
+			}
+			probes.Add(1)
+			go func(i *Instance, parent context.Context, req Request) {
+				defer probes.Done()
+				ctx, done := timed(parent, req.Timeout)
+				defer done()
+				took, err := i.Probe(ctx, req.URL, req.Tag)
+				answer(req.ID, took, err)
+			}(inst, live, req)
+		case "measure":
+			ctx, done := timed(context.Background(), req.Timeout)
+			took, err := Measure(ctx, req.Config, req.URL, req.Tag)
+			done()
+			answer(req.ID, took, err)
 		case "ping":
 			send(Reply{Re: req.ID, OK: true})
 		default:

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 
@@ -22,6 +23,7 @@ const (
 	CodeConfig     Code = "config_invalid"
 	CodePermission Code = "tun_permission"
 	CodeStart      Code = "start_failed"
+	CodeBusy       Code = "engine_busy"
 )
 
 type Error struct {
@@ -40,9 +42,13 @@ type Traffic struct {
 type Instance struct {
 	inst  *core.Instance
 	stats stats.Manager
+	once  sync.Once
 }
 
-var sink atomic.Pointer[func(string)]
+var (
+	sink    atomic.Pointer[func(string)]
+	running atomic.Bool
+)
 
 func SetLogSink(f func(string)) {
 	if f == nil {
@@ -80,6 +86,17 @@ func Validate(cfg []byte) error {
 }
 
 func Start(cfg []byte) (*Instance, error) {
+	if !running.CompareAndSwap(false, true) {
+		return nil, &Error{Code: CodeBusy, Err: errors.New("another instance is running in this process")}
+	}
+	i, err := start(cfg)
+	if err != nil {
+		running.Store(false)
+	}
+	return i, err
+}
+
+func start(cfg []byte) (*Instance, error) {
 	clog.RegisterHandler(handler{})
 	c, err := serial.LoadJSONConfig(bytes.NewReader(cfg))
 	if err != nil {
@@ -101,8 +118,12 @@ func Start(cfg []byte) (*Instance, error) {
 }
 
 func (i *Instance) Close() error {
-	err := i.inst.Close()
-	clog.RegisterHandler(handler{})
+	var err error
+	i.once.Do(func() {
+		err = i.inst.Close()
+		clog.RegisterHandler(handler{})
+		running.Store(false)
+	})
 	return err
 }
 

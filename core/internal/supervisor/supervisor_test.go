@@ -43,6 +43,21 @@ func TestMain(m *testing.M) {
 	case "flaky":
 		engine.Serve(os.Stdin, exitAfterStart{os.Stdout})
 		os.Exit(0)
+	case "crashy":
+		pr, pw := io.Pipe()
+		go func() {
+			sc := bufio.NewScanner(os.Stdin)
+			sc.Buffer(make([]byte, 64<<10), 4<<20)
+			for sc.Scan() {
+				if bytes.Contains(sc.Bytes(), []byte(`"tag":"boom"`)) {
+					os.Exit(7)
+				}
+				pw.Write(append(bytes.Clone(sc.Bytes()), '\n'))
+			}
+			pw.Close()
+		}()
+		engine.Serve(pr, os.Stdout)
+		os.Exit(0)
 	case "parent":
 		cfg, _ := os.ReadFile(os.Getenv("SPOFY_TEST_CONFIG"))
 		s := New(Options{Command: child("serve")})
@@ -414,6 +429,34 @@ func TestGuardLoweredWhenStartFails(t *testing.T) {
 	}
 	if up, lowered := g.state(); up || lowered != 1 {
 		t.Fatalf("up=%v lowered=%d", up, lowered)
+	}
+}
+
+func TestGuardHeldWhenSwitchFails(t *testing.T) {
+	cfg, _ := config(t)
+	g := &fakeGuard{}
+	s := New(Options{Command: child("serve"), Guard: g})
+	defer s.Close()
+	if _, err := s.Start(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Start([]byte(`{"outbounds":[{"protocol":"nope"}]}`)); err == nil {
+		t.Fatal("start succeeded")
+	}
+	if up, lowered := g.state(); !up || lowered != 0 {
+		t.Fatalf("after a failed switch: up=%v lowered=%d", up, lowered)
+	}
+	if _, err := s.Start(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if up, lowered := g.state(); !up || lowered != 0 {
+		t.Fatalf("after the next server: up=%v lowered=%d", up, lowered)
+	}
+	if err := s.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	if up, lowered := g.state(); up || lowered != 1 {
+		t.Fatalf("after stop: up=%v lowered=%d", up, lowered)
 	}
 }
 

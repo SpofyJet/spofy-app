@@ -69,7 +69,7 @@ func TestBuildTunKeepsServerLogic(t *testing.T) {
 		if !bytes.Equal(orig[0].Sniffing, inbounds[0].Sniffing) {
 			t.Fatalf("server %d: sniffing changed", i)
 		}
-		if string(out["log"]) != `{"loglevel":"warning"}` {
+		if string(out["log"]) != `{"access":"none","loglevel":"warning"}` {
 			t.Fatalf("server %d: log = %s", i, out["log"])
 		}
 	}

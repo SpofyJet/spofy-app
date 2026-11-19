@@ -2,6 +2,7 @@ package supervisor
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -59,6 +60,8 @@ type Supervisor struct {
 	op   sync.Mutex
 	busy atomic.Bool
 
+	guarded bool
+
 	mu         sync.Mutex
 	gen        uint64
 	want       []byte
@@ -103,6 +106,7 @@ func (s *Supervisor) Start(cfg []byte) (time.Duration, error) {
 	if s.generation() != gen {
 		return 0, ErrSuperseded
 	}
+	held := s.guarded
 	if err := s.raise(); err != nil {
 		s.clear(gen)
 		return 0, err
@@ -110,7 +114,9 @@ func (s *Supervisor) Start(cfg []byte) (time.Duration, error) {
 	took, err := s.bringUp(cfg)
 	if err != nil && s.generation() == gen {
 		s.clear(gen)
-		s.lower()
+		if !held {
+			s.lower()
+		}
 	}
 	return took, err
 }
@@ -120,9 +126,10 @@ func (s *Supervisor) raise() error {
 		return nil
 	}
 	if err := s.opts.Guard.Raise(); err != nil {
-		s.opts.Guard.Lower()
+		s.lower()
 		return &engine.Error{Code: CodeGuard, Err: err}
 	}
+	s.guarded = true
 	return nil
 }
 
@@ -130,6 +137,7 @@ func (s *Supervisor) lower() {
 	if s.opts.Guard != nil {
 		s.opts.Guard.Lower()
 	}
+	s.guarded = false
 }
 
 func (s *Supervisor) Stop() error {
@@ -439,6 +447,10 @@ func (p *process) read(r io.Reader, emit func(Event)) {
 }
 
 func (p *process) call(req engine.Request, wait time.Duration) (engine.Reply, error) {
+	return p.callContext(context.Background(), req, wait)
+}
+
+func (p *process) callContext(ctx context.Context, req engine.Request, wait time.Duration) (engine.Reply, error) {
 	ch := make(chan engine.Reply, 1)
 	p.mu.Lock()
 	p.next++
@@ -463,6 +475,9 @@ func (p *process) call(req engine.Request, wait time.Duration) (engine.Reply, er
 	case <-timer.C:
 		p.drop(req.ID)
 		return engine.Reply{}, errors.New("engine did not answer in time")
+	case <-ctx.Done():
+		p.drop(req.ID)
+		return engine.Reply{}, ctx.Err()
 	}
 }
 
