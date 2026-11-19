@@ -1,0 +1,137 @@
+package ipc
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"sync"
+
+	"github.com/SpofyJet/spofy-app/core/internal/app"
+	"github.com/SpofyJet/spofy-app/core/internal/engine"
+)
+
+const (
+	CodeRequest engine.Code = "bad_request"
+	CodeOp      engine.Code = "unknown_op"
+)
+
+const maxLine = 1 << 20
+
+type Request struct {
+	ID     uint64          `json:"id"`
+	Op     string          `json:"op"`
+	URL    string          `json:"url,omitempty"`
+	Server string          `json:"server,omitempty"`
+	Key    string          `json:"key,omitempty"`
+	Value  json.RawMessage `json:"value,omitempty"`
+	Online *bool           `json:"online,omitempty"`
+}
+
+type Reply struct {
+	Re       uint64          `json:"re"`
+	OK       bool            `json:"ok"`
+	Code     engine.Code     `json:"code,omitempty"`
+	Error    string          `json:"error,omitempty"`
+	Snapshot *app.Snapshot   `json:"snapshot,omitempty"`
+	Changed  *bool           `json:"changed,omitempty"`
+	Traffic  *engine.Traffic `json:"traffic,omitempty"`
+}
+
+func Serve(ctx context.Context, r io.Reader, w io.Writer, a *app.App) error {
+	ctx, cancel := context.WithCancel(ctx)
+	var out sync.Mutex
+	var jobs sync.WaitGroup
+	send := func(v any) {
+		b, err := json.Marshal(v)
+		if err != nil {
+			return
+		}
+		out.Lock()
+		w.Write(append(b, '\n'))
+		out.Unlock()
+	}
+	stop := a.Listen(func(e app.Event) { send(e) })
+	defer func() {
+		cancel()
+		jobs.Wait()
+		stop()
+	}()
+	answer := func(id uint64, err error) {
+		var e *engine.Error
+		switch {
+		case err == nil:
+			send(Reply{Re: id, OK: true})
+		case errors.As(err, &e):
+			send(Reply{Re: id, Code: e.Code, Error: e.Err.Error()})
+		default:
+			send(Reply{Re: id, Code: CodeRequest, Error: err.Error()})
+		}
+	}
+	later := func(id uint64, work func() error) {
+		jobs.Add(1)
+		go func() {
+			defer jobs.Done()
+			answer(id, work())
+		}()
+	}
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 64<<10), maxLine)
+	for sc.Scan() {
+		line := bytes.TrimSpace(sc.Bytes())
+		if len(line) == 0 {
+			continue
+		}
+		var req Request
+		dec := json.NewDecoder(bytes.NewReader(line))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&req); err != nil || req.ID == 0 || req.Op == "" {
+			send(Reply{Re: req.ID, Code: CodeRequest, Error: "bad request"})
+			continue
+		}
+		switch req.Op {
+		case "hello":
+			snap := a.Snapshot()
+			send(Reply{Re: req.ID, OK: true, Snapshot: &snap})
+		case "subscribe":
+			later(req.ID, func() error { return a.Subscribe(ctx, req.URL) })
+		case "refresh":
+			jobs.Add(1)
+			go func() {
+				defer jobs.Done()
+				changed, err := a.Refresh(ctx)
+				if err != nil {
+					answer(req.ID, err)
+					return
+				}
+				send(Reply{Re: req.ID, OK: true, Changed: &changed})
+			}()
+		case "unsubscribe":
+			answer(req.ID, a.Unsubscribe())
+		case "connect":
+			later(req.ID, func() error { return a.Connect(req.Server) })
+		case "disconnect":
+			answer(req.ID, a.Disconnect())
+		case "check":
+			later(req.ID, a.Check)
+		case "online":
+			if req.Online == nil {
+				send(Reply{Re: req.ID, Code: CodeRequest, Error: "bad request"})
+				continue
+			}
+			later(req.ID, func() error { return a.SetOnline(*req.Online) })
+		case "measure":
+			later(req.ID, func() error { return a.Measure(ctx) })
+		case "set":
+			answer(req.ID, a.Set(req.Key, req.Value))
+		case "traffic":
+			t := a.Traffic()
+			send(Reply{Re: req.ID, OK: true, Traffic: &t})
+		default:
+			send(Reply{Re: req.ID, Code: CodeOp, Error: "unknown operation"})
+		}
+	}
+	return sc.Err()
+}

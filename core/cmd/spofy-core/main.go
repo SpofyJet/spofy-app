@@ -15,7 +15,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/SpofyJet/spofy-app/core/internal/app"
 	"github.com/SpofyJet/spofy-app/core/internal/engine"
+	"github.com/SpofyJet/spofy-app/core/internal/ipc"
 	"github.com/SpofyJet/spofy-app/core/internal/session"
 	"github.com/SpofyJet/spofy-app/core/internal/store"
 	"github.com/SpofyJet/spofy-app/core/internal/sub"
@@ -27,7 +29,7 @@ var version = "dev"
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: spofy-core engine | run | measure | version")
+		fmt.Fprintln(os.Stderr, "usage: spofy-core engine | serve | run | measure | version")
 		os.Exit(2)
 	}
 	switch os.Args[1] {
@@ -36,6 +38,8 @@ func main() {
 		if err := engine.Serve(os.Stdin, ctl); err != nil {
 			os.Exit(1)
 		}
+	case "serve":
+		os.Exit(serve(os.Args[2:]))
 	case "run":
 		os.Exit(run(os.Args[2:]))
 	case "measure":
@@ -120,11 +124,11 @@ func recall(st *store.Store, cands []session.Candidate, fresh time.Duration) {
 	}
 }
 
-func remember(st *store.Store, cands []session.Candidate) func([]supervisor.Measurement) {
+func remember(st *store.Store) func([]session.Candidate, []supervisor.Measurement) {
 	if st == nil {
 		return nil
 	}
-	return func(measured []supervisor.Measurement) {
+	return func(cands []session.Candidate, measured []supervisor.Measurement) {
 		err := st.Update(func(s *store.State) {
 			s.Delays = map[string]store.Delay{}
 			for i, m := range measured {
@@ -137,6 +141,95 @@ func remember(st *store.Store, cands []session.Candidate) func([]supervisor.Meas
 			say(map[string]any{"event": "state_unavailable", "error": err.Error()})
 		}
 	}
+}
+
+func tunnel(mode string, port int, level string) (xcfg.Options, error) {
+	opts := xcfg.Options{Mode: xcfg.ModeTun, LogLevel: level, Tun: xcfg.Tun{
+		Name: "spofy0", MTU: 1500, Gateway: []string{"172.19.0.1/30"}, Routes: []string{"0.0.0.0/1", "128.0.0.0/1"},
+	}}
+	switch mode {
+	case "tun":
+	case "proxy":
+		opts.Mode = xcfg.ModeProxy
+		opts.Proxy = xcfg.Proxy{Port: port, User: "spofy", Pass: "spofy"}
+	default:
+		return opts, errors.New("mode must be tun or proxy")
+	}
+	return opts, nil
+}
+
+func serve(args []string) int {
+	fs := flag.NewFlagSet("serve", flag.ExitOnError)
+	folder := fs.String("state", "", "folder for saved state, the key comes from SPOFY_STATE_KEY")
+	mode := fs.String("mode", "tun", "tun or proxy")
+	level := fs.String("log", "warning", "core log level")
+	port := fs.Int("port", 2080, "proxy mode port")
+	guarded := fs.Bool("guard", false, "block traffic outside the tunnel while connected")
+	strict := fs.Bool("strict", false, "keep the block when the first connection fails")
+	marked := fs.Bool("lab-identity", false, "run the engine under the lab group id")
+	hwid := fs.String("hwid", "", "device id sent to the subscription server")
+	fs.Parse(args)
+
+	out := controlChannel()
+	fail := func(err error) int {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	key, err := base64.StdEncoding.DecodeString(os.Getenv("SPOFY_STATE_KEY"))
+	if err != nil || *folder == "" {
+		return fail(errors.New("serve needs -state and SPOFY_STATE_KEY"))
+	}
+	st, err := store.Open(*folder, key)
+	if err != nil {
+		return fail(err)
+	}
+	opts, err := tunnel(*mode, *port, *level)
+	if err != nil {
+		return fail(err)
+	}
+	cmd, err := command(*marked || *guarded)
+	if err != nil {
+		return fail(err)
+	}
+	var g supervisor.Guard
+	if *guarded && opts.Mode == xcfg.ModeTun {
+		g = labGuard(opts.Tun.Name)
+	}
+	var a *app.App
+	var checks sync.WaitGroup
+	sv := supervisor.New(supervisor.Options{
+		Guard:     g,
+		HoldGuard: true,
+		Command:   cmd,
+		OnEvent: func(e supervisor.Event) {
+			switch e.Kind {
+			case supervisor.KindLog:
+				fmt.Fprintln(os.Stderr, e.Line)
+			case supervisor.KindRestored, supervisor.KindFailed:
+				checks.Add(1)
+				go func() {
+					defer checks.Done()
+					a.Check()
+				}()
+			}
+		},
+	})
+	defer sv.Close()
+	a = app.New(app.Config{
+		Store:   st,
+		Tunnel:  sv,
+		Device:  sub.Device{HWID: *hwid, OS: "Linux", OSVersion: "lab", Model: "lab", AppVersion: version},
+		Run:     opts,
+		Version: version,
+		Strict:  *strict,
+	})
+	err = ipc.Serve(context.Background(), os.Stdin, out, a)
+	a.Close()
+	checks.Wait()
+	if err != nil {
+		return fail(err)
+	}
+	return 0
 }
 
 func measure(args []string) int {
@@ -170,8 +263,8 @@ func measure(args []string) int {
 	began := time.Now()
 	ok := 0
 	measured := ss.Measure(context.Background(), cands)
-	if save := remember(state(*folder), cands); save != nil {
-		save(measured)
+	if save := remember(state(*folder)); save != nil {
+		save(cands, measured)
 	}
 	for i, m := range measured {
 		if m.OK() {
@@ -218,13 +311,14 @@ func run(args []string) int {
 			return 1
 		}
 	}
-	opts := xcfg.Options{Mode: xcfg.ModeTun, LogLevel: *level, Tun: xcfg.Tun{
-		Name: "spofy0", MTU: 1500, Gateway: []string{"172.19.0.1/30"}, Routes: []string{"0.0.0.0/1", "128.0.0.0/1"},
-	}}
+	opts, err := tunnel(*mode, *port, *level)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
 	tag := xcfg.TagTun
-	if *mode == "proxy" {
-		opts.Mode, tag = xcfg.ModeProxy, xcfg.TagProxy
-		opts.Proxy = xcfg.Proxy{Port: *port, User: "spofy", Pass: "spofy"}
+	if opts.Mode == xcfg.ModeProxy {
+		tag = xcfg.TagProxy
 	}
 	cands, err := candidates(profile, opts)
 	if err != nil {
@@ -268,7 +362,7 @@ func run(args []string) int {
 	st := state(*folder)
 	recall(st, cands, *fresh)
 	ss = session.New(session.Options{
-		Tunnel: sv, Strict: *strict, URL: *url, Timeout: *timeout, OnMeasure: remember(st, cands),
+		Tunnel: sv, Strict: *strict, URL: *url, Timeout: *timeout, OnMeasure: remember(st),
 		OnEvent: func(e session.Event) {
 			say(map[string]any{"event": "state", "state": e.State, "server": e.Server, "ms": e.Delay.Milliseconds(), "code": e.Code, "error": e.Error, "pid": sv.Pid()})
 		},

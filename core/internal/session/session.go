@@ -56,7 +56,7 @@ type Event struct {
 type Options struct {
 	Tunnel    Tunnel
 	OnEvent   func(Event)
-	OnMeasure func([]supervisor.Measurement)
+	OnMeasure func([]Candidate, []supervisor.Measurement)
 	Online    func() bool
 	Strict    bool
 	Bypass    bool
@@ -78,6 +78,7 @@ type Session struct {
 	order   []int
 	active  int
 	up      bool
+	held    bool
 	pinned  bool
 	state   State
 	last    time.Duration
@@ -140,9 +141,6 @@ func (s *Session) Connect(parent context.Context, cands []Candidate, pinned stri
 		s.install(cands, order, true)
 		return s.walk(ctx, Connecting, order)
 	}
-	s.mu.Lock()
-	fresh := !s.up
-	s.mu.Unlock()
 	tried := -1
 	if quick := remembered(cands, false); len(quick) > 0 {
 		s.install(cands, quick, false)
@@ -158,7 +156,7 @@ func (s *Session) Connect(parent context.Context, cands []Candidate, pinned stri
 			return err
 		}
 	}
-	order, err := s.rank(ctx, cands, tried, fresh)
+	order, err := s.rank(ctx, cands, tried)
 	if err != nil {
 		return err
 	}
@@ -172,12 +170,12 @@ func (s *Session) install(cands []Candidate, order []int, pinned bool) {
 	s.mu.Unlock()
 }
 
-func (s *Session) rank(ctx context.Context, cands []Candidate, tried int, fresh bool) ([]int, error) {
+func (s *Session) rank(ctx context.Context, cands []Candidate, tried int) ([]int, error) {
 	s.mu.Lock()
-	up := s.up
+	up, held := s.up, s.held
 	s.mu.Unlock()
 	if up && !s.opts.Bypass {
-		if !fresh || s.opts.Strict {
+		if held {
 			var order []int
 			for _, i := range remembered(cands, true) {
 				if i != tried {
@@ -200,7 +198,7 @@ func (s *Session) rank(ctx context.Context, cands []Candidate, tried int, fresh 
 		return nil, ctx.Err()
 	}
 	if s.opts.OnMeasure != nil {
-		s.opts.OnMeasure(measured)
+		s.opts.OnMeasure(cands, measured)
 	}
 	results := make([]Result, len(cands))
 	for i, m := range measured {
@@ -208,7 +206,7 @@ func (s *Session) rank(ctx context.Context, cands []Candidate, tried int, fresh 
 	}
 	order := Order(results, -1)
 	if len(order) == 0 {
-		return nil, s.lost(ctx, Connecting, CodeNoServer, errors.New("no server answered"))
+		return nil, s.lost(ctx, CodeNoServer, errors.New("no server answered"))
 	}
 	return order, nil
 }
@@ -281,7 +279,7 @@ func (s *Session) Disconnect() error {
 	s.acquire()
 	defer s.op.Unlock()
 	s.mu.Lock()
-	s.cands, s.order, s.active, s.up, s.pinned, s.last = nil, nil, -1, false, false, 0
+	s.cands, s.order, s.active, s.up, s.held, s.pinned, s.last = nil, nil, -1, false, false, false, 0
 	s.mu.Unlock()
 	err := s.opts.Tunnel.Stop()
 	s.set(Event{State: Idle})
@@ -345,7 +343,7 @@ func (s *Session) walk(ctx context.Context, during State, order []int) error {
 	if pinned {
 		code = CodeUnreachable
 	}
-	return s.lost(ctx, during, code, last)
+	return s.lost(ctx, code, last)
 }
 
 func (s *Session) try(ctx context.Context, during State, i int, limit time.Duration, waits []time.Duration) error {
@@ -358,23 +356,27 @@ func (s *Session) try(ctx context.Context, during State, i int, limit time.Durat
 	}
 	s.mu.Lock()
 	s.up, s.active, s.last = true, i, 0
+	s.held = s.held || s.opts.Strict
 	s.mu.Unlock()
 	delay, err := s.confirm(ctx, limit, waits)
 	if err != nil {
 		return err
 	}
+	s.mu.Lock()
+	s.held = true
+	s.mu.Unlock()
 	s.set(Event{State: Connected, Server: c.ID, Delay: delay})
 	return nil
 }
 
-func (s *Session) lost(ctx context.Context, during State, code engine.Code, last error) error {
+func (s *Session) lost(ctx context.Context, code engine.Code, last error) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
 	s.mu.Lock()
-	keep := s.up && (s.opts.Strict || during == Switching)
+	keep := s.up && s.held
 	if !keep {
-		s.up, s.active = false, -1
+		s.up, s.held, s.active = false, false, -1
 	}
 	s.mu.Unlock()
 	if keep {

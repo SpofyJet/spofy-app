@@ -324,6 +324,22 @@ func TestPinnedServer(t *testing.T) {
 	if err := s.Connect(context.Background(), cands("de", "nl"), "nl"); codeOf(err) != CodeUnreachable {
 		t.Fatalf("err = %v", err)
 	}
+	if f.now() != "nl" || s.State() != Stalled {
+		t.Fatalf("a failed switch dropped the tunnel: running %q, state %s", f.now(), s.State())
+	}
+	f.set(func() { f.dead = nil })
+	if err := s.Check(context.Background()); err != nil || s.State() != Connected || f.now() != "nl" {
+		t.Fatalf("err %v, state %s, running %q", err, s.State(), f.now())
+	}
+}
+
+func TestFirstConnectionToSilentServerLeavesNothingRunning(t *testing.T) {
+	f := &fake{delays: speeds(80, 40, 120), dead: down("nl")}
+	s, tr := setup(f, Options{})
+	if err := s.Connect(context.Background(), cands("de", "nl"), "nl"); codeOf(err) != CodeUnreachable {
+		t.Fatalf("err = %v", err)
+	}
+	same(t, tr.states(), []string{"connecting:nl", "failed"})
 	if f.now() != "" || s.State() != Failed {
 		t.Fatalf("running %q, state %s", f.now(), s.State())
 	}
@@ -579,7 +595,7 @@ func TestRememberedOrderConnectsWithoutMeasuring(t *testing.T) {
 func TestRememberedBestIsGoneThenMeasure(t *testing.T) {
 	f := &fake{delays: map[string]time.Duration{"de": ms(80), "us": ms(60)}, dead: down("nl")}
 	var got [][]supervisor.Measurement
-	s, tr := setup(f, Options{OnMeasure: func(m []supervisor.Measurement) { got = append(got, m) }})
+	s, tr := setup(f, Options{OnMeasure: func(_ []Candidate, m []supervisor.Measurement) { got = append(got, m) }})
 	list := known(cands("de", "nl", "us"), map[string]time.Duration{"de": ms(80), "nl": ms(40)})
 	if err := s.Connect(context.Background(), list, ""); err != nil {
 		t.Fatal(err)

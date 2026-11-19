@@ -58,6 +58,9 @@ func Fetch(ctx context.Context, c *http.Client, url string, d Device, etag strin
 	defer resp.Body.Close()
 	switch {
 	case resp.StatusCode == http.StatusNotModified:
+		if v := resp.Header.Get("Subscription-Userinfo"); v != "" {
+			return &Profile{Usage: usage(v)}, ErrNotModified
+		}
 		return nil, ErrNotModified
 	case resp.StatusCode != http.StatusOK:
 		return nil, &StatusError{Code: resp.StatusCode}
