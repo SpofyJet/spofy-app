@@ -29,10 +29,16 @@ func TestStallAsksForACheckOnlyWhenTrafficGoesOutAndNothingComesBack(t *testing.
 	for i := 0; i < 30; i++ {
 		fired(false, step(2*time.Second, 0, 0), "no traffic at all")
 	}
+	fired(false, step(2*time.Second, 300, 0), "one request that waits for its answer")
+	for i := 0; i < 30; i++ {
+		fired(false, step(2*time.Second, 0, 0), "a single send is not a sign, however long the wait")
+	}
+	fired(true, step(2*time.Second, 300, 0), "a second send, still nothing back")
+	fired(false, step(40*time.Second, 300, 4000), "an answer came")
 	fired(false, step(2*time.Second, 300, 0), "the first unanswered send")
-	fired(false, step(2*time.Second, 0, 0), "2 s of silence")
+	fired(false, step(2*time.Second, 300, 0), "the second one, 2 s of silence")
 	fired(false, step(2*time.Second, 0, 0), "4 s of silence")
-	fired(true, step(2*time.Second, 0, 0), "6 s of silence after one send")
+	fired(true, step(2*time.Second, 0, 0), "6 s of silence after two sends")
 	for i := 0; i < 14; i++ {
 		fired(false, step(2*time.Second, 300, 0), "the pause after a check")
 	}

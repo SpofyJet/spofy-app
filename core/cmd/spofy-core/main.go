@@ -175,8 +175,9 @@ func serve(args []string) int {
 	model := fs.String("model", "lab", "device model sent to the subscription server")
 	socket := fs.String("listen", "", "serve the channel on this unix socket, the core stops when its input closes")
 	given := fs.Bool("platform", false, "take the tunnel from the platform, needs -listen")
-	watch := fs.Duration("watch", 2*time.Second, "how often the traffic counters are read while connected, 0 turns the watch off")
-	quiet := fs.Duration("quiet", 6*time.Second, "check the connection when traffic goes out for this long and nothing comes back")
+	bypass := fs.Bool("bypass", false, "the core's own connections go outside the tunnel: servers are measured while it is up")
+	watch := fs.Duration("watch", time.Second, "how often the traffic counters are read while connected, 0 turns the watch off")
+	quiet := fs.Duration("quiet", 5*time.Second, "check the connection when traffic goes out for this long and nothing comes back")
 	fs.Parse(args)
 
 	out := controlChannel()
@@ -245,6 +246,7 @@ func serve(args []string) int {
 		Run:     opts,
 		Version: version,
 		Strict:  *strict,
+		Bypass:  *bypass,
 		Watch:   *watch,
 		Quiet:   *quiet,
 	})

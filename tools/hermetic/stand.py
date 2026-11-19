@@ -410,7 +410,7 @@ def platform():
     sock = home + "/core.sock"
     drop = "import os,sys; os.setgroups([]); os.setgid(%s); os.setuid(%s); os.execv(sys.argv[1], sys.argv[1:])" % (app, app)
     env = dict(os.environ, SPOFY_STATE_KEY=KEY, SSL_CERT_FILE=WORK + "/cert.pem")
-    core = spawn("client", [sys.executable, "-c", drop, CORE, "serve", "-state", home + "/state", "-listen", sock, "-platform"],
+    core = spawn("client", [sys.executable, "-c", drop, CORE, "serve", "-state", home + "/state", "-listen", sock, "-platform", "-bypass"],
                  stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=open(WORK + "/core.err", "a"), text=True, bufsize=1, env=env)
     need("platform: the core listens on its socket", "listening" in core.stdout.readline())
     service = spawn("client", [sys.executable, HERE + "/platform.py", sock, app, WORK], stderr=open(WORK + "/platform.err", "w"))
@@ -491,6 +491,15 @@ def platform():
         run("ip", "-n", "hub", "link", "set", "v-" + name, "up")
     again = until(lambda: state("connected"), 40, 0.5)
     expect("platform: servers are back: connected again", bool(again))
+    held = ui.active()["server"]
+    off = ui.call("online", online=False)
+    now = ui.active()
+    expect("platform: the network is lost: shown at once, the server and the tunnel stay", off["ok"] and now["state"] == "offline" and now["server"] == held and device in links(),
+           "ms=%d state=%s server=%s" % (off["ms"], now["state"], now["server"]))
+    on = ui.call("online", online=True)
+    now = ui.active()
+    expect("platform: the network is back: connected on the same server", on["ok"] and now["state"] == "connected" and now["server"] == held and len(asked("tun")) == 1,
+           "ms=%d state=%s server=%s" % (on["ms"], now["state"], now["server"]))
     noise.kill()
     noise.wait()
     foreign = [l for l in questions()[before:] if l[0] == CLIENT and l[1].rstrip(".") in FOREIGN]

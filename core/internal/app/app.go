@@ -196,6 +196,7 @@ func (a *App) watch() {
 	tick := time.NewTicker(a.cfg.Watch)
 	defer tick.Stop()
 	var w stall
+	var was Connection
 	for {
 		select {
 		case <-a.ctx.Done():
@@ -203,14 +204,16 @@ func (a *App) watch() {
 		case <-tick.C:
 		}
 		a.mu.Lock()
-		state := a.conn.State
+		now := a.conn
 		a.mu.Unlock()
-		if state != session.Connected && state != session.Stalled {
-			w.since = time.Time{}
+		if now.State != was.State || now.Server != was.Server {
+			w, was = stall{}, now
+		}
+		if now.State != session.Connected && now.State != session.Stalled {
 			continue
 		}
 		if w.step(a.Traffic(), a.cfg.Quiet, time.Now()) {
-			a.Check()
+			a.sess.Suspect(a.ctx)
 		}
 	}
 }

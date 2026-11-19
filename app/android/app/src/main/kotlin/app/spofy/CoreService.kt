@@ -45,11 +45,13 @@ class CoreService : VpnService() {
         private var current: Network? = null
 
         override fun onAvailable(network: Network) {
+            note("network $network is the default")
             current = network
             request("online") { it.put("online", true) }
         }
 
         override fun onLost(network: Network) {
+            note("network $network is lost, the default was $current")
             if (network == current) {
                 current = null
                 request("online") { it.put("online", false) }
@@ -112,7 +114,7 @@ class CoreService : VpnService() {
         path.delete()
         val launcher = ProcessBuilder(
             File(applicationInfo.nativeLibraryDir, "libspofycore.so").path,
-            "serve", "-state", state.path, "-listen", path.path, "-platform",
+            "serve", "-state", state.path, "-listen", path.path, "-platform", "-bypass",
             "-hwid", Keys.device(this), "-os", "Android", "-os-version", Build.VERSION.RELEASE ?: "", "-model", Build.MODEL ?: "",
         )
         val env = launcher.environment()
@@ -184,10 +186,15 @@ class CoreService : VpnService() {
     private fun handle(message: JSONObject) {
         if (!message.has("ask")) {
             if (message.optString("ev") == "connection") {
-                show(message.getJSONObject("connection").optString("state"))
+                val state = message.getJSONObject("connection").optString("state")
+                note("state $state")
+                show(state)
+            } else if (message.has("re") && !message.optBoolean("ok")) {
+                note("request ${message.optInt("re")} failed: ${message.optString("code")}")
             }
             return
         }
+        note("the core asks for ${message.optString("op")}")
         val answer = JSONObject().put("answer", message.getLong("ask"))
         when (message.optString("op")) {
             "tun" -> tunnel(answer, message.getJSONObject("tun"))
@@ -347,7 +354,15 @@ class CoreService : VpnService() {
     private fun request(op: String, fill: (JSONObject) -> Unit = {}) {
         asks.execute {
             val id = synchronized(writing) { ++sent }
-            send(JSONObject().put("id", id).put("op", op).also(fill))
+            val message = JSONObject().put("id", id).put("op", op).also(fill)
+            note("request $message")
+            send(message)
+        }
+    }
+
+    private fun note(text: String) {
+        if (BuildConfig.DEBUG) {
+            Log.d(TAG, text)
         }
     }
 

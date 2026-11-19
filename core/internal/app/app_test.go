@@ -345,12 +345,32 @@ func TestOneWayTrafficMovesToAnotherServerWithoutBeingAsked(t *testing.T) {
 		t.Fatalf("no traffic, nobody asked: running %q", got)
 	}
 	b.tunnel.Count(1400, 5000)
+	time.Sleep(ms(150))
+	if got := b.tunnel.Running(); got != "обход1" {
+		t.Fatalf("one request without an answer: running %q", got)
+	}
+	b.tunnel.Count(1500, 5000)
 	deadline := time.Now().Add(5 * time.Second)
 	for b.tunnel.Running() != "nl" && time.Now().Before(deadline) {
 		time.Sleep(ms(5))
 	}
 	if got := b.tunnel.Running(); got != "nl" {
 		t.Fatalf("traffic went out and nothing came back: running %q", got)
+	}
+	for b.app.Snapshot().Connection.State != session.Connected && time.Now().Before(deadline) {
+		time.Sleep(ms(5))
+	}
+	time.Sleep(ms(30))
+	b.tunnel.Kill("nl")
+	b.tunnel.Count(1800, 5000)
+	time.Sleep(ms(30))
+	b.tunnel.Count(1900, 5000)
+	deadline = time.Now().Add(5 * time.Second)
+	for b.tunnel.Running() == "nl" && time.Now().Before(deadline) {
+		time.Sleep(ms(5))
+	}
+	if got := b.tunnel.Running(); got == "nl" {
+		t.Fatal("the next server went silent right after the move: the pause of the first check held the second one back")
 	}
 }
 

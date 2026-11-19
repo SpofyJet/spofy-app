@@ -259,6 +259,14 @@ func remembered(cands []Candidate, all bool) []int {
 }
 
 func (s *Session) Check(parent context.Context) error {
+	return s.check(parent, s.opts.Retries)
+}
+
+func (s *Session) Suspect(parent context.Context) error {
+	return s.check(parent, s.opts.Retries[:1])
+}
+
+func (s *Session) check(parent context.Context, waits []time.Duration) error {
 	if !s.op.TryLock() {
 		return nil
 	}
@@ -279,7 +287,7 @@ func (s *Session) Check(parent context.Context) error {
 		for {
 			seen := s.net.Load()
 			var delay time.Duration
-			if delay, err = s.confirm(ctx, s.limit(), s.opts.Retries); err == nil {
+			if delay, err = s.confirm(ctx, s.limit(), waits); err == nil {
 				s.set(Event{State: Connected, Server: server, Delay: delay})
 				return nil
 			}
@@ -312,7 +320,46 @@ func (s *Session) Check(parent context.Context) error {
 	for i := range order {
 		next[i] = order[(from+i)%len(order)]
 	}
+	if s.opts.Bypass && active >= 0 && !engineDown(err) {
+		return s.move(ctx, cands, next[:len(next)-1], server, err)
+	}
 	return s.walk(ctx, Switching, next)
+}
+
+const nearest = 3
+
+func (s *Session) move(ctx context.Context, cands []Candidate, others []int, server string, cause error) error {
+	for _, part := range [][]int{others[:min(nearest, len(others))], others[min(nearest, len(others)):]} {
+		if len(part) == 0 {
+			continue
+		}
+		asked := make([]Candidate, len(part))
+		for i, c := range part {
+			asked[i] = cands[c]
+		}
+		measured := s.Measure(ctx, asked)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		results := make([]Result, len(part))
+		for i, m := range measured {
+			results[i] = Result{Tier: asked[i].Tier, Delay: m.Delay, OK: m.OK()}
+		}
+		answered := Order(results, -1)
+		if len(answered) == 0 {
+			continue
+		}
+		if s.opts.OnMeasure != nil {
+			s.opts.OnMeasure(asked, measured)
+		}
+		order := make([]int, len(answered))
+		for i, a := range answered {
+			order[i] = part[a]
+		}
+		return s.walk(ctx, Switching, order)
+	}
+	s.set(Event{State: Stalled, Server: server, Code: CodeNoServer, Error: cause.Error()})
+	return &engine.Error{Code: CodeNoServer, Err: cause}
 }
 
 func (s *Session) Network(online bool) {

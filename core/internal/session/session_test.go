@@ -26,6 +26,7 @@ type fake struct {
 	limits   []time.Duration
 	refuse   error
 	probing  func(n int)
+	asked    [][]string
 }
 
 func (f *fake) Start(cfg []byte) (time.Duration, error) {
@@ -87,6 +88,11 @@ func (f *fake) Probe(ctx context.Context, _, _ string, limit time.Duration) (tim
 func (f *fake) Measure(ctx context.Context, targets []supervisor.Target, _ supervisor.MeasureOptions, each func(int, supervisor.Measurement)) {
 	f.mu.Lock()
 	f.measured++
+	round := make([]string, len(targets))
+	for i, t := range targets {
+		round[i] = string(t.Config)
+	}
+	f.asked = append(f.asked, round)
 	f.mu.Unlock()
 	for i, t := range targets {
 		f.mu.Lock()
@@ -748,6 +754,82 @@ func TestBypassMeasuresWhileConnected(t *testing.T) {
 		t.Fatalf("measured %d, stops %d", f.measured, f.stops())
 	}
 	same(t, tr.states()[2:], []string{"measuring", "connecting:nl", "connected:nl"})
+}
+
+func five() map[string]time.Duration {
+	return map[string]time.Duration{"s1": ms(10), "s2": ms(20), "s3": ms(30), "s4": ms(40), "s5": ms(50)}
+}
+
+func (f *fake) lose(ids ...string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.dead == nil {
+		f.dead = map[string]bool{}
+	}
+	for _, id := range ids {
+		f.dead[id] = true
+		delete(f.delays, id)
+	}
+}
+
+func TestOutsideTheTunnelAFailedServerIsReplacedByAFreshMeasurementOfTheNearest(t *testing.T) {
+	f := &fake{delays: five()}
+	stored := 0
+	s, _ := setup(f, Options{Bypass: true, OnMeasure: func(c []Candidate, _ []supervisor.Measurement) { stored += len(c) }})
+	if err := s.Connect(context.Background(), cands("s1", "s2", "s3", "s4", "s5"), ""); err != nil || f.now() != "s1" {
+		t.Fatalf("err %v, running %q", err, f.now())
+	}
+	stored = 0
+	f.lose("s1")
+	f.set(func() { f.delays["s2"], f.delays["s3"] = ms(300), ms(25) })
+	if err := s.Check(context.Background()); err != nil || f.now() != "s3" || s.State() != Connected {
+		t.Fatalf("err %v, running %q, state %s", err, f.now(), s.State())
+	}
+	same(t, f.asked[len(f.asked)-1], []string{"s2", "s3", "s4"})
+	if stored != 3 {
+		t.Fatalf("stored %d measurements, want the three that were asked", stored)
+	}
+}
+
+func TestOutsideTheTunnelTheRestIsMeasuredWhenTheNearestAreSilent(t *testing.T) {
+	f := &fake{delays: five()}
+	s, _ := setup(f, Options{Bypass: true})
+	if err := s.Connect(context.Background(), cands("s1", "s2", "s3", "s4", "s5"), ""); err != nil {
+		t.Fatal(err)
+	}
+	f.lose("s1", "s2", "s3", "s4")
+	rounds := len(f.asked)
+	if err := s.Check(context.Background()); err != nil || f.now() != "s5" || s.State() != Connected {
+		t.Fatalf("err %v, running %q, state %s", err, f.now(), s.State())
+	}
+	if len(f.asked) != rounds+2 {
+		t.Fatalf("rounds = %d, want the nearest three and then the rest", len(f.asked)-rounds)
+	}
+	same(t, f.asked[len(f.asked)-1], []string{"s5"})
+	same(t, f.starts(), []string{"s1", "s5"})
+}
+
+func TestOutsideTheTunnelSilenceEverywhereKeepsTheServerAndWhatIsRemembered(t *testing.T) {
+	f := &fake{delays: five()}
+	stored := 0
+	s, _ := setup(f, Options{Bypass: true, OnMeasure: func(c []Candidate, _ []supervisor.Measurement) { stored += len(c) }})
+	if err := s.Connect(context.Background(), cands("s1", "s2", "s3", "s4", "s5"), ""); err != nil {
+		t.Fatal(err)
+	}
+	stored = 0
+	f.lose("s1", "s2", "s3", "s4", "s5")
+	if err := s.Check(context.Background()); codeOf(err) != CodeNoServer || s.State() != Stalled || f.now() != "s1" {
+		t.Fatalf("err %v, state %s, running %q", err, s.State(), f.now())
+	}
+	same(t, f.starts(), []string{"s1"})
+	if stored != 0 {
+		t.Fatalf("stored %d measurements of a dead network", stored)
+	}
+	f.set(func() { f.dead, f.delays = nil, five() })
+	if err := s.Check(context.Background()); err != nil || s.State() != Connected || f.now() != "s1" {
+		t.Fatalf("back: err %v, state %s, running %q", err, s.State(), f.now())
+	}
+	same(t, f.starts(), []string{"s1"})
 }
 
 func TestTunnelRefusalEndsTheConnectWithItsOwnCode(t *testing.T) {

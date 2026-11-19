@@ -1,4 +1,4 @@
-import http.server, json, os, re, socket, socketserver, ssl, subprocess, sys, threading, time
+import http.server, json, os, re, signal, socket, socketserver, ssl, subprocess, sys, threading, time
 
 APK, CORE, OUT = sys.argv[1], os.path.abspath(sys.argv[2]), os.path.abspath(sys.argv[3])
 RELEASE = sys.argv[4] if len(sys.argv) > 4 else ""
@@ -10,6 +10,7 @@ USER = "00000000-0000-4000-8000-000000000001"
 SERVERS = {"a": 4443, "b": 4444}
 failed = []
 started = []
+remote = {}
 seen = []
 os.makedirs(OUT, exist_ok=True)
 
@@ -130,7 +131,7 @@ def host_side():
     for s in (plain, secure):
         threading.Thread(target=s.serve_forever, daemon=True).start()
     for name, port in SERVERS.items():
-        remote = {
+        config = {
             "log": {"loglevel": "info"},
             "inbounds": [{"tag": "in", "listen": "0.0.0.0", "port": port, "protocol": "vless", "settings": {"clients": [{"id": USER}], "decryption": "none"},
                           "streamSettings": {"network": "tcp", "security": "none"}}],
@@ -143,7 +144,8 @@ def host_side():
         log = open(OUT + "/server-%s.log" % name, "w", buffering=1)
         p = subprocess.Popen([CORE, "engine"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log, text=True, bufsize=1)
         started.append(p)
-        p.stdin.write(json.dumps({"id": 1, "op": "start", "config": remote}) + "\n")
+        remote[name] = p
+        p.stdin.write(json.dumps({"id": 1, "op": "start", "config": config}) + "\n")
         while True:
             line = p.stdout.readline()
             if not line:
@@ -288,11 +290,12 @@ def scenario():
     need("connect", c["ok"] and first in SERVERS and device != "", "ms=%d server=%s %s %s" % (c["ms"], first, c.get("code"), c.get("error", "")[:300]))
     body = fetch(HOST, 8081, "/ip")
     need("another app's traffic goes through the tunnel", body.endswith("site sees " + INSIDE) and accepted(first, "%s:8081" % HOST) > 0, "body=%s accepted=%d" % (body[-60:], accepted(first, "%s:8081" % HOST)))
-    leaked = outside()
-    shell("touch /data/local/tmp/noise")
-    noise = subprocess.Popen(["adb", "shell", "while [ -e /data/local/tmp/noise ]; do printf 'GET /ip HTTP/1.0\\r\\n\\r\\n' | nc -w 2 %s 8081 >/dev/null 2>&1; sleep 0.2; done" % HOST],
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    started.append(noise)
+    leaked, flowing = outside(), len(seen)
+    loop = "while [ -e /data/local/tmp/noise ]; do printf 'GET /ip HTTP/1.0\\r\\n\\r\\n' | nc -w 2 %s 8081 >/dev/null 2>&1; sleep 0.2; done\n" % HOST
+    run("adb", "shell", "cat > /data/local/tmp/noise.sh", data=loop.encode())
+    shell("touch /data/local/tmp/noise; nohup sh /data/local/tmp/noise.sh >/dev/null 2>&1 &")
+    time.sleep(3)
+    expect("background requests from another app are running", len(seen) > flowing + 3, "requests=%d" % (len(seen) - flowing))
     body = fetch("www.gstatic.com", 80, "/generate_204")
     expect("a site by name opens through the tunnel", " 204" in body, body[:80])
     t = ui.call("traffic")
@@ -331,25 +334,32 @@ def scenario():
     expect("the interface is opened again", PACKAGE in [args.strip() for _, args in processes().values()])
 
     c = ui.call("connect", server="auto")
+    held = ui.active()["server"]
+    remote[held].send_signal(signal.SIGSTOP)
+    began = time.time()
+    moved = until(lambda: ui.active()["state"] == "connected" and ui.active()["server"] != held and through(), 60, 0.2)
+    remote[held].send_signal(signal.SIGCONT)
+    expect("a server went silent under traffic: the app moved to the other one by itself on the same tunnel", c["ok"] and bool(moved) and tunnel() == device,
+           "s=%.1f state=%s server=%s" % (time.time() - began, ui.active()["state"], ui.active()["server"]))
     shell("svc wifi disable")
     began = time.time()
     moved = until(lambda: ui.active()["state"] == "connected" and through(), 60)
-    expect("Wi-Fi is off: traffic goes on over the mobile network on the same tunnel", c["ok"] and bool(moved) and tunnel() == device, "s=%.1f state=%s device=%s" % (time.time() - began, ui.active()["state"], tunnel()))
+    expect("Wi-Fi is off: traffic goes on over the mobile network on the same tunnel", bool(moved) and tunnel() == device, "s=%.1f state=%s device=%s" % (time.time() - began, ui.active()["state"], tunnel()))
     shell("svc wifi enable")
     time.sleep(6)
     again = until(lambda: ui.active()["state"] == "connected" and through(), 60)
     expect("Wi-Fi is back: still connected on the same tunnel", bool(again) and tunnel() == device, "state=%s" % ui.active()["state"])
     shell("cmd connectivity airplane-mode enable")
     began = time.time()
-    off = until(lambda: ui.active()["state"] == "offline", 40)
+    off = until(lambda: ui.active()["state"] == "offline", 40, 0.1)
     expect("no network: the state says so and the tunnel stays", bool(off) and tunnel() == device, "s=%.1f state=%s" % (time.time() - began, ui.active()["state"]))
+    screen("5-offline")
     shell("cmd connectivity airplane-mode disable")
     began = time.time()
     on = until(lambda: ui.active()["state"] == "connected" and through(), 120)
     expect("the network is back: connected again without being asked", bool(on) and tunnel() == device, "s=%.1f state=%s" % (time.time() - began, ui.active()["state"]))
     shell("rm -f /data/local/tmp/noise")
     time.sleep(3)
-    noise.kill()
     expect("nothing reached the site past the tunnel while it was up", outside() == leaked, "requests=%d past=%d" % (len(seen), outside() - leaked))
 
     d = ui.call("disconnect")
@@ -357,7 +367,7 @@ def scenario():
     service = shell("dumpsys activity services %s/.CoreService" % PACKAGE)
     expect("disconnect removes the tunnel and the notification", d["ok"] and bool(gone) and "isForeground=true" not in service, "ms=%d" % d["ms"])
     time.sleep(1)
-    screen("5-disconnected")
+    screen("6-disconnected")
     print("memory when idle, MB: %s" % memory(), flush=True)
     state = shell("cat %s/files/state/state | head -c 4000" % DATA)
     expect("saved state has nothing in the clear", "EMULATORTOKEN" not in state and "outbounds" not in state and len(state) > 40, "bytes=%d" % len(state))
@@ -371,7 +381,7 @@ def scenario():
         need("the release build installs", code == 0 and "Success" in out, out[-300:])
         times = started_in()
         time.sleep(3)
-        screen("6-release")
+        screen("7-release")
         usage = memory()
         expect("the release build starts and its core listens", len(times) == 3 and "core.sock" in shell("ls %s/files" % DATA), "ms=%s" % times)
         print("release build: apk %.1f MB, cold start %s ms, memory %s MB" % (os.path.getsize(RELEASE) / 1e6, times, usage), flush=True)
@@ -386,7 +396,7 @@ except Abort:
 finally:
     open(OUT + "/logcat.txt", "w").write(adb("logcat", "-d", "-v", "time", limit=120))
     if failed:
-        print("--- logcat\n" + "\n".join([l for l in open(OUT + "/logcat.txt").read().splitlines() if "spofy" in l.lower() or "AndroidRuntime" in l or "VpnService" in l][-60:]))
+        print("--- logcat\n" + "\n".join([l for l in open(OUT + "/logcat.txt").read().splitlines() if "/spofy" in l or "AndroidRuntime" in l][-80:]))
         for name in SERVERS:
             print("--- server %s\n%s" % (name, open(OUT + "/server-%s.log" % name).read()[-800:]))
         screen("failed")
