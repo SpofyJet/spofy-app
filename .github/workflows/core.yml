@@ -37,3 +37,5 @@ jobs:
           mkdir -p spofy-app/dist "$RUNNER_TEMP/flutter-cache"
           cp /tmp/out-linux spofy-app/dist/spofy-core-linux-amd64
           FLUTTER_CACHE="$RUNNER_TEMP/flutter-cache" spofy-app/tools/app-check.sh
+      - timeout-minutes: 10
+        run: FLUTTER_CACHE="$RUNNER_TEMP/flutter-cache" spofy-app/tools/app-stand.sh

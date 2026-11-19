@@ -20,4 +20,5 @@ CGO_ENABLED=1 BUILD_MEM=3g "$ROOT/tools/go.sh" sh -c 'test -z "$(gofmt -l .)" ||
 "$ROOT/tools/build.sh" linux amd64 >/dev/null
 "$ROOT/tools/hermetic.sh" | tail -1 | grep -q "^HERMETIC OK" || { echo "FAIL: tools/hermetic.sh"; exit 1; }
 "$ROOT/tools/app-check.sh" | tail -1 | grep -q "^APP OK" || { echo "FAIL: tools/app-check.sh"; exit 1; }
+"$ROOT/tools/app-stand.sh" | tail -1 | grep -q "^HERMETIC OK" || { echo "FAIL: tools/app-stand.sh"; exit 1; }
 echo "CHECK OK"

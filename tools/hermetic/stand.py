@@ -1,6 +1,7 @@
 import base64, json, os, shutil, subprocess, sys, tempfile, threading, time
 
 CORE = os.path.abspath(sys.argv[1])
+DRIVER = sys.argv[2:]
 HERE = os.path.dirname(os.path.abspath(__file__))
 WORK = tempfile.mkdtemp(prefix="spofy-hermetic-")
 os.chmod(WORK, 0o755)
@@ -324,6 +325,29 @@ def scenario():
     expect("the address of the subscription is not in the logs", "HERMETICTOKEN" not in logs)
 
 
+def driven():
+    code, _ = fetch("http://10.77.1.2/ip", 2)
+    need("no direct path from the client to foreign sites", code != "200" and counter("foreign_direct") > 0, "code=%s" % code)
+    inside("hub", "nft", "reset", "counter", "inet", "hub", "foreign_direct")
+    before = len(questions())
+    env = dict(os.environ, SPOFY_CORE=CORE, SPOFY_STATE_KEY=KEY, SSL_CERT_FILE=WORK + "/cert.pem", SPOFY_STAND_STATE=WORK + "/state",
+               SPOFY_STAND_URL="https://sub.local.test/sub/HERMETICTOKEN", SPOFY_STAND_SERVERS=json.dumps(SERVERS), SPOFY_STAND_CLIENT=CLIENT)
+    p = spawn("client", DRIVER, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    try:
+        out, _ = p.communicate(timeout=int(os.environ.get("HERMETIC_DRIVER_LIMIT", "240")))
+    except subprocess.TimeoutExpired:
+        p.kill()
+        out, _ = p.communicate()
+    times = [l.split("TIMES ", 1)[1] for l in out.splitlines() if "TIMES " in l]
+    if not expect("the interface drives the core: subscribe, measure, connect, switch, restart", p.returncode == 0 and bool(times), "ms=%s" % (times[0] if times else "")):
+        print(out[-3000:])
+    foreign = [l for l in questions()[before:] if l[0] == CLIENT and l[1].rstrip(".") in FOREIGN]
+    expect("no DNS question about a foreign site left the client directly", not foreign, "direct=%d" % len(foreign))
+    expect("nothing left the client directly", counter("foreign_direct") == 0, "packets=%d" % counter("foreign_direct"))
+    gone = until(lambda: not alive("spofy-core serve") and len(alive("spofy-core engine")) == len(SERVERS), 10)
+    expect("nothing is left running", bool(gone))
+
+
 def diagnose():
     checks = [
         ("client to server a", ["ip", "netns", "exec", "client", "curl", "-s", "-m", "3", "-o", "/dev/null", "-w", "%{http_code} %{errormsg}", "http://10.77.0.11:443/"]),
@@ -361,7 +385,7 @@ began = time.time()
 try:
     build()
     serve_side()
-    scenario()
+    driven() if DRIVER else scenario()
 except Abort:
     pass
 finally:

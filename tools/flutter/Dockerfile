@@ -8,3 +8,4 @@ RUN curl -fsSL -o /tmp/flutter.tar.xz "https://storage.googleapis.com/flutter_in
  && git config --system --add safe.directory /opt/flutter
 ENV PATH=/opt/flutter/bin:/opt/flutter/bin/cache/dart-sdk/bin:$PATH PUB_CACHE=/cache/pub FLUTTER_SUPPRESS_ANALYTICS=true CI=true
 RUN flutter config --no-analytics --no-cli-animations >/dev/null 2>&1; dart --disable-analytics >/dev/null 2>&1; flutter --version
+RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends python3 iproute2 nftables openssl procps >/dev/null && rm -rf /var/lib/apt/lists/*
