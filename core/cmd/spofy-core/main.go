@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -15,6 +17,7 @@ import (
 
 	"github.com/SpofyJet/spofy-app/core/internal/engine"
 	"github.com/SpofyJet/spofy-app/core/internal/session"
+	"github.com/SpofyJet/spofy-app/core/internal/store"
 	"github.com/SpofyJet/spofy-app/core/internal/sub"
 	"github.com/SpofyJet/spofy-app/core/internal/supervisor"
 	"github.com/SpofyJet/spofy-app/core/internal/xcfg"
@@ -88,6 +91,54 @@ func candidates(p *sub.Profile, o xcfg.Options) ([]session.Candidate, error) {
 	return out, nil
 }
 
+func state(dir string) *store.Store {
+	if dir == "" {
+		return nil
+	}
+	key, err := base64.StdEncoding.DecodeString(os.Getenv("SPOFY_STATE_KEY"))
+	if err != nil {
+		key = nil
+	}
+	st, err := store.Open(dir, key)
+	if err != nil {
+		say(map[string]any{"event": "state_unavailable", "error": err.Error(), "unreadable": errors.Is(err, store.ErrUnreadable)})
+		return nil
+	}
+	say(map[string]any{"event": "state_loaded", "known": len(st.Get().Delays), "recovered": st.Recovered()})
+	return st
+}
+
+func recall(st *store.Store, cands []session.Candidate, fresh time.Duration) {
+	if st == nil {
+		return
+	}
+	delays := st.Get().Delays
+	for i, c := range cands {
+		if d, ok := delays[c.ID]; ok && d.Ms > 0 && time.Since(d.At) < fresh {
+			cands[i].Known = time.Duration(d.Ms) * time.Millisecond
+		}
+	}
+}
+
+func remember(st *store.Store, cands []session.Candidate) func([]supervisor.Measurement) {
+	if st == nil {
+		return nil
+	}
+	return func(measured []supervisor.Measurement) {
+		err := st.Update(func(s *store.State) {
+			s.Delays = map[string]store.Delay{}
+			for i, m := range measured {
+				if m.OK() {
+					s.Delays[cands[i].ID] = store.Delay{Ms: max(m.Delay.Milliseconds(), 1), At: time.Now().UTC().Truncate(time.Second)}
+				}
+			}
+		})
+		if err != nil {
+			say(map[string]any{"event": "state_unavailable", "error": err.Error()})
+		}
+	}
+}
+
 func measure(args []string) int {
 	fs := flag.NewFlagSet("measure", flag.ExitOnError)
 	file := fs.String("sub", "", "subscription json file")
@@ -95,6 +146,7 @@ func measure(args []string) int {
 	timeout := fs.Duration("timeout", 5*time.Second, "limit for one server")
 	url := fs.String("url", "", "probe address")
 	marked := fs.Bool("lab-identity", false, "run probers under the lab group id")
+	folder := fs.String("state", "", "folder for saved state, the key comes from SPOFY_STATE_KEY")
 	fs.Parse(args)
 
 	profile, err := load(*file)
@@ -117,7 +169,11 @@ func measure(args []string) int {
 	ss := session.New(session.Options{Tunnel: sv, URL: *url, Timeout: *timeout, Parallel: *parallel})
 	began := time.Now()
 	ok := 0
-	for i, m := range ss.Measure(context.Background(), cands) {
+	measured := ss.Measure(context.Background(), cands)
+	if save := remember(state(*folder), cands); save != nil {
+		save(measured)
+	}
+	for i, m := range measured {
 		if m.OK() {
 			ok++
 		}
@@ -140,6 +196,8 @@ func run(args []string) int {
 	every := fs.Duration("check", 0, "probe the tunnel at this interval")
 	timeout := fs.Duration("timeout", 5*time.Second, "limit for one probe")
 	url := fs.String("url", "", "probe address")
+	folder := fs.String("state", "", "folder for saved state, the key comes from SPOFY_STATE_KEY")
+	fresh := fs.Duration("fresh", 6*time.Hour, "how long a saved measurement is trusted")
 	fs.Parse(args)
 
 	profile, err := load(*file)
@@ -207,8 +265,10 @@ func run(args []string) int {
 		},
 	})
 	defer sv.Close()
+	st := state(*folder)
+	recall(st, cands, *fresh)
 	ss = session.New(session.Options{
-		Tunnel: sv, Strict: *strict, URL: *url, Timeout: *timeout,
+		Tunnel: sv, Strict: *strict, URL: *url, Timeout: *timeout, OnMeasure: remember(st, cands),
 		OnEvent: func(e session.Event) {
 			say(map[string]any{"event": "state", "state": e.State, "server": e.Server, "ms": e.Delay.Milliseconds(), "code": e.Code, "error": e.Error, "pid": sv.Pid()})
 		},

@@ -42,6 +42,7 @@ type Candidate struct {
 	Run   []byte
 	Probe []byte
 	Tag   string
+	Known time.Duration
 }
 
 type Event struct {
@@ -53,14 +54,16 @@ type Event struct {
 }
 
 type Options struct {
-	Tunnel   Tunnel
-	OnEvent  func(Event)
-	Online   func() bool
-	Strict   bool
-	URL      string
-	Timeout  time.Duration
-	Retries  []time.Duration
-	Parallel int
+	Tunnel    Tunnel
+	OnEvent   func(Event)
+	OnMeasure func([]supervisor.Measurement)
+	Online    func() bool
+	Strict    bool
+	Bypass    bool
+	URL       string
+	Timeout   time.Duration
+	Retries   []time.Duration
+	Parallel  int
 }
 
 type Session struct {
@@ -133,22 +136,92 @@ func (s *Session) Connect(parent context.Context, cands []Candidate, pinned stri
 	s.acquire()
 	ctx, done := s.bind(parent, epoch)
 	defer done()
-	if pinned == "" {
-		s.set(Event{State: Measuring})
-		measured := s.Measure(ctx, cands)
-		results := make([]Result, len(cands))
-		for i, m := range measured {
-			results[i] = Result{Tier: cands[i].Tier, Delay: m.Delay, OK: m.OK()}
-		}
-		order = Order(results, -1)
-		if len(order) == 0 {
-			return s.lost(ctx, Connecting, CodeNoServer, errors.New("no server answered"))
-		}
+	if pinned != "" {
+		s.install(cands, order, true)
+		return s.walk(ctx, Connecting, order)
 	}
 	s.mu.Lock()
-	s.cands, s.order, s.pinned, s.active = cands, order, pinned != "", -1
+	fresh := !s.up
 	s.mu.Unlock()
+	tried := -1
+	if quick := remembered(cands, false); len(quick) > 0 {
+		s.install(cands, quick, false)
+		tried = quick[0]
+		limit := min(max(5*cands[tried].Known, 2*time.Second), s.opts.Timeout)
+		err := s.try(ctx, Connecting, tried, limit, s.opts.Retries[:1])
+		switch {
+		case err == nil:
+			return nil
+		case ctx.Err() != nil:
+			return ctx.Err()
+		case errors.Is(err, supervisor.ErrSuperseded):
+			return err
+		}
+	}
+	order, err := s.rank(ctx, cands, tried, fresh)
+	if err != nil {
+		return err
+	}
+	s.install(cands, order, false)
 	return s.walk(ctx, Connecting, order)
+}
+
+func (s *Session) install(cands []Candidate, order []int, pinned bool) {
+	s.mu.Lock()
+	s.cands, s.order, s.pinned, s.active = cands, order, pinned, -1
+	s.mu.Unlock()
+}
+
+func (s *Session) rank(ctx context.Context, cands []Candidate, tried int, fresh bool) ([]int, error) {
+	s.mu.Lock()
+	up := s.up
+	s.mu.Unlock()
+	if up && !s.opts.Bypass {
+		if !fresh || s.opts.Strict {
+			var order []int
+			for _, i := range remembered(cands, true) {
+				if i != tried {
+					order = append(order, i)
+				}
+			}
+			if tried >= 0 {
+				order = append(order, tried)
+			}
+			return order, nil
+		}
+		s.opts.Tunnel.Stop()
+		s.mu.Lock()
+		s.up, s.active = false, -1
+		s.mu.Unlock()
+	}
+	s.set(Event{State: Measuring})
+	measured := s.Measure(ctx, cands)
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if s.opts.OnMeasure != nil {
+		s.opts.OnMeasure(measured)
+	}
+	results := make([]Result, len(cands))
+	for i, m := range measured {
+		results[i] = Result{Tier: cands[i].Tier, Delay: m.Delay, OK: m.OK()}
+	}
+	order := Order(results, -1)
+	if len(order) == 0 {
+		return nil, s.lost(ctx, Connecting, CodeNoServer, errors.New("no server answered"))
+	}
+	return order, nil
+}
+
+func remembered(cands []Candidate, all bool) []int {
+	results := make([]Result, len(cands))
+	for i, c := range cands {
+		results[i] = Result{Tier: c.Tier, Delay: c.Known, OK: c.Known > 0}
+		if all && c.Known <= 0 {
+			results[i] = Result{Tier: c.Tier, Delay: 1 << 62, OK: true}
+		}
+	}
+	return Order(results, -1)
 }
 
 func (s *Session) Check(parent context.Context) error {
@@ -246,7 +319,7 @@ func (s *Session) bind(parent, epoch context.Context) (context.Context, func()) 
 
 func (s *Session) walk(ctx context.Context, during State, order []int) error {
 	s.mu.Lock()
-	cands, pinned := s.cands, s.pinned
+	pinned := s.pinned
 	s.mu.Unlock()
 	waits := s.opts.Retries
 	if len(order) > 1 {
@@ -257,25 +330,14 @@ func (s *Session) walk(ctx context.Context, during State, order []int) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		c := cands[i]
-		s.set(Event{State: during, Server: c.ID})
-		if _, err := s.opts.Tunnel.Start(c.Run); err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			if errors.Is(err, supervisor.ErrSuperseded) {
-				return err
-			}
-			last = err
-			continue
-		}
-		s.mu.Lock()
-		s.up, s.active, s.last = true, i, 0
-		s.mu.Unlock()
-		delay, err := s.confirm(ctx, s.opts.Timeout, waits)
-		if err == nil {
-			s.set(Event{State: Connected, Server: c.ID, Delay: delay})
+		err := s.try(ctx, during, i, s.opts.Timeout, waits)
+		switch {
+		case err == nil:
 			return nil
+		case ctx.Err() != nil:
+			return ctx.Err()
+		case errors.Is(err, supervisor.ErrSuperseded):
+			return err
 		}
 		last = err
 	}
@@ -284,6 +346,25 @@ func (s *Session) walk(ctx context.Context, during State, order []int) error {
 		code = CodeUnreachable
 	}
 	return s.lost(ctx, during, code, last)
+}
+
+func (s *Session) try(ctx context.Context, during State, i int, limit time.Duration, waits []time.Duration) error {
+	s.mu.Lock()
+	c := s.cands[i]
+	s.mu.Unlock()
+	s.set(Event{State: during, Server: c.ID})
+	if _, err := s.opts.Tunnel.Start(c.Run); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.up, s.active, s.last = true, i, 0
+	s.mu.Unlock()
+	delay, err := s.confirm(ctx, limit, waits)
+	if err != nil {
+		return err
+	}
+	s.set(Event{State: Connected, Server: c.ID, Delay: delay})
+	return nil
 }
 
 func (s *Session) lost(ctx context.Context, during State, code engine.Code, last error) error {

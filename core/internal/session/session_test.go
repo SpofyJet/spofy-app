@@ -145,6 +145,25 @@ func (t *trace) states() []string {
 	return out
 }
 
+func known(list []Candidate, delays map[string]time.Duration) []Candidate {
+	for i := range list {
+		list[i].Known = delays[list[i].ID]
+	}
+	return list
+}
+
+func (f *fake) stops() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, l := range f.log {
+		if l == "stop" {
+			n++
+		}
+	}
+	return n
+}
+
 func cands(ids ...string) []Candidate {
 	var out []Candidate
 	for _, id := range ids {
@@ -538,4 +557,84 @@ func TestCheckWaitsNoLongerThanTheServerNeeds(t *testing.T) {
 			t.Fatalf("delay %v: probe limits = %v", c.delay, f.limits)
 		}
 	}
+}
+
+func TestRememberedOrderConnectsWithoutMeasuring(t *testing.T) {
+	f := &fake{delays: speeds(80, 40, 120)}
+	s, tr := setup(f, Options{})
+	list := known(cands("de", "nl", "us"), map[string]time.Duration{"de": ms(80), "nl": ms(40)})
+	if err := s.Connect(context.Background(), list, ""); err != nil {
+		t.Fatal(err)
+	}
+	same(t, tr.states(), []string{"connecting:nl", "connected:nl"})
+	if f.measured != 0 || !reflect.DeepEqual(f.limits, []time.Duration{2 * time.Second}) {
+		t.Fatalf("measured %d times, probe limits %v", f.measured, f.limits)
+	}
+	f.set(func() { f.dead = down("nl") })
+	if err := s.Check(context.Background()); err != nil || f.now() != "de" {
+		t.Fatalf("remembered order was not kept for switching: err %v, running %q", err, f.now())
+	}
+}
+
+func TestRememberedBestIsGoneThenMeasure(t *testing.T) {
+	f := &fake{delays: map[string]time.Duration{"de": ms(80), "us": ms(60)}, dead: down("nl")}
+	var got [][]supervisor.Measurement
+	s, tr := setup(f, Options{OnMeasure: func(m []supervisor.Measurement) { got = append(got, m) }})
+	list := known(cands("de", "nl", "us"), map[string]time.Duration{"de": ms(80), "nl": ms(40)})
+	if err := s.Connect(context.Background(), list, ""); err != nil {
+		t.Fatal(err)
+	}
+	same(t, tr.states(), []string{"connecting:nl", "measuring", "connecting:us", "connected:us"})
+	if f.stops() != 1 || f.measured != 1 {
+		t.Fatalf("stops %d, measured %d", f.stops(), f.measured)
+	}
+	if len(got) != 1 || len(got[0]) != 3 || !got[0][0].OK() || got[0][1].OK() || got[0][2].Delay != ms(60) {
+		t.Fatalf("reported measurements = %+v", got)
+	}
+}
+
+func TestNoMeasuringThroughTheTunnel(t *testing.T) {
+	for _, strict := range []bool{false, true} {
+		f := &fake{delays: speeds(80, 40, 120), dead: down("nl")}
+		s, _ := setup(f, Options{Strict: strict})
+		list := known(cands("de", "nl", "us"), map[string]time.Duration{"de": ms(80), "nl": ms(40)})
+		if !strict {
+			if err := s.Connect(context.Background(), list, "us"); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := s.Connect(context.Background(), list, ""); err != nil || f.now() != "de" {
+			t.Fatalf("strict %v: err %v, running %q", strict, err, f.now())
+		}
+		if f.measured != 0 || f.stops() != 0 {
+			t.Fatalf("strict %v: measured %d, stops %d", strict, f.measured, f.stops())
+		}
+	}
+	f := &fake{delays: speeds(80, 40, 120)}
+	s, _ := setup(f, Options{})
+	if err := s.Connect(context.Background(), cands("us", "de", "nl"), "nl"); err != nil {
+		t.Fatal(err)
+	}
+	f.set(func() { f.dead = down("us") })
+	if err := s.Connect(context.Background(), cands("us", "de", "nl"), ""); err != nil || f.now() != "de" {
+		t.Fatalf("without remembered delays: err %v, running %q", err, f.now())
+	}
+	if f.measured != 0 || f.stops() != 0 {
+		t.Fatalf("measured %d, stops %d", f.measured, f.stops())
+	}
+}
+
+func TestBypassMeasuresWhileConnected(t *testing.T) {
+	f := &fake{delays: speeds(80, 40, 120)}
+	s, tr := setup(f, Options{Bypass: true})
+	if err := s.Connect(context.Background(), cands("de", "nl", "us"), "us"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Connect(context.Background(), cands("de", "nl", "us"), ""); err != nil || f.now() != "nl" {
+		t.Fatalf("err %v, running %q", err, f.now())
+	}
+	if f.measured != 1 || f.stops() != 0 {
+		t.Fatalf("measured %d, stops %d", f.measured, f.stops())
+	}
+	same(t, tr.states()[2:], []string{"measuring", "connecting:nl", "connected:nl"})
 }

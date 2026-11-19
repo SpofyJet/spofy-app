@@ -7,11 +7,11 @@ for mod in $(grep -E '^replace .* => \./' "$FORK/go.mod" | awk '{print $2}'); do
   grep -q "^replace $mod => ../../spofy-xray-core/" "$ROOT/core/go.mod" || { echo "FAIL: replace for $mod is not mirrored in core/go.mod"; exit 1; }
 done
 cd "$ROOT"
-if git ls-files | grep -E '^(testdata/private|docs/research|dist|spike)/' | head -3 | grep .; then echo "FAIL: private files are tracked"; exit 1; fi
-if git ls-files -z | xargs -0 grep -lIE 'gh[pousr]_[A-Za-z0-9]{20}|github_pat_[A-Za-z0-9_]{20}|PRIVATE KEY-{5}' | head -3 | grep .; then echo "FAIL: secret in a tracked file"; exit 1; fi
+if git ls-files -co --exclude-standard | grep -E '^(testdata/private|docs/research|dist|spike)/' | head -3 | grep .; then echo "FAIL: private files are tracked"; exit 1; fi
+if git ls-files -co --exclude-standard -z | xargs -0 grep -lIE 'gh[pousr]_[A-Za-z0-9]{20}|github_pat_[A-Za-z0-9_]{20}|PRIVATE KEY-{5}' | head -3 | grep .; then echo "FAIL: secret in a tracked file"; exit 1; fi
 if [ -f testdata/private/sub.json ]; then
   T=$(mktemp -d)
-  git ls-files -z | xargs -0 python3 tools/mkfixture.py testdata/private "$T" >/dev/null || { echo "FAIL: real subscription values in tracked files"; exit 1; }
+  git ls-files -co --exclude-standard -z | xargs -0 python3 tools/mkfixture.py testdata/private "$T" >/dev/null || { echo "FAIL: real subscription values in tracked files"; exit 1; }
   cmp -s "$T/sub.json" core/testdata/sub/sub.json && cmp -s "$T/headers.json" core/testdata/sub/headers.json || { echo "FAIL: core/testdata/sub differs from tools/mkfixture.py output"; exit 1; }
   rm -rf "$T"
 fi
