@@ -233,7 +233,7 @@ func TestServeProbeAndMeasure(t *testing.T) {
 		t.Fatalf("start = %+v", m)
 	}
 	send(Request{ID: 3, Op: "probe", URL: srv.URL + "/generate_204", Tag: "proxy"})
-	if m := next(); m.Re != 3 || !m.OK {
+	if m := next(); m.Re != 3 || !m.OK || m.Ms < 1 {
 		t.Fatalf("probe = %+v", m)
 	}
 	send(Request{ID: 4, Op: "probe", URL: srv.URL + "/generate_204", Tag: "dead"})

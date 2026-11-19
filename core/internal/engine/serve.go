@@ -74,7 +74,7 @@ func Serve(r io.Reader, w io.Writer) error {
 			send(failure(id, err))
 			return
 		}
-		send(Reply{Re: id, OK: true, Ms: took.Milliseconds()})
+		send(Reply{Re: id, OK: true, Ms: max(took.Milliseconds(), 1)})
 	}
 
 	send(Reply{Ev: "ready"})
@@ -96,7 +96,7 @@ func Serve(r io.Reader, w io.Writer) error {
 				continue
 			}
 			inst = next
-			send(Reply{Re: req.ID, OK: true, Ms: time.Since(began).Milliseconds()})
+			send(Reply{Re: req.ID, OK: true, Ms: max(time.Since(began).Milliseconds(), 1)})
 		case "stop":
 			stop()
 			send(Reply{Re: req.ID, OK: true})
