@@ -461,6 +461,25 @@ def platform():
     expect("platform: engine killed three times: traffic is back on the same tunnel", kills == 3 and bool(back) and len(asked("tun")) == 1 and device in links(),
            "kills=%d asked=%d" % (kills, len(asked("tun"))))
 
+    held = ui.active()["server"]
+    run("ip", "-n", "hub", "link", "set", "v-" + held, "down")
+    began = time.time()
+    stuck = until(lambda: ui.active()["state"] == "stalled", 40, 0.2)
+    took = time.time() - began
+    expect("platform: the chosen server went silent under traffic: the core noticed without being asked and kept the choice",
+           bool(stuck) and ui.active()["server"] == held and len(asked("tun")) == 1, "s=%.1f" % took)
+    run("ip", "-n", "hub", "link", "set", "v-" + held, "up")
+    c = ui.call("connect", server="auto")
+    held = ui.active()["server"]
+    run("ip", "-n", "hub", "link", "set", "v-" + held, "down")
+    began = time.time()
+    moved = until(lambda: ui.active()["server"] != held and ui.active()["state"] == "connected", 40, 0.2)
+    took = time.time() - began
+    code, body = fetch("http://foreign.test/ip")
+    expect("platform: the server went silent under traffic: the core moved to the other one without being asked",
+           c["ok"] and bool(moved) and body == SERVERS[ui.active()["server"]] and len(asked("tun")) == 1, "s=%.1f seen=%s" % (took, body))
+    run("ip", "-n", "hub", "link", "set", "v-" + held, "up")
+
     def state(want):
         ui.call("check")
         return ui.active()["state"] == want

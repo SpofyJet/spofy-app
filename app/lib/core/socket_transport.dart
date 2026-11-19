@@ -6,7 +6,9 @@ import 'client.dart';
 
 class SocketTransport implements Transport {
   SocketTransport._(this._socket)
-    : lines = _socket.cast<List<int>>().transform(utf8.decoder).transform(const LineSplitter());
+    : lines = _socket.cast<List<int>>().transform(utf8.decoder).transform(const LineSplitter()) {
+    _socket.done.ignore();
+  }
 
   static Future<SocketTransport> connect(
     String path, {

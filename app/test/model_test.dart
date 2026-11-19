@@ -166,6 +166,25 @@ void main() {
     expect(later.last.position, 1);
   });
 
+  test('the model opens the core itself: no snapshot until it answers, a fault when it does not come', () async {
+    final hello = Transcript.load().exchanges.first;
+    final gate = Completer<CoreClient>();
+    final model = AppModel.opening(() => gate.future);
+    expect(model.ready, isFalse);
+    expect(await model.connect(), isFalse);
+    expect(model.failure, isNull);
+    final transport = ReplayTransport([hello]);
+    gate.complete(CoreClient(transport));
+    await pumpEventQueue();
+    expect(model.ready, isTrue);
+    expect(model.fault, '');
+    expect(transport.position, 1);
+    final absent = AppModel.opening(() async => throw const CoreClosed());
+    await pumpEventQueue();
+    expect(absent.ready, isFalse);
+    expect(absent.fault, AppModel.coreClosed);
+  });
+
   test('connect asks for the permission first, a refusal sends nothing and is kept as the reason', () async {
     final transcript = Transcript.load();
     final transport = ReplayTransport(transcript.exchanges);

@@ -1,6 +1,8 @@
 import http.server, json, os, re, socket, socketserver, ssl, subprocess, sys, threading, time
 
 APK, CORE, OUT = sys.argv[1], os.path.abspath(sys.argv[2]), os.path.abspath(sys.argv[3])
+RELEASE = sys.argv[4] if len(sys.argv) > 4 else ""
+INSIDE = "127.0.0.2"
 PACKAGE = "app.spofy"
 DATA = "/data/user/0/" + PACKAGE
 GATE = "10.0.2.2"
@@ -8,6 +10,7 @@ USER = "00000000-0000-4000-8000-000000000001"
 SERVERS = {"a": 4443, "b": 4444}
 failed = []
 started = []
+seen = []
 os.makedirs(OUT, exist_ok=True)
 
 
@@ -102,6 +105,7 @@ class Site(http.server.BaseHTTPRequestHandler):
         if self.path == "/generate_204":
             self.reply(204)
         elif self.path == "/ip":
+            seen.append(self.client_address[0])
             self.reply(200, b"site sees " + self.client_address[0].encode())
         elif self.path == "/sub/EMULATORTOKEN" and self.server.server_port == 8443:
             self.reply(200, BODY, [("Content-Type", "application/json"), ("Subscription-Userinfo", "upload=1; download=2; total=1000; expire=1798761600"),
@@ -130,7 +134,11 @@ def host_side():
             "log": {"loglevel": "info"},
             "inbounds": [{"tag": "in", "listen": "0.0.0.0", "port": port, "protocol": "vless", "settings": {"clients": [{"id": USER}], "decryption": "none"},
                           "streamSettings": {"network": "tcp", "security": "none"}}],
-            "outbounds": [{"protocol": "freedom", "settings": {"domainStrategy": "UseIPv4", "finalRules": [{"action": "allow", "ip": [HOST + "/32"]}]}}],
+            "outbounds": [
+                {"tag": "out", "protocol": "freedom", "settings": {"domainStrategy": "UseIPv4"}},
+                {"tag": "site", "protocol": "freedom", "sendThrough": INSIDE, "settings": {"finalRules": [{"action": "allow", "ip": [HOST + "/32"]}]}},
+            ],
+            "routing": {"rules": [{"type": "field", "ip": [HOST + "/32"], "outboundTag": "site"}]},
         }
         log = open(OUT + "/server-%s.log" % name, "w", buffering=1)
         p = subprocess.Popen([CORE, "engine"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log, text=True, bufsize=1)
@@ -154,6 +162,31 @@ def host_side():
 
 def accepted(name, what):
     return len([l for l in open(OUT + "/server-%s.log" % name).read().splitlines() if "accepted" in l and what in l])
+
+
+def outside():
+    return len([p for p in seen if p != INSIDE])
+
+
+def through():
+    return fetch(HOST, 8081, "/ip").endswith("site sees " + INSIDE)
+
+
+def tunnel():
+    m = re.search(r"\d+: (\S+)\s+inet 172\.19\.0\.1", shell("ip -o addr"))
+    return m.group(1) if m else ""
+
+
+def started_in():
+    times = []
+    for _ in range(3):
+        shell("am force-stop %s" % PACKAGE)
+        time.sleep(1)
+        m = re.search(r"TotalTime: (\d+)", shell("am start -W -n %s/.MainActivity" % PACKAGE, limit=120))
+        if m:
+            times.append(int(m.group(1)))
+        until(lambda: "core.sock" in shell("ls %s/files" % DATA), 30)
+    return sorted(times)
 
 
 class Channel:
@@ -190,7 +223,7 @@ def processes():
     out = {}
     for line in shell("ps -A -o PID,RSS,ARGS").splitlines():
         parts = line.split(None, 2)
-        if len(parts) == 3 and PACKAGE in parts[2] and parts[0].isdigit():
+        if len(parts) == 3 and (PACKAGE in parts[2] or "libspofycore.so" in parts[2]) and parts[0].isdigit():
             out[int(parts[0])] = (int(parts[1]), parts[2])
     return out
 
@@ -246,17 +279,20 @@ def scenario():
     m = ui.call("measure")
     servers = ([e for e in ui.events if e.get("ev") == "servers"] or [{"servers": []}])[-1]["servers"]
     expect("measure both servers", m["ok"] and len([x for x in servers if x["delayMs"] > 0]) == 2, "ms=%d delays=%s" % (m["ms"], {x["id"]: x["delayMs"] for x in servers}))
-    fetch(HOST, 8081, "/ip")
-    before = {n: accepted(n, "%s:8081" % HOST) for n in SERVERS}
-    expect("without the tunnel nothing goes through the servers", sum(before.values()) == 0, str(before))
+    direct = fetch(HOST, 8081, "/ip")
+    expect("without the tunnel the site is reached directly", "site sees" in direct and not direct.endswith(INSIDE), direct[-40:])
 
     c = ui.call("connect", server="auto")
     first = ui.active()["server"]
-    links = shell("ip -o addr")
-    need("connect", c["ok"] and first in SERVERS and "172.19.0.1" in links, "ms=%d server=%s %s %s" % (c["ms"], first, c.get("code"), c.get("error", "")[:300]))
-    device = re.search(r"\d+: (\S+)\s+inet 172\.19\.0\.1", links).group(1)
+    device = tunnel()
+    need("connect", c["ok"] and first in SERVERS and device != "", "ms=%d server=%s %s %s" % (c["ms"], first, c.get("code"), c.get("error", "")[:300]))
     body = fetch(HOST, 8081, "/ip")
-    expect("another app's traffic goes through the tunnel", "site sees" in body and accepted(first, "%s:8081" % HOST) > 0, "body=%s accepted=%d" % (body[-60:], accepted(first, "%s:8081" % HOST)))
+    need("another app's traffic goes through the tunnel", body.endswith("site sees " + INSIDE) and accepted(first, "%s:8081" % HOST) > 0, "body=%s accepted=%d" % (body[-60:], accepted(first, "%s:8081" % HOST)))
+    leaked = outside()
+    shell("touch /data/local/tmp/noise")
+    noise = subprocess.Popen(["adb", "shell", "while [ -e /data/local/tmp/noise ]; do printf 'GET /ip HTTP/1.0\\r\\n\\r\\n' | nc -w 2 %s 8081 >/dev/null 2>&1; sleep 0.2; done" % HOST],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    started.append(noise)
     body = fetch("www.gstatic.com", 80, "/generate_204")
     expect("a site by name opens through the tunnel", " 204" in body, body[:80])
     t = ui.call("traffic")
@@ -265,45 +301,80 @@ def scenario():
     expect("the service is in the foreground with a notification", "isForeground=true" in service, re.sub(r"\s+", " ", service)[:200])
     time.sleep(1)
     screen("2-connected")
+    shell("cmd statusbar expand-notifications")
+    time.sleep(1.5)
+    screen("3-notification")
+    shell("cmd statusbar collapse")
     print("memory while connected, MB: %s" % memory(), flush=True)
 
     other = [n for n in SERVERS if n != first][0]
     c = ui.call("connect", server=other)
-    body = fetch(HOST, 8081, "/ip")
-    same = re.search(r"\d+: (\S+)\s+inet 172\.19\.0\.1", shell("ip -o addr"))
-    expect("another server on the same tunnel", c["ok"] and accepted(other, "%s:8081" % HOST) > 0 and same and same.group(1) == device, "ms=%d device=%s" % (c["ms"], same and same.group(1)))
+    expect("another server on the same tunnel", c["ok"] and through() and accepted(other, "%s:8081" % HOST) > 0 and tunnel() == device, "ms=%d device=%s" % (c["ms"], tunnel()))
     kills = 0
     for _ in range(3):
         for pid in engines():
             shell("kill -9 %d" % pid)
             kills += 1
         time.sleep(1.5)
-    back = until(lambda: "site sees" in fetch(HOST, 8081, "/ip"), 20)
-    expect("engine killed three times: traffic is back", kills == 3 and bool(back), "kills=%d" % kills)
+    back = until(through, 20)
+    expect("engine killed three times: traffic is back on the same tunnel", kills == 3 and bool(back) and tunnel() == device, "kills=%d device=%s" % (kills, tunnel()))
 
     shell("input keyevent KEYCODE_HOME")
     time.sleep(1)
     shell("am kill %s" % PACKAGE)
     time.sleep(2)
     alive = [args.strip() for _, args in processes().values()]
-    body = fetch(HOST, 8081, "/ip")
-    expect("the interface is closed: the tunnel keeps working", "site sees" in body and PACKAGE + ":core" in alive, "processes=%s" % alive)
+    expect("the interface is closed: the tunnel keeps working", through() and PACKAGE + ":core" in alive, "processes=%s" % alive)
     shell("am start -W -n %s/.MainActivity" % PACKAGE, limit=120)
     time.sleep(4)
-    screen("3-reopened")
+    screen("4-reopened")
     expect("the interface is opened again", PACKAGE in [args.strip() for _, args in processes().values()])
 
+    c = ui.call("connect", server="auto")
+    shell("svc wifi disable")
+    began = time.time()
+    moved = until(lambda: ui.active()["state"] == "connected" and through(), 60)
+    expect("Wi-Fi is off: traffic goes on over the mobile network on the same tunnel", c["ok"] and bool(moved) and tunnel() == device, "s=%.1f state=%s device=%s" % (time.time() - began, ui.active()["state"], tunnel()))
+    shell("svc wifi enable")
+    time.sleep(6)
+    again = until(lambda: ui.active()["state"] == "connected" and through(), 60)
+    expect("Wi-Fi is back: still connected on the same tunnel", bool(again) and tunnel() == device, "state=%s" % ui.active()["state"])
+    shell("cmd connectivity airplane-mode enable")
+    began = time.time()
+    off = until(lambda: ui.active()["state"] == "offline", 40)
+    expect("no network: the state says so and the tunnel stays", bool(off) and tunnel() == device, "s=%.1f state=%s" % (time.time() - began, ui.active()["state"]))
+    shell("cmd connectivity airplane-mode disable")
+    began = time.time()
+    on = until(lambda: ui.active()["state"] == "connected" and through(), 120)
+    expect("the network is back: connected again without being asked", bool(on) and tunnel() == device, "s=%.1f state=%s" % (time.time() - began, ui.active()["state"]))
+    shell("rm -f /data/local/tmp/noise")
+    time.sleep(3)
+    noise.kill()
+    expect("nothing reached the site past the tunnel while it was up", outside() == leaked, "requests=%d past=%d" % (len(seen), outside() - leaked))
+
     d = ui.call("disconnect")
-    gone = until(lambda: "172.19.0.1" not in shell("ip -o addr"), 10)
+    gone = until(lambda: tunnel() == "", 10)
     service = shell("dumpsys activity services %s/.CoreService" % PACKAGE)
     expect("disconnect removes the tunnel and the notification", d["ok"] and bool(gone) and "isForeground=true" not in service, "ms=%d" % d["ms"])
     time.sleep(1)
-    screen("4-disconnected")
+    screen("5-disconnected")
     print("memory when idle, MB: %s" % memory(), flush=True)
     state = shell("cat %s/files/state/state | head -c 4000" % DATA)
     expect("saved state has nothing in the clear", "EMULATORTOKEN" not in state and "outbounds" not in state and len(state) > 40, "bytes=%d" % len(state))
     key = shell("cat %s/files/key | wc -c" % DATA)
     expect("the key file holds only the wrapped key", key.strip() == "60", "bytes=%s" % key.strip())
+    ui.s.close()
+
+    if RELEASE:
+        adb("uninstall", PACKAGE, limit=120)
+        code, out = run("adb", "install", "-g", RELEASE, limit=300)
+        need("the release build installs", code == 0 and "Success" in out, out[-300:])
+        times = started_in()
+        time.sleep(3)
+        screen("6-release")
+        usage = memory()
+        expect("the release build starts and its core listens", len(times) == 3 and "core.sock" in shell("ls %s/files" % DATA), "ms=%s" % times)
+        print("release build: apk %.1f MB, cold start %s ms, memory %s MB" % (os.path.getsize(RELEASE) / 1e6, times, usage), flush=True)
 
 
 began = time.time()

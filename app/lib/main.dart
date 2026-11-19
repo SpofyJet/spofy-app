@@ -1,5 +1,6 @@
-import 'dart:async';
+import 'dart:io';
 
+import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
 import 'core/client.dart';
@@ -7,28 +8,21 @@ import 'host/host.dart';
 import 'state/model.dart';
 import 'ui/app.dart';
 
-class _NoCore implements Transport {
-  @override
-  Stream<String> get lines => const Stream.empty();
-
-  @override
-  void send(String line) {}
-
-  @override
-  Future<void> close() async {}
-}
-
-Future<void> main() async {
+void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  final platform = host();
-  Future<CoreClient> open() async => CoreClient(await platform.open());
-  CoreClient first;
-  try {
-    first = await open();
-  } on Object {
-    first = CoreClient(_NoCore());
+  if (Platform.isAndroid) {
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    SystemChrome.setSystemUIOverlayStyle(
+      const SystemUiOverlayStyle(
+        statusBarColor: Color(0x00000000),
+        statusBarIconBrightness: Brightness.light,
+        statusBarBrightness: Brightness.dark,
+        systemNavigationBarColor: Color(0x00000000),
+        systemNavigationBarIconBrightness: Brightness.light,
+        systemNavigationBarContrastEnforced: false,
+      ),
+    );
   }
-  final model = AppModel(first, reopen: open, permit: platform.permit);
-  unawaited(model.start());
-  runApp(SpofyApp(model: model));
+  final platform = host();
+  runApp(SpofyApp(model: AppModel.opening(() async => CoreClient(await platform.open()), permit: platform.permit)));
 }

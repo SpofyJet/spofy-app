@@ -328,6 +328,32 @@ func TestCheckSwitchesAndOnline(t *testing.T) {
 	same(t, b.seen(), []string{"switching:nl", "connected:nl"})
 }
 
+func TestOneWayTrafficMovesToAnotherServerWithoutBeingAsked(t *testing.T) {
+	b := newBench(t, func(c *Config) { c.Watch, c.Quiet = ms(5), ms(40) }).subscribed()
+	if err := b.app.Connect(Auto); err != nil {
+		t.Fatal(err)
+	}
+	b.tunnel.Count(1000, 5000)
+	time.Sleep(ms(150))
+	if got := b.tunnel.Running(); got != "обход1" {
+		t.Fatalf("traffic in both directions: running %q", got)
+	}
+	b.seen()
+	b.tunnel.Kill("обход1")
+	time.Sleep(ms(150))
+	if got := b.tunnel.Running(); got != "обход1" {
+		t.Fatalf("no traffic, nobody asked: running %q", got)
+	}
+	b.tunnel.Count(1400, 5000)
+	deadline := time.Now().Add(5 * time.Second)
+	for b.tunnel.Running() != "nl" && time.Now().Before(deadline) {
+		time.Sleep(ms(5))
+	}
+	if got := b.tunnel.Running(); got != "nl" {
+		t.Fatalf("traffic went out and nothing came back: running %q", got)
+	}
+}
+
 func TestMeasure(t *testing.T) {
 	b := newBench(t, nil)
 	if err := b.app.Measure(context.Background()); code(err) != CodeNoSubscription {

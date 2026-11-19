@@ -68,6 +68,8 @@ type Config struct {
 	Timeout  time.Duration
 	Retries  []time.Duration
 	Parallel int
+	Watch    time.Duration
+	Quiet    time.Duration
 }
 
 type Connection struct {
@@ -184,7 +186,33 @@ func New(cfg Config) *App {
 		Retries:   cfg.Retries,
 		Parallel:  cfg.Parallel,
 	})
+	if cfg.Watch > 0 {
+		go a.watch()
+	}
 	return a
+}
+
+func (a *App) watch() {
+	tick := time.NewTicker(a.cfg.Watch)
+	defer tick.Stop()
+	var w stall
+	for {
+		select {
+		case <-a.ctx.Done():
+			return
+		case <-tick.C:
+		}
+		a.mu.Lock()
+		state := a.conn.State
+		a.mu.Unlock()
+		if state != session.Connected && state != session.Stalled {
+			w.since = time.Time{}
+			continue
+		}
+		if w.step(a.Traffic(), a.cfg.Quiet, time.Now()) {
+			a.Check()
+		}
+	}
 }
 
 func (a *App) Listen(hear func(Event)) (stop func()) {
@@ -303,7 +331,9 @@ func (a *App) Check() error {
 }
 
 func (a *App) SetOnline(online bool) error {
-	if a.online.Swap(online) == online || !online {
+	a.online.Store(online)
+	a.sess.Network(online)
+	if !online {
 		return nil
 	}
 	return a.Check()
@@ -432,10 +462,13 @@ func (a *App) setChoice(choice string) {
 
 func (a *App) onState(e session.Event) {
 	a.mu.Lock()
-	a.conn = Connection{State: e.State, Choice: a.conn.Choice, Server: e.Server, DelayMs: e.Delay.Milliseconds(), Code: e.Code, Error: e.Error}
-	conn := a.conn
+	conn := Connection{State: e.State, Choice: a.conn.Choice, Server: e.Server, DelayMs: e.Delay.Milliseconds(), Code: e.Code, Error: e.Error}
+	same := conn == a.conn
+	a.conn = conn
 	a.mu.Unlock()
-	a.emit(Event{Ev: EvConnection, Connection: conn})
+	if !same {
+		a.emit(Event{Ev: EvConnection, Connection: conn})
+	}
 }
 
 func (a *App) onMeasure(cands []session.Candidate, measured []supervisor.Measurement) {

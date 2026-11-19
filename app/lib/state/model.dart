@@ -20,6 +20,10 @@ class AppModel extends ChangeNotifier {
     _attach(client);
   }
 
+  AppModel.opening(Future<CoreClient> Function() open, {this.permit}) : reopen = open {
+    unawaited(revive());
+  }
+
   static const coreClosed = 'core_closed';
   static const coreProtocol = 'core_protocol';
   static const denied = 'vpn_denied';
@@ -27,7 +31,7 @@ class AppModel extends ChangeNotifier {
   final Future<CoreClient> Function()? reopen;
   final Future<bool> Function()? permit;
 
-  late CoreClient _client;
+  CoreClient? _client;
   StreamSubscription<Event>? _events;
   StreamSubscription<Object>? _faults;
   final _running = <Task>{};
@@ -82,7 +86,7 @@ class AppModel extends ChangeNotifier {
 
   Future<void> revive() async {
     final open = reopen;
-    if (open == null || _reviving || _disposed || !_client.closed) {
+    if (open == null || _reviving || _disposed || !(_client?.closed ?? true)) {
       return;
     }
     _reviving = true;
@@ -198,8 +202,12 @@ class AppModel extends ChangeNotifier {
   }
 
   Future<Reply?> _ask(Request request) async {
+    final client = _client;
+    if (client == null) {
+      return null;
+    }
     try {
-      return await _client.call(request);
+      return await client.call(request);
     } on CoreClosed {
       _lost();
       return null;

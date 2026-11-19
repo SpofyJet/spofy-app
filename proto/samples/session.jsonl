@@ -28,9 +28,9 @@
 < {"ev":"connection","connection":{"state":"connected","choice":"auto","server":"de","delayMs":80,"code":"","error":""}}
 < {"re":10,"ok":true}
 > {"id":11,"op":"online","online":false}
+< {"ev":"connection","connection":{"state":"offline","choice":"auto","server":"de","delayMs":0,"code":"","error":""}}
 < {"re":11,"ok":true}
 > {"id":12,"op":"check"}
-< {"ev":"connection","connection":{"state":"offline","choice":"auto","server":"de","delayMs":0,"code":"","error":""}}
 < {"re":12,"ok":false,"code":"probe_failed","error":"no answer"}
 > {"id":13,"op":"online","online":true}
 < {"ev":"connection","connection":{"state":"switching","choice":"auto","server":"us","delayMs":0,"code":"","error":""}}
@@ -64,7 +64,6 @@
 > {"id":22,"op":"teleport"}
 < {"re":22,"ok":false,"code":"unknown_op","error":"unknown operation"}
 > {"id":23,"op":"unsubscribe"}
-< {"ev":"connection","connection":{"state":"idle","choice":"us","server":"","delayMs":0,"code":"","error":""}}
 < {"ev":"connection","connection":{"state":"idle","choice":"auto","server":"","delayMs":0,"code":"","error":""}}
 < {"ev":"subscription","subscription":null}
 < {"ev":"servers","servers":[]}

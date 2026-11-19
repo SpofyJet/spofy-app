@@ -25,6 +25,7 @@ type fake struct {
 	probes   int
 	limits   []time.Duration
 	refuse   error
+	probing  func(n int)
 }
 
 func (f *fake) Start(cfg []byte) (time.Duration, error) {
@@ -62,7 +63,11 @@ func (f *fake) Probe(ctx context.Context, _, _ string, limit time.Duration) (tim
 		fail = true
 	}
 	delay := f.delays[running]
+	probing, n := f.probing, f.probes
 	f.mu.Unlock()
+	if probing != nil {
+		probing(n)
+	}
 	if gate != nil {
 		select {
 		case <-gate:
@@ -462,6 +467,61 @@ func TestCheckDoesNotSwitchWhenOffline(t *testing.T) {
 	same(t, f.starts(), []string{"nl"})
 	f.set(func() { f.dead = nil })
 	online = true
+	if err := s.Check(context.Background()); err != nil || s.State() != Connected || f.now() != "nl" {
+		t.Fatalf("err %v, state %s, running %q", err, s.State(), f.now())
+	}
+}
+
+func TestNetworkChangeDuringACheckProbesAgainInsteadOfSwitching(t *testing.T) {
+	f := &fake{delays: speeds(80, 40, 120)}
+	s, _ := setup(f, Options{Online: func() bool { return true }})
+	if err := s.Connect(context.Background(), cands("de", "nl"), ""); err != nil {
+		t.Fatal(err)
+	}
+	before := f.probed()
+	f.set(func() {
+		f.flaky = 1
+		f.probing = func(n int) {
+			if n == before+1 {
+				s.Network(true)
+			}
+		}
+	})
+	if err := s.Check(context.Background()); err != nil || s.State() != Connected {
+		t.Fatalf("err %v, state %s", err, s.State())
+	}
+	same(t, f.starts(), []string{"nl"})
+	if f.probed() != before+2 {
+		t.Fatalf("probes = %d, want one more after the network change", f.probed()-before)
+	}
+	f.set(func() { f.flaky, f.probing = 1, nil })
+	if err := s.Check(context.Background()); err != nil || f.now() != "de" {
+		t.Fatalf("no network change: err %v, running %q", err, f.now())
+	}
+}
+
+func TestLostNetworkIsShownAtOnceWithoutProbing(t *testing.T) {
+	online := true
+	f := &fake{delays: speeds(80, 40, 120)}
+	s, tr := setup(f, Options{Online: func() bool { return online }})
+	s.Network(false)
+	if s.State() != Idle {
+		t.Fatalf("state %s before any connection", s.State())
+	}
+	if err := s.Connect(context.Background(), cands("de", "nl"), ""); err != nil {
+		t.Fatal(err)
+	}
+	before := f.probed()
+	online = false
+	s.Network(false)
+	if s.State() != Offline || f.probed() != before || f.now() != "nl" {
+		t.Fatalf("state %s, probes %d, running %q", s.State(), f.probed()-before, f.now())
+	}
+	if all := tr.states(); all[len(all)-1] != "offline:nl" {
+		t.Fatalf("states %v", all)
+	}
+	online = true
+	s.Network(true)
 	if err := s.Check(context.Background()); err != nil || s.State() != Connected || f.now() != "nl" {
 		t.Fatalf("err %v, state %s, running %q", err, s.State(), f.now())
 	}

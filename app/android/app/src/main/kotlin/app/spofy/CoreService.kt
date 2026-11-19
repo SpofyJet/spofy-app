@@ -4,11 +4,15 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ServiceInfo
+import android.net.ConnectivityManager
 import android.net.LocalSocket
 import android.net.LocalSocketAddress
+import android.net.Network
 import android.net.VpnService
 import android.os.Binder
 import android.os.Build
@@ -17,6 +21,7 @@ import android.util.Log
 import java.io.File
 import java.io.FileDescriptor
 import java.io.IOException
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 import org.json.JSONObject
@@ -24,6 +29,7 @@ import org.json.JSONObject
 class CoreService : VpnService() {
     private val local = Binder()
     private val writing = Any()
+    private val asks = Executors.newSingleThreadExecutor()
     private var core: Process? = null
     private var link: LocalSocket? = null
     private var sent = 100
@@ -33,6 +39,29 @@ class CoreService : VpnService() {
 
     @Volatile
     private var front = false
+    private var watching = false
+
+    private val network = object : ConnectivityManager.NetworkCallback() {
+        private var current: Network? = null
+
+        override fun onAvailable(network: Network) {
+            current = network
+            request("online") { it.put("online", true) }
+        }
+
+        override fun onLost(network: Network) {
+            if (network == current) {
+                current = null
+                request("online") { it.put("online", false) }
+            }
+        }
+    }
+
+    private val screen = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            request("check")
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -171,6 +200,15 @@ class CoreService : VpnService() {
     }
 
     private fun tunnel(answer: JSONObject, spec: JSONObject) {
+        val allowed = try {
+            prepare(this) == null
+        } catch (e: Exception) {
+            false
+        }
+        if (!allowed) {
+            send(answer.put("ok", false).put("error", "the user did not allow the tunnel"))
+            return
+        }
         val tunnel = try {
             val builder = Builder().setSession(getString(R.string.app)).setMtu(spec.optInt("mtu", 1500))
             each(spec, "addresses") { address, prefix -> builder.addAddress(address, prefix) }
@@ -222,14 +260,43 @@ class CoreService : VpnService() {
                 Log.e(TAG, "no foreground", e)
             }
         }
+        watch(true)
     }
 
     private fun lower() {
+        watch(false)
         if (front) {
             front = false
             stopForeground(STOP_FOREGROUND_REMOVE)
         }
         stopSelf()
+    }
+
+    @Synchronized
+    private fun watch(on: Boolean) {
+        if (on == watching) {
+            return
+        }
+        watching = on
+        val connectivity = getSystemService(ConnectivityManager::class.java)
+        try {
+            if (on) {
+                connectivity.registerDefaultNetworkCallback(network)
+                val filter = IntentFilter(Intent.ACTION_SCREEN_ON)
+                if (Build.VERSION.SDK_INT >= 33) {
+                    registerReceiver(screen, filter, RECEIVER_NOT_EXPORTED)
+                } else {
+                    registerReceiver(screen, filter)
+                }
+            } else {
+                connectivity.unregisterNetworkCallback(network)
+                unregisterReceiver(screen)
+            }
+        } catch (e: Exception) {
+            if (BuildConfig.DEBUG) {
+                Log.e(TAG, "watch", e)
+            }
+        }
     }
 
     private fun show(state: String) {
@@ -277,10 +344,10 @@ class CoreService : VpnService() {
         return builder.build()
     }
 
-    private fun request(op: String) {
-        thread(name = "core-ask") {
+    private fun request(op: String, fill: (JSONObject) -> Unit = {}) {
+        asks.execute {
             val id = synchronized(writing) { ++sent }
-            send(JSONObject().put("id", id).put("op", op))
+            send(JSONObject().put("id", id).put("op", op).also(fill))
         }
     }
 
@@ -308,7 +375,7 @@ class CoreService : VpnService() {
         private const val CHANNEL = "state"
         private const val NOTICE = 1
         private const val RESTARTS = 5
-        private val ROOTS = listOf("/apex/com.android.conscrypt/cacerts", "/system/etc/security/cacerts", "/data/misc/keychain/certs-added")
+        private val ROOTS = listOf("/apex/com.android.conscrypt/cacerts", "/system/etc/security/cacerts")
 
         fun socket(context: Context) = File(context.filesDir, "core.sock")
     }

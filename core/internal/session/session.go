@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/SpofyJet/spofy-app/core/internal/engine"
@@ -83,6 +84,7 @@ type Session struct {
 	pinned  bool
 	state   State
 	last    time.Duration
+	net     atomic.Uint64
 }
 
 func New(o Options) *Session {
@@ -274,13 +276,19 @@ func (s *Session) Check(parent context.Context) error {
 	err := error(&engine.Error{Code: supervisor.CodeUnavailable, Err: errors.New("no server is running")})
 	if active >= 0 {
 		server = cands[active].ID
-		var delay time.Duration
-		if delay, err = s.confirm(ctx, s.limit(), s.opts.Retries); err == nil {
-			s.set(Event{State: Connected, Server: server, Delay: delay})
-			return nil
-		}
-		if ctx.Err() != nil {
-			return ctx.Err()
+		for {
+			seen := s.net.Load()
+			var delay time.Duration
+			if delay, err = s.confirm(ctx, s.limit(), s.opts.Retries); err == nil {
+				s.set(Event{State: Connected, Server: server, Delay: delay})
+				return nil
+			}
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if s.net.Load() == seen {
+				break
+			}
 		}
 	}
 	if s.opts.Online != nil && !s.opts.Online() {
@@ -305,6 +313,20 @@ func (s *Session) Check(parent context.Context) error {
 		next[i] = order[(from+i)%len(order)]
 	}
 	return s.walk(ctx, Switching, next)
+}
+
+func (s *Session) Network(online bool) {
+	s.net.Add(1)
+	if online || !s.op.TryLock() {
+		return
+	}
+	defer s.op.Unlock()
+	s.mu.Lock()
+	up, waiting, active, cands := s.up, s.waiting, s.active, s.cands
+	s.mu.Unlock()
+	if up && waiting == 0 && active >= 0 {
+		s.set(Event{State: Offline, Server: cands[active].ID})
+	}
 }
 
 func (s *Session) Disconnect() error {

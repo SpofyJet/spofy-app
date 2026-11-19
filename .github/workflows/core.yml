@@ -100,7 +100,7 @@ jobs:
           target: default
           disable-animations: true
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
-          script: python3 spofy-app/tools/android/emulator.py spofy-app/app/build/app/outputs/flutter-apk/app-debug.apk "$RUNNER_TEMP/spofy-core" "$RUNNER_TEMP/android-out"
+          script: python3 spofy-app/tools/android/emulator.py spofy-app/app/build/app/outputs/flutter-apk/app-debug.apk "$RUNNER_TEMP/spofy-core" "$RUNNER_TEMP/android-out" spofy-app/app/build/app/outputs/flutter-apk/app-x86_64-release.apk
       - if: always()
         uses: actions/upload-artifact@v7
         with:
