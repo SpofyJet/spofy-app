@@ -2,7 +2,8 @@
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 [ -x "$ROOT/dist/spofy-core-linux-amd64" ] || { echo "FAIL: dist/spofy-core-linux-amd64 is missing, run tools/build.sh linux amd64"; exit 1; }
-if grep -rnE '^\s*//' "$ROOT/app/lib" "$ROOT/app/test" "$ROOT/app/tool" "$ROOT/app/stand" --include='*.dart' | head -5 | grep .; then echo "FAIL: comments in code"; exit 1; fi
+if grep -rnE '^\s*//' "$ROOT/app/lib" "$ROOT/app/test" "$ROOT/app/tool" "$ROOT/app/stand" "$ROOT/app/android" --include='*.dart' --include='*.kt' --include='*.kts' | head -5 | grep .; then echo "FAIL: comments in code"; exit 1; fi
+if grep -rn '<!--' "$ROOT/app/android" --include='*.xml' | head -5 | grep .; then echo "FAIL: comments in code"; exit 1; fi
 SPOFY_CORE=/src/dist/spofy-core-linux-amd64 "$ROOT/tools/flutter.sh" bash -c '
   set -euo pipefail
   flutter pub get --enforce-lockfile >/dev/null

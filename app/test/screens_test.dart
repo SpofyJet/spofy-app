@@ -43,6 +43,8 @@ void main() {
     'home_offline': () => home(VpnState.offline, server: 'nl'),
     'home_failed': () => home(VpnState.failed, code: 'no_server'),
     'home_core_lost': () => Scene(ready: false, fault: AppModel.coreClosed),
+    'home_denied': () => home(VpnState.idle)..model.failure = const Failure(Task.connect, AppModel.denied, ''),
+    'home_refused': () => home(VpnState.failed, code: 'guard_failed'),
   };
 
   for (final entry in homes.entries) {

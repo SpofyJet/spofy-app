@@ -243,8 +243,9 @@ class _Status extends StatelessWidget {
     final current = model.current;
     final chosen = connection.auto ? null : model.snapshot.server(connection.choice);
     final shown = current ?? chosen;
-    final hint = S.hint(connection, traffic: model.traffic);
     final failure = model.failure;
+    final refused = state == VpnState.idle && failure?.task == Task.connect && failure?.code == AppModel.denied;
+    final hint = refused ? S.reason(AppModel.denied) : S.hint(connection, traffic: model.traffic);
     final delay = state == VpnState.connected ? connection.delayMs : (shown?.delayMs ?? 0);
     final subscription = model.subscription!;
     return _Stretch(

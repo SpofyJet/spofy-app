@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app">Spofy</string>
+    <string name="channel">Состояние VPN</string>
+    <string name="state_connected">VPN работает</string>
+    <string name="state_connecting">Подключаемся</string>
+    <string name="state_switching">Меняем сервер</string>
+    <string name="state_stalled">Сервер не отвечает</string>
+    <string name="state_offline">Нет интернета</string>
+    <string name="stalled_hint">Трафик не идёт мимо VPN</string>
+    <string name="disconnect">Отключить</string>
+</resources>

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -5,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:spofy/core/client.dart';
 import 'package:spofy/core/process_transport.dart';
 import 'package:spofy/core/protocol.dart';
+import 'package:spofy/core/socket_transport.dart';
 import 'package:spofy/state/model.dart';
 
 import 'replay.dart';
@@ -126,6 +128,99 @@ void main() {
     expect(await first, isFalse);
     expect(model.running(Task.connect), isFalse);
     expect(transport.position, 2);
+  });
+
+  test('a lost channel is opened again and the model takes a fresh snapshot', () async {
+    final transcript = Transcript.load();
+    final hello = transcript.exchanges.first;
+    final first = ReplayTransport([hello]);
+    final later = <ReplayTransport>[];
+    var refuse = false;
+    final model = AppModel(
+      CoreClient(first),
+      reopen: () async {
+        if (refuse) {
+          throw const CoreClosed();
+        }
+        later.add(ReplayTransport([hello, hello]));
+        return CoreClient(later.last);
+      },
+    );
+    await model.start();
+    expect(model.ready, isTrue);
+    await first.close();
+    await pumpEventQueue();
+    expect(later, hasLength(1));
+    expect(later.single.position, 1);
+    expect(model.fault, '');
+    await model.revive();
+    expect(later, hasLength(1));
+    refuse = true;
+    await later.single.close();
+    await pumpEventQueue();
+    expect(model.fault, AppModel.coreClosed);
+    refuse = false;
+    await model.revive();
+    expect(model.fault, '');
+    expect(later, hasLength(2));
+    expect(later.last.position, 1);
+  });
+
+  test('connect asks for the permission first, a refusal sends nothing and is kept as the reason', () async {
+    final transcript = Transcript.load();
+    final transport = ReplayTransport(transcript.exchanges);
+    var allowed = false;
+    var asked = 0;
+    final model = AppModel(
+      CoreClient(transport),
+      permit: () async {
+        asked++;
+        return allowed;
+      },
+    );
+    await model.start();
+    expect(await model.connect(), isFalse);
+    expect(model.failure?.code, AppModel.denied);
+    expect(transport.position, 1);
+    allowed = true;
+    await model.connect();
+    expect(asked, 2);
+    expect(transport.position, 2);
+    expect(model.failure?.code, isNot(AppModel.denied));
+  });
+
+  test('the real core serves two clients on its socket and stops when its input closes', () async {
+    final path = Platform.environment['SPOFY_CORE'];
+    if (path == null) {
+      markTestSkipped('SPOFY_CORE is not set');
+      return;
+    }
+    final folder = Directory.systemTemp.createTempSync('spofy-socket-');
+    addTearDown(() => folder.deleteSync(recursive: true));
+    final socket = '${folder.path}/core.sock';
+    final core = await Process.start(
+      path,
+      ['serve', '-state', '${folder.path}/state', '-mode', 'proxy', '-listen', socket],
+      environment: {'SPOFY_STATE_KEY': base64Encode(List<int>.generate(32, (i) => i * 5 % 251))},
+    );
+    unawaited(core.stderr.drain<void>());
+    final listening = await core.stdout.transform(utf8.decoder).transform(const LineSplitter()).first;
+    expect(listening, contains('listening'));
+    final one = AppModel(CoreClient(await SocketTransport.connect(socket)));
+    final two = AppModel(CoreClient(await SocketTransport.connect(socket)));
+    await one.start();
+    await two.start();
+    expect(one.ready && two.ready, isTrue);
+    await one.set('theme', 'dark');
+    await two.check();
+    expect(two.snapshot.settings, {'theme': 'dark'});
+    await core.stdin.close();
+    expect(await core.exitCode.timeout(const Duration(seconds: 10)), 0);
+    await pumpEventQueue();
+    await two.check();
+    expect(one.fault, AppModel.coreClosed);
+    expect(two.fault, AppModel.coreClosed);
+    expect(File(socket).existsSync(), isFalse);
   });
 
   test('the real core answers over its channel', () async {

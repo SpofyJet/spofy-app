@@ -39,3 +39,71 @@ jobs:
           FLUTTER_CACHE="$RUNNER_TEMP/flutter-cache" spofy-app/tools/app-check.sh
       - timeout-minutes: 10
         run: FLUTTER_CACHE="$RUNNER_TEMP/flutter-cache" spofy-app/tools/app-stand.sh
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: spofy-app
+      - id: rev
+        run: echo "rev=$(cat spofy-app/core/XRAY_REV)" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v7
+        with:
+          repository: SpofyJet/xray-core
+          ref: ${{ steps.rev.outputs.rev }}
+          path: spofy-xray-core
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: spofy-app/core/go.mod
+          cache-dependency-path: spofy-app/core/go.sum
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 21
+      - name: flutter
+        run: |
+          version=$(sed -n 's/^ARG FLUTTER_VERSION=//p' spofy-app/tools/flutter/Dockerfile)
+          sum=$(sed -n 's/^ARG FLUTTER_SHA256=//p' spofy-app/tools/flutter/Dockerfile)
+          curl -fsSL -o "$RUNNER_TEMP/flutter.tar.xz" "https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_${version}-stable.tar.xz"
+          echo "$sum  $RUNNER_TEMP/flutter.tar.xz" | sha256sum -c -
+          tar -xJf "$RUNNER_TEMP/flutter.tar.xz" -C "$RUNNER_TEMP"
+          rm "$RUNNER_TEMP/flutter.tar.xz"
+          echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
+      - name: core
+        run: |
+          spofy-app/tools/android-core.sh
+          cd spofy-app/core
+          CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -checklinkname=0" -o "$RUNNER_TEMP/spofy-core" ./cmd/spofy-core
+      - name: apk
+        working-directory: spofy-app/app
+        run: |
+          flutter config --no-analytics --no-cli-animations
+          flutter pub get --enforce-lockfile
+          flutter build apk --release --split-per-abi
+          flutter build apk --debug --target-platform android-x64
+          ls -l build/app/outputs/flutter-apk/
+      - uses: actions/upload-artifact@v7
+        with:
+          name: apk
+          path: spofy-app/app/build/app/outputs/flutter-apk/*.apk
+          retention-days: 7
+      - name: kvm
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: default
+          disable-animations: true
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+          script: python3 spofy-app/tools/android/emulator.py spofy-app/app/build/app/outputs/flutter-apk/app-debug.apk "$RUNNER_TEMP/spofy-core" "$RUNNER_TEMP/android-out"
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: emulator
+          path: ${{ runner.temp }}/android-out
+          retention-days: 7

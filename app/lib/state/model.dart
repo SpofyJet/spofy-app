@@ -16,19 +16,23 @@ class Failure {
 }
 
 class AppModel extends ChangeNotifier {
-  AppModel(this._client) {
-    _events = _client.events.listen(_apply, onDone: _lost);
-    _faults = _client.faults.listen(_broken);
+  AppModel(CoreClient client, {this.reopen, this.permit}) {
+    _attach(client);
   }
 
   static const coreClosed = 'core_closed';
   static const coreProtocol = 'core_protocol';
+  static const denied = 'vpn_denied';
 
-  final CoreClient _client;
-  late final StreamSubscription<Event> _events;
-  late final StreamSubscription<Object> _faults;
+  final Future<CoreClient> Function()? reopen;
+  final Future<bool> Function()? permit;
+
+  late CoreClient _client;
+  StreamSubscription<Event>? _events;
+  StreamSubscription<Object>? _faults;
   final _running = <Task>{};
   bool _disposed = false;
+  bool _reviving = false;
 
   Snapshot snapshot = const Snapshot();
   Traffic traffic = const Traffic();
@@ -66,7 +70,43 @@ class AppModel extends ChangeNotifier {
 
   Future<bool> measure() => _run(Task.measure, const Request.measure());
 
-  Future<bool> connect([String? server]) => _run(Task.connect, Request.connect(server));
+  Future<bool> connect([String? server]) async {
+    final ask = permit;
+    if (ask != null && !_running.contains(Task.connect) && !await ask()) {
+      failure = const Failure(Task.connect, denied, '');
+      _changed();
+      return false;
+    }
+    return _run(Task.connect, Request.connect(server));
+  }
+
+  Future<void> revive() async {
+    final open = reopen;
+    if (open == null || _reviving || _disposed || !_client.closed) {
+      return;
+    }
+    _reviving = true;
+    try {
+      final client = await open();
+      if (_disposed) {
+        await client.close();
+        return;
+      }
+      _attach(client);
+      _running.clear();
+      if (fault == coreClosed) {
+        fault = '';
+      }
+      await start();
+    } on Object {
+      if (fault.isEmpty) {
+        fault = coreClosed;
+      }
+    } finally {
+      _reviving = false;
+      _changed();
+    }
+  }
 
   Future<bool> disconnect() => _run(Task.disconnect, const Request.disconnect());
 
@@ -127,9 +167,17 @@ class AppModel extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
-    _events.cancel();
-    _faults.cancel();
+    _events?.cancel();
+    _faults?.cancel();
     super.dispose();
+  }
+
+  void _attach(CoreClient client) {
+    _events?.cancel();
+    _faults?.cancel();
+    _client = client;
+    _events = client.events.listen(_apply, onDone: _lost);
+    _faults = client.faults.listen(_broken);
   }
 
   Future<bool> _run(Task task, Request request) async {
@@ -172,6 +220,10 @@ class AppModel extends ChangeNotifier {
   }
 
   void _lost() {
+    if (reopen != null) {
+      unawaited(revive());
+      return;
+    }
     if (fault.isEmpty) {
       fault = coreClosed;
       _changed();
