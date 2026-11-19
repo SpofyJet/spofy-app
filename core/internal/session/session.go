@@ -1,6 +1,7 @@
 package session
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"sync"
@@ -84,6 +85,7 @@ type Session struct {
 	pinned  bool
 	state   State
 	last    time.Duration
+	halt    context.CancelFunc
 	net     atomic.Uint64
 }
 
@@ -131,6 +133,14 @@ func (s *Session) Measure(ctx context.Context, cands []Candidate) []supervisor.M
 }
 
 func (s *Session) Connect(parent context.Context, cands []Candidate, pinned string) error {
+	return s.connect(parent, cands, pinned, false)
+}
+
+func (s *Session) Renew(parent context.Context, cands []Candidate, pinned string) error {
+	return s.connect(parent, cands, pinned, true)
+}
+
+func (s *Session) connect(parent context.Context, cands []Candidate, pinned string, renew bool) error {
 	var order []int
 	if pinned != "" {
 		for i, c := range cands {
@@ -144,6 +154,10 @@ func (s *Session) Connect(parent context.Context, cands []Candidate, pinned stri
 	}
 	epoch := s.preempt()
 	s.acquire()
+	if renew && s.State() == Idle {
+		s.op.Unlock()
+		return nil
+	}
 	ctx, done := s.bind(parent, epoch)
 	defer done()
 	if pinned != "" {
@@ -286,15 +300,24 @@ func (s *Session) check(parent context.Context, waits []time.Duration) error {
 		server = cands[active].ID
 		for {
 			seen := s.net.Load()
+			probe, stop := context.WithCancel(ctx)
+			s.mu.Lock()
+			s.halt = stop
+			s.mu.Unlock()
 			var delay time.Duration
-			if delay, err = s.confirm(ctx, s.limit(), waits); err == nil {
+			delay, err = s.confirm(probe, s.limit(), waits)
+			s.mu.Lock()
+			s.halt = nil
+			s.mu.Unlock()
+			stop()
+			if err == nil {
 				s.set(Event{State: Connected, Server: server, Delay: delay})
 				return nil
 			}
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			if s.net.Load() == seen {
+			if s.net.Load() == seen || (s.opts.Online != nil && !s.opts.Online()) {
 				break
 			}
 		}
@@ -306,6 +329,12 @@ func (s *Session) check(parent context.Context, waits []time.Duration) error {
 	if pinned && !engineDown(err) {
 		s.set(Event{State: Stalled, Server: server, Code: CodeUnreachable, Error: err.Error()})
 		return &engine.Error{Code: CodeUnreachable, Err: err}
+	}
+	if s.opts.Bypass && len(order) < len(cands) {
+		order = whole(order, len(cands))
+		s.mu.Lock()
+		s.order = order
+		s.mu.Unlock()
 	}
 	from := 0
 	for i, c := range order {
@@ -362,9 +391,63 @@ func (s *Session) move(ctx context.Context, cands []Candidate, others []int, ser
 	return &engine.Error{Code: CodeNoServer, Err: cause}
 }
 
+func (s *Session) Rebase(cands []Candidate) bool {
+	s.op.Lock()
+	defer s.op.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.up || len(s.cands) == 0 {
+		return false
+	}
+	at := make(map[string]int, len(cands))
+	for i, c := range cands {
+		at[c.ID] = i
+	}
+	active := -1
+	if s.active >= 0 {
+		was := s.cands[s.active]
+		i, ok := at[was.ID]
+		if !ok || !bytes.Equal(cands[i].Run, was.Run) {
+			return true
+		}
+		active = i
+	}
+	order := make([]int, 0, len(s.order))
+	for _, i := range s.order {
+		if n, ok := at[s.cands[i].ID]; ok {
+			order = append(order, n)
+		}
+	}
+	s.cands, s.order, s.active = cands, order, active
+	return false
+}
+
+func whole(order []int, n int) []int {
+	in := make([]bool, n)
+	out := make([]int, 0, n)
+	for _, i := range order {
+		in[i] = true
+		out = append(out, i)
+	}
+	for i := range n {
+		if !in[i] {
+			out = append(out, i)
+		}
+	}
+	return out
+}
+
 func (s *Session) Network(online bool) {
 	s.net.Add(1)
-	if online || !s.op.TryLock() {
+	if online {
+		return
+	}
+	s.mu.Lock()
+	if s.halt != nil {
+		s.halt()
+	}
+	s.mu.Unlock()
+	if !s.op.TryLock() {
 		return
 	}
 	defer s.op.Unlock()

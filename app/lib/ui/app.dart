@@ -63,7 +63,7 @@ class _SpofyAppState extends State<SpofyApp> with WidgetsBindingObserver {
   }
 
   void _schedule() {
-    if (widget.model.offered != null && !_subscription) {
+    if (widget.model.ready && widget.model.offered != null && !_subscription) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _subscribe());
       WidgetsBinding.instance.scheduleFrame();
     }

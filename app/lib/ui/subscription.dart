@@ -69,7 +69,7 @@ class _AddFormState extends State<_AddForm> {
   }
 
   void _offered() {
-    final target = widget.model.take();
+    final target = widget.model.ready ? widget.model.take() : null;
     if (target != null) {
       _link.text = target;
       _given = true;

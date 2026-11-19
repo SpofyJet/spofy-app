@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -533,6 +534,36 @@ func TestLostNetworkIsShownAtOnceWithoutProbing(t *testing.T) {
 	}
 }
 
+func TestNetworkLostDuringACheckIsShownWithoutWaitingForTheProbe(t *testing.T) {
+	var online atomic.Bool
+	online.Store(true)
+	f := &fake{delays: speeds(80, 40, 120)}
+	s, tr := setup(f, Options{Online: online.Load})
+	if err := s.Connect(context.Background(), cands("de", "nl"), ""); err != nil {
+		t.Fatal(err)
+	}
+	before := f.probed()
+	f.set(func() { f.gate = make(chan struct{}) })
+	done := make(chan error, 1)
+	go func() { done <- s.Check(context.Background()) }()
+	for f.probed() == before {
+		time.Sleep(time.Millisecond)
+	}
+	online.Store(false)
+	s.Network(false)
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("a check without a network passed")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the check went on waiting for a probe after the network was lost")
+	}
+	if all := tr.states(); all[len(all)-1] != "offline:nl" || f.now() != "nl" || f.probed() != before+1 {
+		t.Fatalf("states %v, running %q, probes %d", all, f.now(), f.probed()-before)
+	}
+}
+
 func TestPinnedServerStallsInsteadOfSwitching(t *testing.T) {
 	f := &fake{delays: speeds(80, 40, 120)}
 	s, _ := setup(f, Options{})
@@ -830,6 +861,112 @@ func TestOutsideTheTunnelSilenceEverywhereKeepsTheServerAndWhatIsRemembered(t *t
 		t.Fatalf("back: err %v, state %s, running %q", err, s.State(), f.now())
 	}
 	same(t, f.starts(), []string{"s1"})
+}
+
+func TestNewListKeepsTheConnectionAndIsUsedForSwitching(t *testing.T) {
+	f := &fake{delays: map[string]time.Duration{"de": ms(80), "nl": ms(40), "us": ms(120), "fr": ms(60)}}
+	s, tr := setup(f, Options{})
+	if err := s.Connect(context.Background(), cands("de", "nl", "us"), ""); err != nil {
+		t.Fatal(err)
+	}
+	if s.Rebase(cands("fr", "us", "nl")) {
+		t.Fatal("asked to reconnect though the server in use is the same")
+	}
+	same(t, f.starts(), []string{"nl"})
+	f.set(func() { f.dead = down("nl") })
+	if err := s.Check(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	same(t, tr.states(), []string{"measuring", "connecting:nl", "connected:nl", "switching:us", "connected:us"})
+}
+
+func TestOutsideTheTunnelAServerThatCameWithTheNewListIsMeasuredToo(t *testing.T) {
+	f := &fake{delays: map[string]time.Duration{"de": ms(80), "nl": ms(40), "us": ms(120), "fr": ms(60)}}
+	s, tr := setup(f, Options{Bypass: true})
+	if err := s.Connect(context.Background(), cands("de", "nl", "us"), ""); err != nil {
+		t.Fatal(err)
+	}
+	if s.Rebase(cands("fr", "us", "nl")) {
+		t.Fatal("asked to reconnect though the server in use is the same")
+	}
+	f.set(func() { f.dead = down("nl") })
+	if err := s.Check(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	same(t, tr.states(), []string{"measuring", "connecting:nl", "connected:nl", "switching:fr", "connected:fr"})
+}
+
+func TestNewListAsksToReconnectWhenTheServerInUseChangedOrIsGone(t *testing.T) {
+	f := &fake{delays: speeds(80, 40, 120)}
+	s, _ := setup(f, Options{})
+	if s.Rebase(cands("de")) {
+		t.Fatal("asked to reconnect while nothing runs")
+	}
+	if err := s.Connect(context.Background(), cands("de", "nl", "us"), ""); err != nil {
+		t.Fatal(err)
+	}
+	changed := cands("de", "nl", "us")
+	changed[1].Run = []byte("nl with other settings")
+	if !s.Rebase(changed) {
+		t.Fatal("new settings of the server in use were not noticed")
+	}
+	if !s.Rebase(cands("de", "us")) {
+		t.Fatal("the server in use is gone from the list and nothing was said")
+	}
+	if f.now() != "nl" || len(f.starts()) != 1 || f.stops() != 0 {
+		t.Fatalf("the list itself touched the tunnel: running %q, log %v", f.now(), f.log)
+	}
+	s.Disconnect()
+	if s.Rebase(cands("de")) {
+		t.Fatal("asked to reconnect after a disconnect")
+	}
+}
+
+func TestRenewConnectsAgainButNeverAfterADisconnect(t *testing.T) {
+	f := &fake{delays: speeds(80, 40, 120)}
+	s, tr := setup(f, Options{})
+	if err := s.Renew(context.Background(), cands("de", "nl"), ""); err != nil || len(f.starts()) != 0 || s.State() != Idle {
+		t.Fatalf("a renewal started the tunnel nobody asked for: err %v, starts %v", err, f.starts())
+	}
+	if err := s.Connect(context.Background(), cands("de", "nl", "us"), "us"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Renew(context.Background(), cands("de", "nl"), ""); err != nil || len(f.starts()) != 2 || f.now() == "us" || s.State() != Connected {
+		t.Fatalf("err %v, starts %v, state %s", err, f.starts(), s.State())
+	}
+	s.Disconnect()
+	before := len(f.starts())
+	if err := s.Renew(context.Background(), cands("de", "nl"), ""); err != nil || len(f.starts()) != before || s.State() != Idle {
+		t.Fatalf("a renewal turned the tunnel on after a disconnect: err %v, state %s", err, s.State())
+	}
+	if all := tr.states(); all[len(all)-1] != "idle" {
+		t.Fatalf("states %v", all)
+	}
+}
+
+func TestOutsideTheTunnelServersNeverMeasuredAreTriedWhenTheRememberedAreSilent(t *testing.T) {
+	f := &fake{delays: speeds(80, 40, 120)}
+	s, tr := setup(f, Options{Bypass: true})
+	list := known(cands("de", "nl", "us"), map[string]time.Duration{"de": ms(80), "nl": ms(40)})
+	if err := s.Connect(context.Background(), list, ""); err != nil {
+		t.Fatal(err)
+	}
+	f.set(func() {
+		f.dead = down("nl")
+		delete(f.delays, "nl")
+		delete(f.delays, "de")
+	})
+	if err := s.Check(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	f.set(func() {
+		f.dead = down("us")
+		f.delays = map[string]time.Duration{"de": ms(80)}
+	})
+	if err := s.Check(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	same(t, tr.states(), []string{"connecting:nl", "connected:nl", "switching:us", "connected:us", "switching:de", "connected:de"})
 }
 
 func TestTunnelRefusalEndsTheConnectWithItsOwnCode(t *testing.T) {

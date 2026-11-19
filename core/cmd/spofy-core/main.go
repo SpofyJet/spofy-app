@@ -180,6 +180,7 @@ func serve(args []string) int {
 	bypass := fs.Bool("bypass", false, "the core's own connections go outside the tunnel: servers are measured while it is up")
 	watch := fs.Duration("watch", time.Second, "how often the traffic counters are read while connected, 0 turns the watch off")
 	quiet := fs.Duration("quiet", 5*time.Second, "check the connection when traffic goes out for this long and nothing comes back")
+	renew := fs.Duration("renew", 15*time.Minute, "the subscription is fetched again no more often than this")
 	fs.Parse(args)
 
 	out := controlChannel()
@@ -251,6 +252,7 @@ func serve(args []string) int {
 		Bypass:  *bypass,
 		Watch:   *watch,
 		Quiet:   *quiet,
+		Renew:   *renew,
 	})
 	checks.Add(1)
 	go func() {

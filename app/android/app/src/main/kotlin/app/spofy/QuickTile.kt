@@ -8,6 +8,10 @@ import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
 
 class QuickTile : TileService() {
+    override fun onTileAdded() {
+        show()
+    }
+
     override fun onStartListening() {
         show()
     }

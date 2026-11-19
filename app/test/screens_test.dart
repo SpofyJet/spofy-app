@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:spofy/core/client.dart';
 import 'package:spofy/core/protocol.dart';
 import 'package:spofy/state/model.dart';
 import 'package:spofy/ui/app.dart';
@@ -11,7 +14,9 @@ import 'package:spofy/ui/strings.dart';
 import 'package:spofy/ui/subscription.dart';
 import 'package:spofy/ui/widgets.dart';
 
+import 'replay.dart';
 import 'scenes.dart';
+import 'transcript.dart';
 
 const phone = Size(360, 800);
 const small = Size(360, 640);
@@ -306,6 +311,32 @@ void main() {
     await tester.tap(find.bySemanticsLabel(S.replace));
     await tester.pump();
     expect(scene.transport.sent, ['{"id":1,"op":"subscribe","url":"$address"}']);
+  });
+
+  testWidgets('a link that came before the core answered waits and then asks before replacing', (tester) async {
+    const address = 'https://other.example.test/sub/TESTTOKEN0123456789';
+    final hello = Transcript.load().exchanges.firstWhere(
+      (e) => e.sent.contains('"hello"') && e.received.last.contains('"subscription":{'),
+    );
+    final transport = ReplayTransport([hello]);
+    final model = AppModel(CoreClient(transport));
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = phone;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(SpofyApp(model: model, now: () => clock));
+    model.offer('spofy://add/$address');
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.byType(SubscriptionScreen), findsNothing);
+    expect(model.offered, address);
+    unawaited(model.start());
+    await tester.pump();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(model.ready, isTrue);
+    expect(find.text(S.replaceConfirm), findsOneWidget);
+    expect(find.text(S.replaceFrom(address)), findsOneWidget);
+    expect(transport.position, 1);
   });
 
   testWidgets('settings fit a 320 px phone with 130 % text', (tester) async {

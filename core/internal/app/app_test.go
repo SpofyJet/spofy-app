@@ -54,6 +54,7 @@ func (b *bench) open(tune func(*Config)) {
 		Now:     b.clock.Now,
 		Version: "0.1.0",
 		Retries: []time.Duration{0},
+		Renew:   -1,
 	}
 	if tune != nil {
 		tune(&cfg)
@@ -225,6 +226,217 @@ func TestRefresh(t *testing.T) {
 	}
 	if len(b.app.Snapshot().Servers) != 18 {
 		t.Fatal("a failed refresh dropped the servers")
+	}
+}
+
+func renewing(c *Config) { c.Renew = time.Minute }
+
+func (b *bench) until(what string, ok func() bool) {
+	b.t.Helper()
+	for end := time.Now().Add(5 * time.Second); time.Now().Before(end); time.Sleep(2 * time.Millisecond) {
+		if ok() {
+			return
+		}
+	}
+	b.t.Fatalf("did not happen: %s", what)
+}
+
+func (b *bench) list(etag string, keep func(remarks string, config map[string]json.RawMessage) bool) {
+	full, _ := apptest.Fixture(b.t)
+	b.panel.Set(func(body *[]byte, h http.Header) {
+		var all, out []map[string]json.RawMessage
+		json.Unmarshal(full, &all)
+		for _, c := range all {
+			var remarks string
+			json.Unmarshal(c["remarks"], &remarks)
+			if keep == nil || keep(remarks, c) {
+				out = append(out, c)
+			}
+		}
+		*body, _ = json.Marshal(out)
+		h.Set("Etag", etag)
+	})
+}
+
+func TestSubscriptionIsFetchedAgainByThePanelIntervalAndNotMoreOften(t *testing.T) {
+	b := newBench(t, renewing).subscribed()
+	step := func(wait time.Duration, hits int, what string) {
+		t.Helper()
+		b.clock.Advance(wait)
+		b.app.freshen(false)
+		if got := b.panel.Hits(); got != hits {
+			t.Fatalf("%s: the panel was asked %d times, want %d", what, got, hits)
+		}
+	}
+	step(0, 1, "just fetched")
+	step(59*time.Minute, 1, "a minute before the interval")
+	step(time.Minute, 2, "the interval has passed")
+	if h := b.panel.Last(); h.Get("If-None-Match") != `W/"fixture-1"` {
+		t.Fatalf("the scheduled request does not say what is already here: %v", h)
+	}
+	if s := b.app.Snapshot().Subscription; s.FetchedAt != b.clock.Now().Unix() {
+		t.Fatalf("subscription = %+v", s)
+	}
+	same(t, b.seen(), []string{EvSubscription})
+	step(0, 2, "fetched a moment ago")
+	b.panel.Status(http.StatusBadGateway)
+	step(time.Hour, 3, "the next interval")
+	step(14*time.Minute, 3, "the panel failed 14 minutes ago")
+	step(time.Minute, 4, "a quarter of the interval after a failure")
+	b.panel.Status(0)
+	b.app.SetOnline(false)
+	step(time.Hour, 4, "no network")
+	b.app.SetOnline(true)
+	b.until("a fetch when the network is back", func() bool { return b.panel.Hits() == 5 })
+	b.until("the fetch is over", func() bool { return b.app.Snapshot().Subscription.FetchedAt == b.clock.Now().Unix() })
+	b.panel.Set(func(_ *[]byte, h http.Header) {
+		h.Del("Profile-Update-Interval")
+		h.Set("Etag", `W/"fixture-2"`)
+	})
+	step(time.Hour, 6, "the last interval the panel named")
+	step(12*time.Hour-time.Minute, 6, "no interval from the panel, a minute before 12 hours")
+	step(time.Minute, 7, "no interval from the panel, 12 hours")
+	if len(b.tunnel.Starts()) != 0 {
+		t.Fatal("a fetch started the tunnel")
+	}
+}
+
+func TestIntervalFromThePanelIsNotShorterThanTheFloorAndOffMeansOff(t *testing.T) {
+	b := newBench(t, func(c *Config) { c.Renew = 3 * time.Hour }).subscribed()
+	b.clock.Advance(3*time.Hour - time.Second)
+	b.app.freshen(false)
+	if b.panel.Hits() != 1 {
+		t.Fatal("fetched before the floor")
+	}
+	b.clock.Advance(time.Second)
+	b.app.freshen(false)
+	if b.panel.Hits() != 2 {
+		t.Fatal("not fetched at the floor")
+	}
+	off := newBench(t, nil).subscribed()
+	off.clock.Advance(100 * time.Hour)
+	off.app.freshen(false)
+	off.app.freshen(true)
+	if off.panel.Hits() != 1 {
+		t.Fatal("fetched though turned off")
+	}
+}
+
+func TestEventsThatStartAFetch(t *testing.T) {
+	b := newBench(t, func(c *Config) {
+		c.Renew = time.Minute
+		c.Watch = 5 * time.Millisecond
+	}).subscribed()
+	b.clock.Advance(time.Hour)
+	if err := b.app.Connect("nl"); err != nil {
+		t.Fatal(err)
+	}
+	b.until("a fetch after the connection is up", func() bool { return b.panel.Hits() == 2 })
+	b.until("the fetch is over", func() bool { return b.app.Snapshot().Subscription.FetchedAt == b.clock.Now().Unix() })
+	b.clock.Advance(time.Hour)
+	b.until("a fetch while connected, with nobody asking", func() bool { return b.panel.Hits() == 3 })
+	b.until("the fetch is over", func() bool { return b.app.Snapshot().Subscription.FetchedAt == b.clock.Now().Unix() })
+	if err := b.app.Disconnect(); err != nil {
+		t.Fatal(err)
+	}
+	b.clock.Advance(time.Hour)
+	time.Sleep(30 * time.Millisecond)
+	if b.panel.Hits() != 3 {
+		t.Fatal("fetched while disconnected with nobody looking")
+	}
+	b.app.Check()
+	b.until("a fetch when the person looks at the app", func() bool { return b.panel.Hits() == 4 })
+	if got := b.tunnel.Starts(); !reflect.DeepEqual(got, []string{"nl"}) {
+		t.Fatalf("starts = %v", got)
+	}
+}
+
+func TestRunningConnectionFollowsTheNewList(t *testing.T) {
+	b := newBench(t, renewing).subscribed()
+	if err := b.app.Connect(Auto); err != nil {
+		t.Fatal(err)
+	}
+	b.seen()
+	refresh := func() {
+		t.Helper()
+		if changed, err := b.app.Refresh(context.Background()); err != nil || !changed {
+			t.Fatalf("changed %v, err %v", changed, err)
+		}
+	}
+	b.list(`W/"same"`, nil)
+	refresh()
+	b.list(`W/"without-nl"`, func(remarks string, _ map[string]json.RawMessage) bool { return !strings.Contains(remarks, "(NL)") })
+	refresh()
+	time.Sleep(30 * time.Millisecond)
+	same(t, b.seen(), []string{EvSubscription, EvServers, EvSubscription, EvServers})
+	if got := b.tunnel.Starts(); !reflect.DeepEqual(got, []string{"обход1"}) {
+		t.Fatalf("a list with the same server in use restarted it: %v", got)
+	}
+	b.tunnel.Kill("обход1")
+	if err := b.app.Check(); err != nil || b.tunnel.Running() != "de" {
+		t.Fatalf("after the fastest of the old list was removed: err %v, running %q", err, b.tunnel.Running())
+	}
+	b.seen()
+	touched := func(mark string) func(string, map[string]json.RawMessage) bool {
+		return func(remarks string, c map[string]json.RawMessage) bool {
+			if strings.Contains(remarks, mark) {
+				c["routing"] = json.RawMessage(`{"domainStrategy":"AsIs","rules":[]}`)
+			}
+			return true
+		}
+	}
+	b.list(`W/"de-changed"`, touched("(DE)"))
+	refresh()
+	b.until("the connection is made again when the settings of its server changed", func() bool {
+		return len(b.tunnel.Starts()) > 2 && b.app.Snapshot().Connection.State == session.Connected
+	})
+	b.tunnel.Kill()
+	if err := b.app.Connect("us"); err != nil {
+		t.Fatal(err)
+	}
+	before := len(b.tunnel.Starts())
+	b.list(`W/"us-changed"`, touched("(US)"))
+	refresh()
+	b.until("a chosen server is started again with its new settings", func() bool {
+		starts := b.tunnel.Starts()
+		c := b.app.Snapshot().Connection
+		return len(starts) == before+1 && starts[before] == "us" && c.State == session.Connected && c.Choice == "us"
+	})
+	b.list(`W/"without-us"`, func(remarks string, _ map[string]json.RawMessage) bool { return !strings.Contains(remarks, "(US)") })
+	refresh()
+	b.until("a chosen server that is gone gives way to the automatic choice", func() bool {
+		c := b.app.Snapshot().Connection
+		return c.State == session.Connected && c.Choice == Auto && c.Server != "us" && b.tunnel.Running() == c.Server
+	})
+}
+
+func TestFailedConnectFetchesTheListAndTriesAgainWhenItIsNew(t *testing.T) {
+	b := newBench(t, renewing)
+	b.list(`W/"fixture-1"`, func(remarks string, _ map[string]json.RawMessage) bool { return strings.Contains(remarks, "(SG)") })
+	b.subscribed()
+	if err := b.app.Connect(Auto); code(err) != session.CodeNoServer {
+		t.Fatalf("err = %v", err)
+	}
+	b.until("a fetch after the failure", func() bool { return b.panel.Hits() == 2 })
+	time.Sleep(30 * time.Millisecond)
+	if c := b.app.Snapshot().Connection; c.State != session.Failed || len(b.tunnel.Starts()) != 0 {
+		t.Fatalf("the same list was tried again: %+v", c)
+	}
+	b.app.freshen(true)
+	if b.panel.Hits() != 2 {
+		t.Fatal("a second fetch within a minute")
+	}
+	b.clock.Advance(time.Minute)
+	b.list(`W/"whole"`, nil)
+	if err := b.app.Connect(Auto); code(err) != session.CodeNoServer {
+		t.Fatalf("err = %v", err)
+	}
+	b.until("the connection comes up by itself with the new list", func() bool {
+		c := b.app.Snapshot().Connection
+		return c.State == session.Connected && c.Server == "обход1"
+	})
+	if b.panel.Hits() != 3 {
+		t.Fatalf("the panel was asked %d times", b.panel.Hits())
 	}
 }
 

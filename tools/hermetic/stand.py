@@ -126,8 +126,25 @@ def config(name, addr):
     }
 
 
+def publish(names, touched=(), every="1"):
+    listed = []
+    for name in names:
+        c = config(name, SERVERS[name])
+        if name in touched:
+            c["routing"]["rules"].append({"type": "field", "domain": ["domain:never.test"], "outboundTag": "direct"})
+        listed.append(c)
+    open(WORK + "/interval.new", "w").write(every)
+    os.replace(WORK + "/interval.new", WORK + "/interval")
+    json.dump(listed, open(WORK + "/sub.json.new", "w"), ensure_ascii=False)
+    os.replace(WORK + "/sub.json.new", WORK + "/sub.json")
+
+
+def fetches(kind):
+    return open(WORK + "/panel.log").read().split().count(kind)
+
+
 def serve_side():
-    json.dump([config(n, a) for n, a in SERVERS.items()], open(WORK + "/sub.json", "w"), ensure_ascii=False)
+    publish(SERVERS)
     run("openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1", "-nodes", "-days", "1", "-keyout", WORK + "/key.pem",
         "-out", WORK + "/cert.pem", "-subj", "/CN=sub.local.test", "-addext", "subjectAltName=DNS:sub.local.test")
     spawn("site", [sys.executable, HERE + "/site.py", WORK], stderr=open(WORK + "/site.err", "w"))
@@ -410,7 +427,7 @@ def platform():
     sock = home + "/core.sock"
     drop = "import os,sys; os.setgroups([]); os.setgid(%s); os.setuid(%s); os.execv(sys.argv[1], sys.argv[1:])" % (app, app)
     env = dict(os.environ, SPOFY_STATE_KEY=KEY, SSL_CERT_FILE=WORK + "/cert.pem")
-    core = spawn("client", [sys.executable, "-c", drop, CORE, "serve", "-state", home + "/state", "-listen", sock, "-platform", "-bypass"],
+    core = spawn("client", [sys.executable, "-c", drop, CORE, "serve", "-state", home + "/state", "-listen", sock, "-platform", "-bypass", "-renew", "2s"],
                  stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=open(WORK + "/core.err", "a"), text=True, bufsize=1, env=env)
     need("platform: the core listens on its socket", "listening" in core.stdout.readline())
     service = spawn("client", [sys.executable, HERE + "/platform.py", sock, app, WORK], stderr=open(WORK + "/platform.err", "w"))
@@ -501,6 +518,41 @@ def platform():
     now = ui.active()
     expect("platform: the network is back: connected on the same server", on["ok"] and now["state"] == "connected" and now["server"] == held and len(asked("tun")) == 1,
            "ms=%d state=%s server=%s" % (on["ms"], now["state"], now["server"]))
+    held = ui.active()["server"]
+    spare = [n for n in SERVERS if n != held][0]
+    mark = len(ui.events)
+
+    def restarts():
+        ui.active()
+        return len([e for e in ui.events[mark:] if e.get("ev") == "connection" and e["connection"]["state"] in ("connecting", "switching", "measuring")])
+    publish(SERVERS, touched=[spare], every="0.0003")
+    r = ui.call("refresh")
+    time.sleep(1)
+    expect("platform: a new list with the same server in use does not restart it", r["ok"] and r.get("changed") is True and restarts() == 0 and ui.active()["server"] == held,
+           "changed=%s server=%s" % (r.get("changed"), ui.active()["server"]))
+    seen = fetches("unchanged")
+    began = time.time()
+    asked_again = until(lambda: fetches("unchanged") >= seen + 2, 15, 0.2)
+    expect("platform: the list is asked for again by its interval with nobody asking; unchanged, it is not downloaded and nothing restarts",
+           bool(asked_again) and restarts() == 0, "s=%.1f for two requests" % (time.time() - began))
+    publish(SERVERS, touched=[spare, held], every="0.0003")
+    began = time.time()
+    renewed = until(lambda: restarts() > 0 and ui.active()["state"] == "connected", 20, 0.2)
+    took = time.time() - began
+    code, body = fetch("http://foreign.test/ip")
+    expect("platform: new settings of the server in use are taken by a reconnect on the same tunnel", bool(renewed) and body in SERVERS.values() and len(asked("tun")) == 1,
+           "s=%.1f seen=%s" % (took, body))
+    held = ui.active()["server"]
+    publish([n for n in SERVERS if n != held], touched=[spare, held], every="0.0003")
+    began = time.time()
+    left = until(lambda: ui.active()["server"] != held and ui.active()["state"] == "connected", 20, 0.2)
+    took = time.time() - began
+    code, body = fetch("http://foreign.test/ip")
+    expect("platform: the server in use is gone from the list: the core moves to one that is there", bool(left) and body == SERVERS.get(ui.active()["server"]) and len(asked("tun")) == 1,
+           "s=%.1f seen=%s" % (took, body))
+    seen = fetches("full")
+    publish(SERVERS)
+    until(lambda: fetches("full") > seen, 15, 0.2)
     noise.kill()
     noise.wait()
     calm.kill()
@@ -513,6 +565,23 @@ def platform():
     rules = inside("client", "ip", "rule", "show")
     gone = until(lambda: device not in links(), 5, 0.1)
     expect("platform: disconnect closes the tunnel and tells the platform", d["ok"] and bool(gone) and len(asked("untun")) == 1 and "lookup 100" not in rules, "ms=%d" % d["ms"])
+    lonely = sorted(SERVERS)[0]
+    publish([lonely])
+    r = ui.call("refresh")
+    run("ip", "-n", "hub", "link", "set", "v-" + lonely, "down")
+    publish(SERVERS)
+    time.sleep(2.2)
+    c = ui.call("connect")
+    began = time.time()
+    healed = until(lambda: ui.active()["state"] == "connected", 30, 0.2)
+    took = time.time() - began
+    code, body = fetch("http://foreign.test/ip")
+    expect("platform: the only server of an old list is silent: the core asks for the list, finds a new one and connects by itself",
+           r.get("changed") is True and not c["ok"] and c.get("code") == "no_server" and bool(healed) and ui.active()["server"] != lonely and body == SERVERS.get(ui.active()["server"]),
+           "code=%s s=%.1f server=%s" % (c.get("code"), took, ui.active()["server"]))
+    run("ip", "-n", "hub", "link", "set", "v-" + lonely, "up")
+    ui.call("disconnect")
+    until(lambda: "spofy0" not in links(), 5, 0.1)
     open(WORK + "/platform.refuse", "w").close()
     c = ui.call("connect")
     now = ui.active()

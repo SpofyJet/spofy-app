@@ -70,6 +70,7 @@ type Config struct {
 	Parallel int
 	Watch    time.Duration
 	Quiet    time.Duration
+	Renew    time.Duration
 }
 
 type Connection struct {
@@ -150,11 +151,14 @@ type App struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	online atomic.Bool
+	due    atomic.Int64
 
 	mu      sync.Mutex
 	conn    Connection
 	hearers map[int]func(Event)
 	next    int
+	renews  bool
+	tried   time.Time
 }
 
 func New(cfg Config) *App {
@@ -170,9 +174,13 @@ func New(cfg Config) *App {
 	if cfg.Fresh == 0 {
 		cfg.Fresh = 6 * time.Hour
 	}
+	if cfg.Renew == 0 {
+		cfg.Renew = 15 * time.Minute
+	}
 	a := &App{cfg: cfg, hearers: map[int]func(Event){}}
 	a.ctx, a.cancel = context.WithCancel(context.Background())
 	a.online.Store(true)
+	a.plan(cfg.Store.Get(), false)
 	a.conn = Connection{State: session.Idle, Choice: a.choice(cfg.Store.Get())}
 	a.sess = session.New(session.Options{
 		Tunnel:    cfg.Tunnel,
@@ -211,6 +219,9 @@ func (a *App) watch() {
 		}
 		if now.State != session.Connected && now.State != session.Stalled {
 			continue
+		}
+		if at := a.due.Load(); at != 0 && a.cfg.Now().UnixNano() >= at {
+			go a.freshen(false)
 		}
 		if w.step(a.flow(), a.cfg.Quiet, time.Now()) {
 			a.sess.Suspect(a.ctx)
@@ -275,14 +286,76 @@ func (a *App) Refresh(ctx context.Context) (bool, error) {
 			}
 		})
 		if err == nil {
-			a.emit(Event{Ev: EvSubscription, Subscription: subscription(a.cfg.Store.Get())})
+			now := a.cfg.Store.Get()
+			a.plan(now, false)
+			a.emit(Event{Ev: EvSubscription, Subscription: subscription(now)})
 		}
 		return false, err
 	}
 	if err != nil {
+		a.plan(st, true)
 		return false, fetchError(err)
 	}
 	return true, a.adopt(st.URL, p)
+}
+
+const renewDefault = 12 * time.Hour
+
+func (a *App) plan(st store.State, failed bool) {
+	if st.URL == "" || st.Profile == nil || a.cfg.Renew < 0 {
+		a.due.Store(0)
+		return
+	}
+	every := st.Profile.UpdateEvery
+	if every <= 0 {
+		every = renewDefault
+	}
+	every = max(every, a.cfg.Renew)
+	at := st.FetchedAt.Add(every)
+	if failed {
+		at = a.cfg.Now().Add(max(every/4, a.cfg.Renew))
+	}
+	a.due.Store(at.UnixNano())
+}
+
+func (a *App) freshen(forced bool) {
+	now := a.cfg.Now()
+	at := a.due.Load()
+	if at == 0 || !a.online.Load() || (!forced && now.UnixNano() < at) {
+		return
+	}
+	a.mu.Lock()
+	busy := a.renews || now.Sub(a.tried) < min(a.cfg.Renew, time.Minute)
+	if !busy {
+		a.renews, a.tried = true, now
+	}
+	a.mu.Unlock()
+	if busy {
+		return
+	}
+	ctx, cancel := context.WithTimeout(a.ctx, time.Minute)
+	changed, _ := a.Refresh(ctx)
+	cancel()
+	a.mu.Lock()
+	a.renews = false
+	a.mu.Unlock()
+	if changed && forced && a.sess.State() == session.Failed {
+		a.renew()
+	}
+}
+
+func (a *App) renew() {
+	st := a.cfg.Store.Get()
+	if st.Profile == nil {
+		return
+	}
+	pinned := ""
+	if has(st.Profile, st.Server) {
+		pinned = st.Server
+	}
+	if cands := a.candidates(st); len(cands) > 0 {
+		a.sess.Renew(a.ctx, cands, pinned)
+	}
 }
 
 func (a *App) Unsubscribe() error {
@@ -293,6 +366,7 @@ func (a *App) Unsubscribe() error {
 	if err != nil {
 		return err
 	}
+	a.plan(a.cfg.Store.Get(), false)
 	a.setChoice(Auto)
 	a.emit(Event{Ev: EvSubscription})
 	a.emit(Event{Ev: EvServers, Servers: []Server{}})
@@ -330,6 +404,7 @@ func (a *App) Disconnect() error {
 }
 
 func (a *App) Check() error {
+	go a.freshen(false)
 	return outcome(a.sess.Check(a.ctx))
 }
 
@@ -433,9 +508,13 @@ func (a *App) adopt(address string, p *sub.Profile) error {
 		return err
 	}
 	st := a.cfg.Store.Get()
+	a.plan(st, false)
 	a.setChoice(a.choice(st))
 	a.emit(Event{Ev: EvSubscription, Subscription: subscription(st)})
 	a.emit(Event{Ev: EvServers, Servers: a.servers(st)})
+	if a.sess.State() != session.Idle && a.sess.Rebase(a.candidates(st)) {
+		go a.renew()
+	}
 	return nil
 }
 
@@ -476,6 +555,12 @@ func (a *App) onState(e session.Event) {
 	a.mu.Unlock()
 	if !same {
 		a.emit(Event{Ev: EvConnection, Connection: conn})
+	}
+	switch {
+	case e.State == session.Connected:
+		go a.freshen(false)
+	case e.State == session.Failed && (e.Code == session.CodeNoServer || e.Code == session.CodeUnreachable):
+		go a.freshen(true)
 	}
 }
 

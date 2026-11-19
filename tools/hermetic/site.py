@@ -5,8 +5,14 @@ NAMES = {
     "www.gstatic.com": "10.77.1.2", "cp.cloudflare.com": "10.77.1.2", "foreign.test": "10.77.1.2",
     "local.test": "10.77.2.2", "sub.local.test": "10.77.2.2",
 }
-BODY = open(WORK + "/sub.json", "rb").read()
-ETAG = 'W/"%s"' % hashlib.sha256(BODY).hexdigest()[:16]
+
+
+def published():
+    body = open(WORK + "/sub.json", "rb").read()
+    every = open(WORK + "/interval").read().strip()
+    return body, every, 'W/"%s"' % hashlib.sha256(body + every.encode()).hexdigest()[:16]
+
+
 asked = open(WORK + "/dns.log", "a", buffering=1)
 hits = open(WORK + "/panel.log", "a", buffering=1)
 
@@ -59,12 +65,13 @@ class Site(http.server.BaseHTTPRequestHandler):
             self.reply(200, self.client_address[0].encode())
         elif self.path == "/sub/HERMETICTOKEN" and self.server.server_port == 443:
             usage = ("Subscription-Userinfo", "upload=1; download=2; total=1000; expire=1798761600")
-            if self.headers.get("If-None-Match") == ETAG:
+            body, every, etag = published()
+            if self.headers.get("If-None-Match") == etag:
                 hits.write("unchanged\n")
                 self.reply(304, headers=[usage])
             else:
                 hits.write("full\n")
-                self.reply(200, BODY, [("Content-Type", "application/json"), ("Etag", ETAG), usage, ("Profile-Update-Interval", "1"), ("Profile-Title", "Hermetic")])
+                self.reply(200, body, [("Content-Type", "application/json"), ("Etag", etag), usage, ("Profile-Update-Interval", every), ("Profile-Title", "Hermetic")])
         else:
             self.reply(404)
 

@@ -79,6 +79,7 @@ class CoreService : VpnService() {
 
     override fun onCreate() {
         super.onCreate()
+        tell(now)
         thread(name = "core") {
             var failures = 0
             var runs = 0

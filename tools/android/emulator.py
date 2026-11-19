@@ -441,6 +441,8 @@ def scenario():
     took = time.time() - began
     shell("cmd statusbar expand-settings")
     time.sleep(2)
+    shell("input swipe 60 320 300 320 200")
+    time.sleep(1)
     screen("7-tile")
     shell("cmd statusbar collapse")
     expect("the quick settings tile turns the VPN on", bool(up), "s=%.1f" % took)
