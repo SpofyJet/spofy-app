@@ -1,11 +1,14 @@
 package app.spofy
 
+import android.Manifest
 import android.app.Activity
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
+import android.content.pm.PackageManager
 import android.net.VpnService
+import android.os.Build
 import android.os.IBinder
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -58,6 +61,7 @@ class MainActivity : FlutterActivity() {
     private fun prepare(result: MethodChannel.Result) {
         val consent = VpnService.prepare(this)
         if (consent == null) {
+            notices()
             result.success(true)
             return
         }
@@ -73,6 +77,15 @@ class MainActivity : FlutterActivity() {
         }
         asking?.success(resultCode == Activity.RESULT_OK)
         asking = null
+        if (resultCode == Activity.RESULT_OK) {
+            notices()
+        }
+    }
+
+    private fun notices() {
+        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), NOTICES)
+        }
     }
 
     override fun onDestroy() {
@@ -86,5 +99,6 @@ class MainActivity : FlutterActivity() {
 
     private companion object {
         const val CONSENT = 7101
+        const val NOTICES = 7102
     }
 }

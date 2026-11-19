@@ -38,8 +38,16 @@ class CoreService : VpnService() {
     private var closing = false
 
     @Volatile
-    private var front = false
+    private var shown = false
+
+    @Volatile
+    private var wanted = false
+
+    @Volatile
+    private var state = "idle"
     private var watching = false
+    private var ready = false
+    private val waiting = ArrayDeque<JSONObject>()
 
     private val network = object : ConnectivityManager.NetworkCallback() {
         private var current: Network? = null
@@ -48,6 +56,7 @@ class CoreService : VpnService() {
             note("network $network is the default")
             current = network
             request("online") { it.put("online", true) }
+            again()
         }
 
         override fun onLost(network: Network) {
@@ -62,6 +71,7 @@ class CoreService : VpnService() {
     private val screen = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             request("check")
+            again()
         }
     }
 
@@ -69,10 +79,11 @@ class CoreService : VpnService() {
         super.onCreate()
         thread(name = "core") {
             var failures = 0
+            var runs = 0
             while (!closing && failures < RESTARTS) {
                 val began = System.nanoTime()
                 try {
-                    serve()
+                    serve(runs++ > 0)
                 } catch (e: Exception) {
                     if (BuildConfig.DEBUG) {
                         Log.e(TAG, "the core stopped", e)
@@ -84,6 +95,8 @@ class CoreService : VpnService() {
                     Thread.sleep(300L * failures)
                 }
             }
+            wanted = false
+            lower()
         }
     }
 
@@ -92,13 +105,23 @@ class CoreService : VpnService() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == DISCONNECT) {
-            request("disconnect")
+        when (intent?.action) {
+            DISCONNECT -> {
+                wanted = false
+                request("disconnect")
+            }
+            SERVICE_INTERFACE -> {
+                wanted = true
+                front(getString(R.string.state_connecting), "")
+                watch(true)
+                request("connect")
+            }
         }
         return START_NOT_STICKY
     }
 
     override fun onRevoke() {
+        wanted = false
         request("disconnect")
     }
 
@@ -108,17 +131,17 @@ class CoreService : VpnService() {
         super.onDestroy()
     }
 
-    private fun serve() {
-        val state = File(filesDir, "state")
+    private fun serve(restarted: Boolean) {
+        val folder = File(filesDir, "state")
         val path = socket(this)
         path.delete()
         val launcher = ProcessBuilder(
             File(applicationInfo.nativeLibraryDir, "libspofycore.so").path,
-            "serve", "-state", state.path, "-listen", path.path, "-platform", "-bypass",
+            "serve", "-state", folder.path, "-listen", path.path, "-platform", "-bypass", "-log", if (BuildConfig.DEBUG) "info" else "warning",
             "-hwid", Keys.device(this), "-os", "Android", "-os-version", Build.VERSION.RELEASE ?: "", "-model", Build.MODEL ?: "",
         )
         val env = launcher.environment()
-        env["SPOFY_STATE_KEY"] = Keys.state(this, state)
+        env["SPOFY_STATE_KEY"] = Keys.state(this, folder)
         env["TMPDIR"] = cacheDir.path
         env["HOME"] = filesDir.path
         val roots = ROOTS.filter { File(it).isDirectory }
@@ -143,14 +166,23 @@ class CoreService : VpnService() {
             } catch (e: IOException) {
             }
         }
-        val ready = process.inputStream.bufferedReader().readLine()
-        if (ready == null || !ready.contains("listening")) {
+        val first = process.inputStream.bufferedReader().readLine()
+        if (first == null || !first.contains("listening")) {
             throw IOException("the core did not start")
         }
         val socket = LocalSocket()
         socket.connect(LocalSocketAddress(path.path, LocalSocketAddress.Namespace.FILESYSTEM))
         link = socket
         send(JSONObject().put("id", 1).put("op", "platform"))
+        asks.execute {
+            ready = true
+            while (true) {
+                send(waiting.removeFirstOrNull() ?: break)
+            }
+        }
+        if (restarted && wanted) {
+            request("connect")
+        }
         val lines = socket.inputStream.bufferedReader()
         while (true) {
             val line = lines.readLine() ?: break
@@ -159,7 +191,10 @@ class CoreService : VpnService() {
     }
 
     private fun release() {
-        lower()
+        asks.execute { ready = false }
+        if (closing || !wanted) {
+            lower()
+        }
         try {
             link?.close()
         } catch (e: IOException) {
@@ -186,9 +221,14 @@ class CoreService : VpnService() {
     private fun handle(message: JSONObject) {
         if (!message.has("ask")) {
             if (message.optString("ev") == "connection") {
-                val state = message.getJSONObject("connection").optString("state")
+                state = message.getJSONObject("connection").optString("state")
                 note("state $state")
-                show(state)
+                if (state == "idle") {
+                    wanted = false
+                    lower()
+                } else {
+                    show(state)
+                }
             } else if (message.has("re") && !message.optBoolean("ok")) {
                 note("request ${message.optInt("re")} failed: ${message.optString("code")}")
             }
@@ -199,7 +239,9 @@ class CoreService : VpnService() {
         when (message.optString("op")) {
             "tun" -> tunnel(answer, message.getJSONObject("tun"))
             "untun" -> {
-                lower()
+                if (!wanted) {
+                    lower()
+                }
                 send(answer.put("ok", true))
             }
             else -> send(answer.put("ok", false).put("error", "the platform does not know this request"))
@@ -255,28 +297,46 @@ class CoreService : VpnService() {
     private fun raise() {
         try {
             startService(Intent(this, CoreService::class.java))
-            val notice = notice(getString(R.string.state_connecting), "")
+        } catch (e: Exception) {
+            if (BuildConfig.DEBUG) {
+                Log.e(TAG, "not started", e)
+            }
+        }
+        if (!shown) {
+            front(getString(R.string.state_connecting), "")
+        }
+        watch(true)
+    }
+
+    private fun front(title: String, text: String) {
+        try {
+            val notice = notice(title, text)
             if (Build.VERSION.SDK_INT >= 34) {
                 startForeground(NOTICE, notice, ServiceInfo.FOREGROUND_SERVICE_TYPE_SYSTEM_EXEMPTED)
             } else {
                 startForeground(NOTICE, notice)
             }
-            front = true
+            shown = true
         } catch (e: Exception) {
             if (BuildConfig.DEBUG) {
                 Log.e(TAG, "no foreground", e)
             }
         }
-        watch(true)
     }
 
     private fun lower() {
         watch(false)
-        if (front) {
-            front = false
+        if (shown) {
+            shown = false
             stopForeground(STOP_FOREGROUND_REMOVE)
         }
         stopSelf()
+    }
+
+    private fun again() {
+        if (wanted && state == "failed") {
+            request("connect")
+        }
     }
 
     @Synchronized
@@ -313,10 +373,15 @@ class CoreService : VpnService() {
             "switching" -> R.string.state_switching
             "stalled" -> R.string.state_stalled
             "offline" -> R.string.state_offline
+            "failed" -> R.string.state_failed
             else -> return
         }
-        if (front) {
-            val text = if (state == "stalled") getString(R.string.stalled_hint) else ""
+        if (shown) {
+            val text = when (state) {
+                "stalled" -> getString(R.string.stalled_hint)
+                "failed" -> getString(R.string.failed_hint)
+                else -> ""
+            }
             getSystemService(NotificationManager::class.java).notify(NOTICE, notice(getString(title), text))
         }
     }
@@ -356,7 +421,14 @@ class CoreService : VpnService() {
             val id = synchronized(writing) { ++sent }
             val message = JSONObject().put("id", id).put("op", op).also(fill)
             note("request $message")
-            send(message)
+            if (ready) {
+                send(message)
+            } else {
+                waiting.addLast(message)
+                while (waiting.size > PENDING) {
+                    waiting.removeFirst()
+                }
+            }
         }
     }
 
@@ -390,6 +462,7 @@ class CoreService : VpnService() {
         private const val CHANNEL = "state"
         private const val NOTICE = 1
         private const val RESTARTS = 5
+        private const val PENDING = 8
         private val ROOTS = listOf("/apex/com.android.conscrypt/cacerts", "/system/etc/security/cacerts")
 
         fun socket(context: Context) = File(context.filesDir, "core.sock")

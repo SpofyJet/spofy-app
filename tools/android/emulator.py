@@ -309,6 +309,13 @@ def scenario():
     screen("3-notification")
     shell("cmd statusbar collapse")
     print("memory while connected, MB: %s" % memory(), flush=True)
+    rounds = []
+    for _ in range(3):
+        k = ui.call("check")
+        rounds.append((k["ms"], ui.active()["delayMs"]))
+    m = ui.call("measure")
+    servers = ([e for e in ui.events if e.get("ev") == "servers"] or [{"servers": []}])[-1]["servers"]
+    print("check through the tunnel (took ms, delay ms): %s; measured outside the tunnel while it is up: ms=%d %s" % (rounds, m["ms"], {x["id"]: x["delayMs"] for x in servers}), flush=True)
 
     other = [n for n in SERVERS if n != first][0]
     c = ui.call("connect", server=other)
@@ -374,6 +381,21 @@ def scenario():
     key = shell("cat %s/files/key | wc -c" % DATA)
     expect("the key file holds only the wrapped key", key.strip() == "60", "bytes=%s" % key.strip())
     ui.s.close()
+
+    shell("am force-stop %s" % PACKAGE)
+    time.sleep(1)
+    asked = shell("am start-foreground-service -a android.net.VpnService -n %s/.CoreService" % PACKAGE)
+    began = time.time()
+    up = until(lambda: tunnel() != "" and through(), 40, 0.2)
+    alive = [args.strip() for _, args in processes().values()]
+    service = shell("dumpsys activity services %s/.CoreService" % PACKAGE)
+    expect("started by the system without the interface: the VPN comes up by itself", bool(up) and PACKAGE not in alive and "isForeground=true" in service,
+           "s=%.1f processes=%d %s" % (time.time() - began, len(alive), asked[-120:]))
+    later = Channel(9099)
+    d = later.call("disconnect")
+    gone = until(lambda: tunnel() == "" and "isForeground=true" not in shell("dumpsys activity services %s/.CoreService" % PACKAGE), 10)
+    expect("disconnect after a start by the system removes the tunnel and the notification", d["ok"] and bool(gone))
+    later.s.close()
 
     if RELEASE:
         adb("uninstall", PACKAGE, limit=120)
