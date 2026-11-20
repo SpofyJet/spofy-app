@@ -3,13 +3,14 @@ module github.com/SpofyJet/spofy-app/core
 go 1.27
 
 require (
+	github.com/tailscale/wf v0.0.0-20240214030419-6fbb0a674ee6
 	github.com/xtls/xray-core v0.0.0-00010101000000-000000000000
 	golang.org/x/sys v0.49.0
 )
 
 require (
+	github.com/BurntSushi/toml v1.2.1 // indirect
 	github.com/apernet/quic-go v0.65.1-0.20261109005002-2895f039137a // indirect
-	github.com/ghodss/yaml v1.0.1-0.20220118164431-d8423dcdf344 // indirect
 	github.com/google/gopacket v1.1.19 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
@@ -24,7 +25,6 @@ require (
 	github.com/libp2p/go-netroute v0.2.1 // indirect
 	github.com/miekg/dns v1.1.73 // indirect
 	github.com/molecule-man/go-brrr v1.2.0 // indirect
-	github.com/pelletier/go-toml v1.9.5 // indirect
 	github.com/pion/dtls/v3 v3.1.5 // indirect
 	github.com/pion/logging v0.2.4 // indirect
 	github.com/pion/stun/v3 v3.1.7 // indirect
@@ -42,16 +42,20 @@ require (
 	golang.org/x/crypto v0.58.0 // indirect
 	golang.org/x/crypto/x509roots/fallback v0.0.0-20261020153306-9f2b28d4331a // indirect
 	golang.org/x/exp v0.0.0-20240506185415-9bf2ced13842 // indirect
+	golang.org/x/exp/typeparams v0.0.0-20221208152030-732eee02a75a // indirect
+	golang.org/x/mod v0.41.0 // indirect
 	golang.org/x/net v0.62.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect
 	golang.org/x/text v0.43.0 // indirect
+	golang.org/x/tools v0.51.0 // indirect
+	golang.org/x/tools/go/expect v0.1.1-deprecated // indirect
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
 	golang.zx2c4.com/wireguard v0.0.0-20250521234502-f333402bd9cb // indirect
 	golang.zx2c4.com/wireguard/windows v1.1.1 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260817212433-ac3dfec99bb1 // indirect
 	google.golang.org/grpc v1.85.0 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
-	gopkg.in/yaml.v2 v2.4.0 // indirect
+	honnef.co/go/tools v0.4.5 // indirect
 	layeh.com/gopher-luar v1.0.11 // indirect
 	lukechampine.com/blake3 v1.4.1 // indirect
 )

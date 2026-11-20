@@ -1,6 +1,8 @@
 name: core
 on:
   push:
+    branches-ignore:
+      - 'wip/**'
   pull_request:
 jobs:
   test:
@@ -43,31 +45,6 @@ jobs:
           FLUTTER_CACHE="$RUNNER_TEMP/flutter-cache" spofy-app/tools/app-check.sh
       - timeout-minutes: 10
         run: FLUTTER_CACHE="$RUNNER_TEMP/flutter-cache" spofy-app/tools/app-stand.sh
-  windows:
-    runs-on: windows-latest
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          path: spofy-app
-      - id: rev
-        run: echo "rev=$(cat spofy-app/core/XRAY_REV)" >> "$GITHUB_OUTPUT"
-      - uses: actions/checkout@v7
-        with:
-          repository: SpofyJet/xray-core
-          ref: ${{ steps.rev.outputs.rev }}
-          path: spofy-xray-core
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: spofy-app/core/go.mod
-          cache-dependency-path: spofy-app/core/go.sum
-      - working-directory: spofy-app/core
-        timeout-minutes: 25
-        run: |
-          go vet ./...
-          CGO_ENABLED=1 go test -race -count=1 ./...
   apk:
     runs-on: ubuntu-latest
     timeout-minutes: 45

@@ -151,6 +151,7 @@ func tunnel(mode string, port int, level string) (xcfg.Options, error) {
 	opts := xcfg.Options{Mode: xcfg.ModeTun, LogLevel: level, Tun: xcfg.Tun{
 		Name: "spofy0", MTU: 1500, Gateway: []string{"172.19.0.1/30"}, Routes: []string{"0.0.0.0/1", "128.0.0.0/1"},
 	}}
+	desktop(&opts.Tun)
 	switch mode {
 	case "tun":
 	case "proxy":

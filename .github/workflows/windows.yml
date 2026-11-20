@@ -1,0 +1,44 @@
+name: windows
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      kills:
+        default: '100'
+jobs:
+  core:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: spofy-app
+      - id: rev
+        run: echo "rev=$(cat spofy-app/core/XRAY_REV)" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v7
+        with:
+          repository: SpofyJet/xray-core
+          ref: ${{ steps.rev.outputs.rev }}
+          path: spofy-xray-core
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: spofy-app/core/go.mod
+          cache-dependency-path: spofy-app/core/go.sum
+      - if: ${{ !startsWith(github.ref, 'refs/heads/wip/') }}
+        working-directory: spofy-app/core
+        timeout-minutes: 25
+        run: |
+          go vet ./...
+          CGO_ENABLED=1 go test -race -count=1 ./...
+      - working-directory: spofy-app/core
+        run: |
+          mkdir -p ../dist
+          CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -checklinkname=0" -o ../dist/spofy-core.exe ./cmd/spofy-core
+      - working-directory: spofy-app
+        timeout-minutes: 15
+        run: |
+          python tools/windows/wintun.py amd64 dist
+          SPOFY_KILLS=${{ inputs.kills }} python tools/windows/stand.py dist/spofy-core.exe
