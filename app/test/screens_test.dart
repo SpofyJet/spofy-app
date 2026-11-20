@@ -10,6 +10,7 @@ import 'package:spofy/state/apps.dart';
 import 'package:spofy/state/model.dart';
 import 'package:spofy/ui/app.dart';
 import 'package:spofy/ui/home.dart';
+import 'package:spofy/ui/servers.dart';
 import 'package:spofy/ui/settings.dart';
 import 'package:spofy/ui/strings.dart';
 import 'package:spofy/ui/subscription.dart';
@@ -143,6 +144,78 @@ void main() {
     await show(tester, home(VpnState.connected, server: 'nl', delay: 38, choice: 'nl'), desktop);
     await open(tester, S.server);
     await golden(tester, 'servers_desktop');
+  });
+
+  testWidgets('notes that come with the servers stand after them as one row that opens what they name', (tester) async {
+    const notes = [
+      '🚫 В вашем тарифе нет этих серверов',
+      '🏴‍☠️ Они в тарифе «Больше»',
+      '👉 Сменить тариф в боте',
+      '🤖 @example_bot',
+    ];
+    final opened = <String>[];
+    final scene = Scene(
+      subscription: subscription(notes: notes),
+      servers: servers(),
+      browse: opened.add,
+    );
+    await show(tester, scene, phone);
+    await open(tester, S.server);
+    final title = find.text('В вашем тарифе нет этих серверов');
+    await tester.scrollUntilVisible(
+      title,
+      200,
+      scrollable: find.descendant(of: find.byType(ServersScreen), matching: find.byType(Scrollable)),
+    );
+    await tester.pump(const Duration(milliseconds: 300));
+    await golden(tester, 'servers_notes_360');
+    expect(
+      find.textContaining('Они в тарифе «Больше»\nСменить тариф в боте\n@example_bot', findRichText: true),
+      findsOneWidget,
+    );
+    expect(tester.widgetList<Tile>(find.byType(Tile)).where((t) => t.title == 'Сингапур'), hasLength(1));
+    await tester.tap(title);
+    await tester.pump();
+    expect(opened, ['https://t.me/example_bot']);
+    expect(scene.transport.sent.where((line) => line.contains('"op":"connect"')), isEmpty);
+  });
+
+  testWidgets('notes without a link open the subscription page, and nothing is offered when no page can be opened', (
+    tester,
+  ) async {
+    for (final (page, browse, want) in [
+      ('https://sub.example.test/page', true, 'https://sub.example.test/page'),
+      ('http://sub.example.test/page', true, null),
+      ('https://sub.example.test/page', false, null),
+    ]) {
+      final opened = <String>[];
+      final scene = Scene(
+        subscription: subscription(notes: const ['⛔ Трафик на эти серверы закончился'], page: page),
+        servers: servers().take(2).toList(),
+        browse: browse ? opened.add : null,
+      );
+      await show(tester, scene, phone);
+      await open(tester, S.server);
+      final row = find.text('Трафик на эти серверы закончился');
+      expect(row, findsOneWidget);
+      expect(find.ancestor(of: row, matching: find.byType(Pressable)), want == null ? findsNothing : findsOneWidget);
+      if (want != null) {
+        await tester.tap(row);
+        expect(opened, [want]);
+      }
+    }
+  });
+
+  test('a note keeps its own words: only the marks in front are dropped, and a link is found in it', () {
+    expect(S.said(['🤖 @example_bot', '🏴‍☠️ Они «в» тарифе', '  ', '✅', '1️⃣ Первый']), [
+      '@example_bot',
+      'Они «в» тарифе',
+      '1️⃣ Первый',
+    ]);
+    expect(noteLink(['Нет ссылки', 'Пишите @example_bot']), 'https://t.me/example_bot');
+    expect(noteLink(['Продлить: web.example.test/pay']), 'https://web.example.test/pay');
+    expect(noteLink(['Продлить: https://web.example.test']), 'https://web.example.test');
+    expect(noteLink(['@abc слишком коротко', 'и т.д.']), null);
   });
 
   testWidgets('choosing a server asks the core to connect to it and returns home', (tester) async {

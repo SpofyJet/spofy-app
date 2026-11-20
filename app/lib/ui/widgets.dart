@@ -437,6 +437,23 @@ class CountryMark extends StatelessWidget {
   }
 }
 
+class GlyphMark extends StatelessWidget {
+  const GlyphMark(this.glyph, {super.key});
+
+  final Glyph glyph;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: const BoxDecoration(color: Ink.raised, borderRadius: BorderRadius.all(Radius.circular(12))),
+      child: SizedBox.square(
+        dimension: 40,
+        child: Center(child: GlyphIcon(glyph, color: Ink.muted, size: 20)),
+      ),
+    );
+  }
+}
+
 class RemainderMark extends StatelessWidget {
   const RemainderMark(this.left, {super.key, this.low = false});
 

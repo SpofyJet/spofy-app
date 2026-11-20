@@ -26,6 +26,23 @@ List<Server> ordered(List<Server> servers) {
   return [for (final (_, s) in indexed) s];
 }
 
+String? noteLink(List<String> lines) {
+  for (final line in lines) {
+    final handle = RegExp(r'(?:^|\s)@([A-Za-z0-9_]{5,32})\b').firstMatch(line);
+    if (handle != null) {
+      return 'https://t.me/${handle.group(1)}';
+    }
+    final address = RegExp(
+      r'\b(?:https://)?((?:[a-z0-9-]+\.)+[a-z]{2,}(?:/\S*)?)',
+      caseSensitive: false,
+    ).firstMatch(line);
+    if (address != null) {
+      return 'https://${address.group(1)}';
+    }
+  }
+  return null;
+}
+
 class ServersScreen extends StatelessWidget {
   const ServersScreen({super.key, required this.model, required this.onDone});
 
@@ -47,6 +64,11 @@ class ServersScreen extends StatelessWidget {
           final servers = ordered(model.snapshot.servers);
           final failure = model.failure;
           final measuring = model.running(Task.measure);
+          final subscription = model.snapshot.subscription;
+          final notes = S.said(subscription?.notes ?? const []);
+          final page = Uri.tryParse(subscription?.webPageUrl ?? '');
+          final browse = model.browse;
+          final target = noteLink(notes) ?? (page != null && page.isScheme('https') ? page.toString() : null);
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -63,7 +85,7 @@ class ServersScreen extends StatelessWidget {
               Expanded(
                 child: ListView.separated(
                   padding: const EdgeInsets.fromLTRB(Ink.gutter, 4, Ink.gutter, 16),
-                  itemCount: servers.length + 1 + (failure?.task == Task.measure ? 1 : 0),
+                  itemCount: servers.length + 1 + (failure?.task == Task.measure ? 1 : 0) + (notes.isEmpty ? 0 : 1),
                   separatorBuilder: (_, _) => const SizedBox(height: 8),
                   itemBuilder: (context, index) {
                     var at = index;
@@ -81,6 +103,15 @@ class ServersScreen extends StatelessWidget {
                         selected: connection.auto,
                         arrow: false,
                         onTap: () => _pick(autoChoice),
+                      );
+                    }
+                    if (at > servers.length) {
+                      return Tile(
+                        leading: const GlyphMark(Glyph.warning),
+                        title: notes.first,
+                        subtitle: notes.skip(1).join('\n'),
+                        wrap: true,
+                        onTap: browse == null || target == null ? null : () => browse(target),
                       );
                     }
                     final server = servers[at - 1];

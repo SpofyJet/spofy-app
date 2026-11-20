@@ -82,11 +82,14 @@ abstract final class S {
       s.stopped ? stopAction(s) : (lifetime(s) || s.expire <= 0 ? manage : renew);
 
   static String _said(List<String> notes) {
-    final lines = [
-      for (final note in notes.take(3)) note.replaceFirst(RegExp(r'^[^\p{L}\p{N}]+', unicode: true), '').trim(),
-    ].where((line) => line.isNotEmpty);
+    final lines = said(notes).take(3);
     return lines.isEmpty ? 'Причина — на странице подписки' : lines.join('. ');
   }
+
+  static List<String> said(List<String> notes) =>
+      [for (final note in notes) note.replaceFirst(RegExp(r'^[^\p{L}\p{N}@«"(]+', unicode: true), '').trim()]
+          .where((line) => line.isNotEmpty)
+          .toList();
 
   static const remove = 'Удалить подписку';
   static const removeConfirm = 'Удалить подписку с этого устройства?';
