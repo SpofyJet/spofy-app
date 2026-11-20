@@ -4,3 +4,4 @@ dist/
 *.log
 .DS_Store
 docs/research/
+__pycache__/
