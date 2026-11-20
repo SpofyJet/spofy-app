@@ -4,6 +4,7 @@ import ctypes.wintypes
 import http.server
 import json
 import os
+import re
 import shutil
 import signal
 import socket
@@ -22,6 +23,7 @@ USER = "00000000-0000-4000-8000-000000000001"
 SITE = "http://cp.cloudflare.com/generate_204"
 BARE = "http://1.1.1.1/"
 KILLS = int(os.environ.get("SPOFY_KILLS") or 12)
+SWITCHES = int(os.environ.get("SPOFY_SWITCHES") or 10)
 failed = []
 
 
@@ -39,6 +41,11 @@ def ps(command):
 def fetch(limit=15):
     r = subprocess.run(["curl.exe", "-s", "-m", str(limit), "-o", "NUL", "-w", "%{http_code}", SITE], capture_output=True, text=True)
     return r.stdout.strip()
+
+
+def attempt(limit):
+    r = subprocess.run(["curl.exe", "-s", "-m", str(limit), "-o", "NUL", "-w", "%{http_code} %{time_namelookup} %{time_connect}", SITE], capture_output=True, text=True)
+    return [r.returncode] + r.stdout.split()
 
 
 def past(source, limit=4):
@@ -110,10 +117,17 @@ def server(port, uplink):
     return s
 
 
-def listed(port):
-    path = os.path.join(WORK, "sub.json")
-    entry = {
-        "remarks": "\U0001F3F3 (LOCAL)",
+def listed(port, *more):
+    entries = [entry_for(p, "\U0001F3F3 (LOCAL %d)" % (n + 1) if more else "\U0001F3F3 (LOCAL)") for n, p in enumerate((port,) + more)]
+    path = os.path.join(WORK, "sub%d.json" % len(entries))
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(entries, f, ensure_ascii=False)
+    return path
+
+
+def entry_for(port, remarks):
+    return {
+        "remarks": remarks,
         "dns": {"servers": ["8.8.8.8"], "queryStrategy": "UseIPv4"},
         "inbounds": [{"tag": "socks", "port": 10808, "listen": "127.0.0.1", "protocol": "socks", "settings": {"udp": True, "auth": "noauth"}}],
         "outbounds": [
@@ -125,9 +139,6 @@ def listed(port):
         ],
         "routing": {"domainStrategy": "AsIs", "rules": [{"type": "field", "port": "53", "outboundTag": "dns-out"}]},
     }
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump([entry], f, ensure_ascii=False)
-    return path
 
 
 def adapter():
@@ -340,7 +351,61 @@ def kill_service():
 source_address = [""]
 
 
-def service_scenario(source, remote, sub):
+def seen_on(servers):
+    return [len([line for line in s.lines() if "cp.cloudflare.com" in line]) for s in servers]
+
+
+def received():
+    value = ps("(Get-NetAdapterStatistics -Name spofy0 -ErrorAction SilentlyContinue).ReceivedBytes")
+    return int(value) if value.isdigit() else -1
+
+
+def switch_scenario(ui, servers):
+    hello = ui.ask("hello")
+    ids = [s["id"] for s in ((hello or {}).get("snapshot") or {}).get("servers") or []]
+    if len(ids) < 2:
+        expect("the subscription of the stand has two servers", False, str(hello)[:300])
+        return
+    log, going = [], threading.Event()
+    going.set()
+
+    def load():
+        while going.is_set():
+            began = time.time()
+            got = attempt(4)
+            log.append((began, time.time(), got))
+            time.sleep(0.05)
+    loader = threading.Thread(target=load, daemon=True)
+    loader.start()
+    time.sleep(1.5)
+    replies, recreated, before, counts = [], 0, received(), seen_on(servers)
+    for n in range(SWITCHES):
+        at = time.time()
+        r = ui.ask("connect", 30, server=ids[(n + 1) % 2])
+        replies.append(round(time.time() - at, 2) if r and r.get("ok") else None)
+        time.sleep(2.5)
+        now = received()
+        recreated += now < before
+        before = now
+    time.sleep(1.5)
+    going.clear()
+    loader.join(10)
+    done = [(b, e, g) for b, e, g in log if g[1:2] == ["204"]]
+    broken = [g for _, _, g in log if g[1:2] != ["204"]]
+    stuck = [g for g in broken if g[0] == 6 or (g[0] == 28 and g[2] == "0.000000")]
+    gap = max([b2 - e1 for (_, e1, _), (b2, _, _) in zip(done, done[1:])] or [0])
+    slowest = max([e - b for b, e, _ in done] or [0])
+    typical = sorted(r for r in replies if r is not None)
+    typical = typical[len(typical) // 2] if typical else None
+    spread = [b - a for a, b in zip(counts, seen_on(servers))]
+    expect("the server is switched %d times: the tunnel stays, no request waits on names, a switch takes under half a second, the longest pause is short" % SWITCHES,
+           None not in replies and recreated == 0 and not stuck and typical < 0.5 and gap < 1.0 and min(spread) > 0,
+           "median=%s slowest_switch=%s replies=%s recreated=%d requests=%d failed=%d stuck_on_names=%d longest_pause=%.1f s slowest_request=%.1f s through=%s codes=%s"
+           % (typical, max(replies, key=lambda r: r or 0), replies if len(replies) <= 20 else [r for r in replies if r is None or r >= 0.5],
+              recreated, len(log), len(broken), len(stuck), gap, slowest, spread, sorted(set(g[0] for g in broken))))
+
+
+def service_scenario(source, servers, sub):
     source_address[0] = source
     tls()
     srv, address = page(open(sub, "rb").read())
@@ -360,12 +425,13 @@ def service_scenario(source, remote, sub):
     asked = ui.ask("connect", 60)
     connected = ui.wait(lambda m: m.get("ev") == "connection" and m["connection"].get("state") == "connected", 60)
     took = time.time() - at
-    seen = len([line for line in remote.lines() if "cp.cloudflare.com" in line])
+    seen = sum(seen_on(servers))
     code = fetch()
-    through = len([line for line in remote.lines() if "cp.cloudflare.com" in line]) - seen
+    through = sum(seen_on(servers)) - seen
     expect("connect from the interface: the tunnel is up and another program goes through it", bool(asked) and bool(connected) and code == "204" and through > 0,
            "s=%.1f code=%s seen=%d %s" % (took, code, through, "" if connected else str(asked)[:200]))
     expect("connected through the service, a request from the uplink address does not leave", not past(source))
+    switch_scenario(ui, servers)
     if APP:
         window_scenario(source)
     ui.close()
@@ -448,7 +514,7 @@ def scenario():
                 leaks.append(time.time())
     watcher = threading.Thread(target=watch, daemon=True)
     watcher.start()
-    killed, slowest, why = 0, 0.0, ""
+    killed, slowest, why, took, recreated, before, shown = 0, 0.0, "", [], 0, received(), 0
     for n in range(KILLS):
         victims = until(lambda: engine_of(core.p.pid), 10, 0.05) or []
         if len(victims) != 1:
@@ -456,16 +522,44 @@ def scenario():
             break
         at = time.time()
         subprocess.run(["taskkill", "/F", "/PID", str(victims[0])], capture_output=True)
-        if not until(lambda: engine_of(core.p.pid) not in ([], victims) and fetch(4) == "204", 40, 0.1):
-            why = "no tunnel after kill %d" % (n + 1)
+        trail = []
+
+        def back_up():
+            if engine_of(core.p.pid) in ([], victims):
+                return False
+            got = attempt(1)
+            trail.append([round(time.time() - at, 1)] + got)
+            return got[1:2] == ["204"]
+        if not until(back_up, 40, 0.1):
+            why = "no tunnel after kill %d: %s index=%s" % (n + 1, trail[-12:], ps("(Get-NetAdapter -Name spofy0 -ErrorAction SilentlyContinue).ifIndex"))
             break
+        if time.time() - at > 1.5 and shown < 10:
+            shown += 1
+            print("     kill %d: %s" % (n + 1, trail))
         slowest = max(slowest, time.time() - at)
+        took.append(round(time.time() - at, 1))
         killed += 1
+        now = received()
+        recreated += now < before
+        before = now
     back = until(lambda: fetch(6) == "204", 30, 0.5)
     watching.clear()
     watcher.join(10)
     expect("the engine is killed %d times in a row: nothing leaves past the tunnel and the tunnel is back" % KILLS,
-           killed == KILLS and not leaks and bool(back) and adapter() == "Up", "killed=%d leaks=%d tries=%d slowest=%.1f s gave_up=%d %s %s" % (killed, len(leaks), len(tries), slowest, count(core, "failed"), why, "" if killed == KILLS else core.tail()))
+           killed == KILLS and not leaks and bool(back) and adapter() == "Up" and recreated == 0,
+           "killed=%d leaks=%d tries=%d slowest=%.1f s gave_up=%d recreated=%d %s %s" % (killed, len(leaks), len(tries), slowest, count(core, "failed"), recreated, why, "" if killed == KILLS else core.tail()))
+    print("     seconds back after each kill: %s" % took)
+    for line in core.lines():
+        if line.startswith("{") and json.loads(line).get("event") in ("failed", "restored", "crashed", "connecting", "reconnecting"):
+            event = json.loads(line)
+            print("     %s %s" % (event.get("event"), {k: v for k, v in event.items() if k not in ("event", "pid", "stderr")}))
+    errors = {}
+    for line in open(core.err, encoding="utf-8", errors="replace"):
+        if "[Error]" in line or "[Warning]" in line or "retrying" in line:
+            key = re.sub(r"\d+", "N", line.strip())[-220:]
+            errors[key] = errors.get(key, 0) + 1
+    for key, n in sorted(errors.items(), key=lambda kv: -kv[1])[:25]:
+        print("     %4d x %s" % (n, key))
     expect("a stop takes the guard down: both ways work again", stop(core) and fetch() == "204" and past(source), "adapter=%s" % adapter())
 
     core = run(sub, "-guard")
@@ -478,7 +572,8 @@ def scenario():
            "held=%s free=%s adapter=%s" % (held, bool(free), adapter()))
 
     try:
-        service_scenario(source, remote, sub)
+        second = free_port()
+        service_scenario(source, [remote, server(second, uplink)], listed(port, second))
     finally:
         if subprocess.run(["sc", "query", "Spofy"], capture_output=True).returncode == 0:
             subprocess.run([CORE, "uninstall"], capture_output=True)

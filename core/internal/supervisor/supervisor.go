@@ -33,6 +33,25 @@ type Guard interface {
 	Lower() error
 }
 
+type Guards []Guard
+
+func (gs Guards) Raise() error {
+	for _, g := range gs {
+		if err := g.Raise(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (gs Guards) Lower() error {
+	errs := make([]error, 0, len(gs))
+	for i := len(gs) - 1; i >= 0; i-- {
+		errs = append(errs, gs[i].Lower())
+	}
+	return errors.Join(errs...)
+}
+
 var ErrSuperseded = errors.New("supervisor: superseded by a newer request")
 
 type Event struct {

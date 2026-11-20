@@ -240,6 +240,22 @@ func serve(args []string) int {
 	return 0
 }
 
+func guards(list ...supervisor.Guard) supervisor.Guard {
+	var up supervisor.Guards
+	for _, g := range list {
+		if g != nil {
+			up = append(up, g)
+		}
+	}
+	switch len(up) {
+	case 0:
+		return nil
+	case 1:
+		return up[0]
+	}
+	return up
+}
+
 type keeper interface {
 	Keep(on bool) error
 	Held() bool
@@ -259,9 +275,12 @@ func (o served) run(ctx context.Context, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	var g supervisor.Guard
-	if o.guarded && opts.Mode == xcfg.ModeTun {
-		g = labGuard(opts.Tun.Name)
+	var wall, g supervisor.Guard
+	if opts.Mode == xcfg.ModeTun {
+		if o.guarded {
+			wall = labGuard(opts.Tun.Name)
+		}
+		g = guards(wall, device(opts.Tun.Name))
 	}
 	var platform *host.Platform
 	var carried func() *os.File
@@ -286,7 +305,7 @@ func (o served) run(ctx context.Context, out io.Writer) error {
 	}
 	var keep func(bool)
 	held, leave := false, func() {}
-	if k, ok := g.(keeper); ok && o.kept {
+	if k, ok := wall.(keeper); ok && o.kept && !o.given {
 		held, leave = k.Held(), k.Leave
 		keep = func(on bool) {
 			if err := k.Keep(on); err != nil {
@@ -446,8 +465,12 @@ func run(args []string) int {
 		return 1
 	}
 	var g supervisor.Guard
-	if *guarded && opts.Mode == xcfg.ModeTun {
-		g = labGuard(opts.Tun.Name)
+	if opts.Mode == xcfg.ModeTun {
+		var wall supervisor.Guard
+		if *guarded {
+			wall = labGuard(opts.Tun.Name)
+		}
+		g = guards(wall, device(opts.Tun.Name))
 	}
 	var ss *session.Session
 	var checks sync.WaitGroup

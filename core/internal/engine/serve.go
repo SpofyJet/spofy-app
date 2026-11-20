@@ -90,6 +90,7 @@ func Serve(r io.Reader, w io.Writer) error {
 		switch req.Op {
 		case "start":
 			began := time.Now()
+			release := keep()
 			stop()
 			tun := -1
 			if req.Tun {
@@ -97,11 +98,13 @@ func Serve(r io.Reader, w io.Writer) error {
 					tun = in.Take()
 				}
 				if tun < 0 {
+					release()
 					send(Reply{Re: req.ID, Code: CodeStart, Error: "the tunnel did not come with the request"})
 					continue
 				}
 			}
 			next, err := StartOn(req.Config, tun)
+			release()
 			if err != nil {
 				send(failure(req.ID, err))
 				continue

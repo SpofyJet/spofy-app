@@ -11,6 +11,8 @@ import (
 
 func labGuard(string) supervisor.Guard { return nil }
 
+func device(string) supervisor.Guard { return nil }
+
 func labIdentity(*exec.Cmd) {}
 
 func desktop(*xcfg.Tun) {}

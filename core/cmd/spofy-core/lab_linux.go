@@ -13,6 +13,8 @@ func labGuard(tun string) supervisor.Guard {
 	return &guard.Linux{Tun: tun}
 }
 
+func device(string) supervisor.Guard { return nil }
+
 func labIdentity(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: 0, Gid: guard.EngineGID}}
 }

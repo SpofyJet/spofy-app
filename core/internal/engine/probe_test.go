@@ -284,10 +284,16 @@ func TestServeProbeAndMeasure(t *testing.T) {
 
 func TestWatchSeesASubMillisecondPause(t *testing.T) {
 	w := started()
-	end := time.Now().Add(200 * time.Microsecond)
-	for time.Now().Before(end) {
+	step := w.elapsed()
+	for step == 0 {
+		step = w.elapsed()
 	}
-	if took := w.elapsed(); took < 100*time.Microsecond || took > time.Second {
-		t.Fatalf("took %v", took)
+	if step > 100*time.Microsecond {
+		t.Fatalf("the smallest step seen is %v", step)
+	}
+	w = started()
+	time.Sleep(20 * time.Millisecond)
+	if took := w.elapsed(); took < time.Millisecond || took > time.Second {
+		t.Fatalf("a 20 ms sleep took %v", took)
 	}
 }

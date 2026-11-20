@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -465,6 +466,69 @@ func TestGuardFailureStopsStart(t *testing.T) {
 	var e *engine.Error
 	if !errors.As(err, &e) || e.Code != CodeGuard {
 		t.Fatalf("err = %v", err)
+	}
+	if listening(port) {
+		t.Fatal("engine started without the guard")
+	}
+}
+
+type step struct {
+	name string
+	log  *[]string
+	fail error
+}
+
+func (s step) Raise() error {
+	*s.log = append(*s.log, "raise "+s.name)
+	return s.fail
+}
+
+func (s step) Lower() error {
+	*s.log = append(*s.log, "lower "+s.name)
+	return s.fail
+}
+
+func TestGuardsRaiseInOrderAndLowerInReverse(t *testing.T) {
+	var log []string
+	gs := Guards{step{"wall", &log, nil}, step{"adapter", &log, nil}}
+	if err := gs.Raise(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gs.Lower(); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"raise wall", "raise adapter", "lower adapter", "lower wall"}; !slices.Equal(log, want) {
+		t.Fatalf("calls %v, want %v", log, want)
+	}
+}
+
+func TestGuardsStopAtTheFirstRefusalAndLowerEveryOne(t *testing.T) {
+	var log []string
+	refused := errors.New("refused")
+	gs := Guards{step{"wall", &log, nil}, step{"adapter", &log, refused}, step{"last", &log, nil}}
+	if err := gs.Raise(); !errors.Is(err, refused) {
+		t.Fatalf("raise: %v", err)
+	}
+	if err := gs.Lower(); !errors.Is(err, refused) {
+		t.Fatalf("lower: %v", err)
+	}
+	if want := []string{"raise wall", "raise adapter", "lower last", "lower adapter", "lower wall"}; !slices.Equal(log, want) {
+		t.Fatalf("calls %v, want %v", log, want)
+	}
+}
+
+func TestAGuardThatCannotRiseTakesTheOnesBeforeItDown(t *testing.T) {
+	cfg, port := config(t)
+	wall, adapter := &fakeGuard{}, &fakeGuard{failUp: true}
+	s := New(Options{Command: child("serve"), Guard: Guards{wall, adapter}, HoldGuard: true})
+	defer s.Close()
+	_, err := s.Start(cfg)
+	var e *engine.Error
+	if !errors.As(err, &e) || e.Code != CodeGuard {
+		t.Fatalf("err = %v", err)
+	}
+	if up, lowered := wall.state(); up || lowered == 0 {
+		t.Fatalf("the guard raised before the refusal: up=%v lowered=%d", up, lowered)
 	}
 	if listening(port) {
 		t.Fatal("engine started without the guard")
