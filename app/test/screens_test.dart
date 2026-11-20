@@ -52,6 +52,10 @@ void main() {
     'home_core_lost': () => Scene(ready: false, fault: AppModel.coreClosed),
     'home_denied': () => home(VpnState.idle)..model.failure = const Failure(Task.connect, AppModel.denied, ''),
     'home_refused': () => home(VpnState.failed, code: 'guard_failed'),
+    'home_ended': () => stopped('ended', days: -3),
+    'home_spent': () => stopped('spent', used: 102400),
+    'home_devices': () => stopped('devices'),
+    'home_other': () => stopped('other', notes: const ['🚫 Подписка отключена', '👉 Напишите в поддержку']),
   };
 
   for (final entry in homes.entries) {
@@ -71,10 +75,11 @@ void main() {
   testWidgets('the power control does not move between states and the loading placeholder matches it', (tester) async {
     Rect? first;
     for (final entry in homes.entries) {
-      if (entry.key.contains('empty') || entry.key.contains('lost')) {
+      final scene = entry.value();
+      if (entry.key.contains('empty') || entry.key.contains('lost') || (scene.model.subscription?.stopped ?? false)) {
         continue;
       }
-      await show(tester, entry.value(), phone);
+      await show(tester, scene, phone);
       final control = find.byType(PowerControl);
       final circle = find.byWidgetPredicate(
         (w) =>
@@ -168,17 +173,92 @@ void main() {
   });
 
   testWidgets('subscription details', (tester) async {
-    await show(tester, home(VpnState.idle), phone);
+    final opened = <String>[];
+    await show(tester, home(VpnState.idle, browse: opened.add), phone);
     await open(tester, S.subscription);
     await golden(tester, 'subscription_360');
+    await tester.tap(find.bySemanticsLabel(S.renew));
+    expect(opened, ['https://sub.example.test/page']);
   });
 
   testWidgets('subscription that ends soon and is almost used up', (tester) async {
-    final scene = Scene(subscription: subscription(days: 2, used: 96000), servers: servers());
+    final scene = Scene(subscription: subscription(days: 2, used: 96000), servers: servers(), browse: (_) {});
     await show(tester, scene, phone);
     await golden(tester, 'home_ending_360');
     await open(tester, S.subscription);
     await golden(tester, 'subscription_ending_360');
+  });
+
+  testWidgets('a subscription that ended: the way to pay is the one bright button and nothing offers to connect', (
+    tester,
+  ) async {
+    final opened = <String>[];
+    final scene = Scene(
+      subscription: subscription(days: -3, stop: 'ended'),
+      browse: opened.add,
+    );
+    await show(tester, scene, phone);
+    expect(find.text('Подписка закончилась'), findsOneWidget);
+    expect(find.byType(PowerControl), findsNothing);
+    expect(find.byType(PrimaryButton), findsOneWidget);
+    await tester.tap(find.bySemanticsLabel(S.renew));
+    expect(opened, ['https://sub.example.test/page']);
+    await tester.tap(find.bySemanticsLabel(S.checkAgain));
+    await tester.pump();
+    expect(scene.transport.sent.where((line) => line.contains('"op":"refresh"')), hasLength(1));
+    scene.transport.answer('{"re":1,"ok":true}');
+    await tester.pump();
+    await open(tester, '${S.subscription},');
+    await golden(tester, 'subscription_ended_360');
+    expect(find.text('Закончилась'), findsOneWidget);
+    expect(find.text('16 ноября'), findsOneWidget);
+    expect(find.bySemanticsLabel(S.renew), findsOneWidget);
+  });
+
+  testWidgets('back from the browser the list is asked again, and only while the subscription gives no servers', (
+    tester,
+  ) async {
+    for (final (scene, asks) in [(stopped('ended', days: -3), 1), (home(VpnState.idle), 0)]) {
+      await show(tester, scene, phone);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      await tester.pump();
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pump();
+      expect(scene.transport.sent.where((line) => line.contains('"op":"refresh"')), hasLength(asks));
+    }
+  });
+
+  testWidgets('a page that cannot be opened is not offered, and each reason has its own words and button', (
+    tester,
+  ) async {
+    for (final scene in [
+      stopped('ended', days: -3, pay: false),
+      Scene(
+        subscription: subscription(days: -3, stop: 'ended', page: 'http://sub.example.test/page'),
+        browse: (_) {},
+      ),
+      Scene(
+        subscription: subscription(days: -3, stop: 'ended', page: ''),
+        browse: (_) {},
+      ),
+    ]) {
+      await show(tester, scene, phone);
+      expect(find.byType(PrimaryButton), findsNothing);
+      expect(find.bySemanticsLabel(S.checkAgain), findsOneWidget);
+    }
+    final words = <String>{};
+    for (final why in ['ended', 'spent', 'devices', 'other']) {
+      final s = subscription(stop: why, notes: const ['⏰ Первая строка', '   ', '👉 Вторая строка']);
+      words.addAll([S.stopTitle(s), S.stopHint(s), S.stopAction(s)]);
+    }
+    expect(words, hasLength(12));
+    expect(
+      S.stopHint(subscription(stop: 'other', notes: const ['⏰ Первая строка', '👉 Вторая'])),
+      'Первая строка. Вторая',
+    );
+    expect(S.stopHint(subscription(stop: 'other')), isNotEmpty);
+    expect(S.pageAction(subscription()), S.renew);
+    expect(S.pageAction(subscription(days: 30000)), S.manage);
   });
 
   testWidgets('adding a subscription', (tester) async {
@@ -721,7 +801,7 @@ void main() {
     expect(S.expiry(subscription(days: 60), clock), 'До 18 января 2027');
     expect(S.expiry(subscription(days: 3), clock), 'Ещё 3 дня');
     expect(S.expiry(subscription(days: 0), clock), 'Заканчивается сегодня');
-    expect(S.expiry(subscription(days: -2), clock), 'Закончилась');
+    expect(S.expiry(subscription(days: -2), clock), 'Закончилась 17 ноября');
     final lifetime = Subscription(
       title: '',
       upload: 0,

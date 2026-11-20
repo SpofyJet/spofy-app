@@ -99,17 +99,31 @@ List<Server> servers({bool measured = true}) => [
     ),
 ];
 
-Subscription subscription({int days = 42, int used = 13312, int total = 102400}) => Subscription(
+Subscription subscription({
+  int days = 42,
+  int used = 13312,
+  int total = 102400,
+  String stop = '',
+  List<String> notes = const [],
+  String page = 'https://sub.example.test/page',
+}) => Subscription(
   title: 'Spofy VPN',
   upload: 1024 * 1024 * 1024,
   download: used * 1024 * 1024 - 1024 * 1024 * 1024,
   total: total * 1024 * 1024,
   expire: clock.add(Duration(days: days, hours: 5)).millisecondsSinceEpoch ~/ 1000,
   supportUrl: 'https://support.example.test',
-  webPageUrl: 'https://sub.example.test/page',
+  webPageUrl: page,
   announce: '',
   fetchedAt: clock.millisecondsSinceEpoch ~/ 1000 - 1800,
   updateEvery: 3600,
+  stop: stop,
+  notes: notes,
+);
+
+Scene stopped(String why, {int days = 42, int used = 13312, List<String> notes = const [], bool pay = true}) => Scene(
+  subscription: subscription(days: days, used: used, stop: why, notes: notes),
+  browse: pay ? (_) {} : null,
 );
 
 class Scene {

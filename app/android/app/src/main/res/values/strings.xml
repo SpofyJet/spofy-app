@@ -15,4 +15,11 @@
     <string name="failed_hint">Попробуем снова при смене сети</string>
     <string name="stalled_hint">Трафик не идёт мимо VPN</string>
     <string name="disconnect">Отключить</string>
+    <string name="refused_ended">Подписка закончилась</string>
+    <string name="refused_spent">Трафик закончился</string>
+    <string name="refused_devices">Все места заняты</string>
+    <string name="refused_none">Подписки пока нет</string>
+    <string name="refused_other">Подписка не работает</string>
+    <string name="refused">VPN не включён</string>
+    <string name="refused_hint">Откройте Spofy</string>
 </resources>

@@ -1056,3 +1056,116 @@ func TestReportKeepsAShortJournalOfChangesAndNothingSecret(t *testing.T) {
 		}
 	}
 }
+
+func notices(lines ...string) []byte {
+	var out []json.RawMessage
+	for _, line := range lines {
+		name, _ := json.Marshal(line)
+		out = append(out, json.RawMessage(`{"remarks":`+string(name)+`,"outbounds":[{"tag":"proxy","protocol":"vless","settings":{"vnext":[{"address":"0.0.0.0","port":1,"users":[{"id":"00000000-0000-0000-0000-000000000000","encryption":"none"}]}]},"streamSettings":{"network":"tcp"}},{"tag":"direct","protocol":"freedom"}]}`))
+	}
+	body, _ := json.Marshal(out)
+	return body
+}
+
+func (b *bench) answer(etag, usage string, body []byte, flags ...string) {
+	b.panel.Set(func(was *[]byte, h http.Header) {
+		*was = body
+		h.Set("Etag", etag)
+		h.Set("Subscription-Userinfo", usage)
+		h.Del("X-Hwid-Max-Devices-Reached")
+		for _, f := range flags {
+			h.Set(f, "true")
+		}
+	})
+}
+
+func TestASubscriptionWithoutServersSaysWhyAndIsNotConnected(t *testing.T) {
+	b := newBench(t, nil)
+	full, _ := apptest.Fixture(t)
+	lines := []string{"⏰ Подписка закончилась", "VPN выключен до продления"}
+	b.answer(`W/"ended"`, "upload=0; download=0; total=5368709120; expire=1794825204", notices(lines...))
+	if err := b.app.Subscribe(context.Background(), apptest.Address); err != nil {
+		t.Fatal(err)
+	}
+	snap := b.app.Snapshot()
+	if s := snap.Subscription; s.Stop != StopEnded || !reflect.DeepEqual(s.Notes, lines) || len(snap.Servers) != 0 {
+		t.Fatalf("stop %q, notes %q, servers %d", s.Stop, s.Notes, len(snap.Servers))
+	}
+	if err := b.app.Connect(Auto); code(err) != "sub_ended" {
+		t.Fatalf("connect with nothing to connect to: %v", err)
+	}
+	if err := b.app.Measure(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := b.tunnel.Starts(); len(got) != 0 {
+		t.Fatalf("something was started: %v", got)
+	}
+	for _, c := range []struct {
+		etag, usage string
+		flags       []string
+		want        Stop
+	}{
+		{`W/"spent"`, "upload=1; download=10; total=11; expire=1798761600", nil, StopSpent},
+		{`W/"devices"`, "upload=1; download=10; total=0; expire=1798761600", []string{"X-Hwid-Max-Devices-Reached"}, StopDevices},
+		{`W/"other"`, "upload=1; download=10; total=0; expire=0", nil, StopOther},
+	} {
+		b.answer(c.etag, c.usage, notices("x"), c.flags...)
+		if _, err := b.app.Refresh(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if got := b.app.Snapshot().Subscription.Stop; got != c.want {
+			t.Fatalf("%s: stop %q, want %q", c.etag, got, c.want)
+		}
+	}
+	b.answer(`W/"paid"`, "upload=1; download=10; total=0; expire=1798761600", full)
+	if err := b.app.Connect(Auto); err != nil || b.tunnel.Running() == "" {
+		t.Fatalf("connect after a payment made elsewhere asks the panel first: err %v, running %q", err, b.tunnel.Running())
+	}
+	if s := b.app.Snapshot().Subscription; s.Stop != "" || len(s.Notes) != 0 {
+		t.Fatalf("after the payment: stop %q, notes %q", s.Stop, s.Notes)
+	}
+}
+
+func TestARunningConnectionEndsWhenTheSubscriptionGivesNoServers(t *testing.T) {
+	b := newBench(t, renewing).subscribed()
+	if err := b.app.Connect(Auto); err != nil {
+		t.Fatal(err)
+	}
+	b.seen()
+	b.answer(`W/"ended"`, "upload=0; download=0; total=0; expire=1794825204", notices("⏰ Подписка закончилась"))
+	if changed, err := b.app.Refresh(context.Background()); err != nil || !changed {
+		t.Fatalf("changed %v, err %v", changed, err)
+	}
+	b.until("the tunnel is taken down", func() bool {
+		return b.app.Snapshot().Connection.State == session.Idle && b.tunnel.Running() == ""
+	})
+	if got := b.seen(); len(got) < 3 || got[0] != EvSubscription || got[1] != EvServers || got[len(got)-1] != string(session.Idle) {
+		t.Fatalf("events %v", got)
+	}
+	if s := b.app.Snapshot().Subscription; s.Stop != StopEnded {
+		t.Fatalf("stop %q", s.Stop)
+	}
+}
+
+func TestAnAddressThatAnswersWithLinksIsAskedAgainForJSON(t *testing.T) {
+	b := newBench(t, nil)
+	b.panel.Links()
+	if err := b.app.Subscribe(context.Background(), apptest.Address+"/"); err != nil {
+		t.Fatal(err)
+	}
+	if len(b.app.Snapshot().Servers) == 0 {
+		t.Fatal("no servers")
+	}
+	b.panel.Set(func(_ *[]byte, h http.Header) { h.Set("Etag", `W/"next"`) })
+	if _, err := b.app.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	path := strings.TrimPrefix(apptest.Address, "https://sub.example.test")
+	same(t, b.panel.Paths(), []string{path + "/", path + "/json", path + "/json"})
+	b2 := newBench(t, nil)
+	b2.panel.Links()
+	b2.panel.Set(func(body *[]byte, _ http.Header) { *body = []byte("<html>") })
+	if err := b2.app.Subscribe(context.Background(), apptest.Address); code(err) != CodeFormat {
+		t.Fatalf("neither form is a list: %v", err)
+	}
+}

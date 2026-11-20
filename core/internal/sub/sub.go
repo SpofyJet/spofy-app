@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -43,6 +44,7 @@ type Profile struct {
 	Flags       map[string]string `json:"flags"`
 	ETag        string            `json:"etag"`
 	Servers     []Server          `json:"servers"`
+	Notes       []string          `json:"notes,omitempty"`
 }
 
 func Parse(body []byte, h http.Header) (*Profile, error) {
@@ -79,8 +81,12 @@ func Parse(body []byte, h http.Header) (*Profile, error) {
 	}
 	seen := map[string]int{}
 	for _, raw := range raws {
-		s, ok := server(raw)
+		s, real, ok := server(raw)
 		if !ok {
+			continue
+		}
+		if !real {
+			p.Notes = append(p.Notes, s.Name)
 			continue
 		}
 		seen[s.ID]++
@@ -89,7 +95,7 @@ func Parse(body []byte, h http.Header) (*Profile, error) {
 		}
 		p.Servers = append(p.Servers, s)
 	}
-	if len(p.Servers) == 0 {
+	if len(p.Servers) == 0 && len(p.Notes) == 0 {
 		return nil, ErrFormat
 	}
 	return p, nil
@@ -180,13 +186,13 @@ type outbound struct {
 	} `json:"streamSettings"`
 }
 
-func server(raw json.RawMessage) (Server, bool) {
+func server(raw json.RawMessage) (s Server, real, ok bool) {
 	var c struct {
 		Remarks   string     `json:"remarks"`
 		Outbounds []outbound `json:"outbounds"`
 	}
 	if err := json.Unmarshal(raw, &c); err != nil || len(c.Outbounds) == 0 {
-		return Server{}, false
+		return Server{}, false, false
 	}
 	o := c.Outbounds[0]
 	addr, port := o.Settings.Address, o.Settings.Port
@@ -194,6 +200,9 @@ func server(raw json.RawMessage) (Server, bool) {
 		addr, port = o.Settings.Vnext[0].Address, o.Settings.Vnext[0].Port
 	} else if len(o.Settings.Servers) > 0 {
 		addr, port = o.Settings.Servers[0].Address, o.Settings.Servers[0].Port
+	}
+	if ip := net.ParseIP(addr); ip != nil && ip.IsUnspecified() {
+		return Server{Name: strings.TrimSpace(c.Remarks)}, false, true
 	}
 	endpoint := strings.Join([]string{
 		o.Protocol, addr, strconv.Itoa(port), o.Stream.Network, o.Stream.Security,
@@ -213,7 +222,7 @@ func server(raw json.RawMessage) (Server, bool) {
 		Country:  country,
 		Protocol: o.Protocol,
 		Config:   raw,
-	}, true
+	}, true, true
 }
 
 func digest(v string) string {

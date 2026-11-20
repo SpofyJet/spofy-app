@@ -175,6 +175,8 @@ class _DetailsState extends State<_Details> {
     final expiry = S.expiry(s, now);
     final left = S.lifetime(s) || s.expire <= 0 ? 99 : S.daysLeft(s, now);
     final offered = model.offered;
+    final page = Uri.tryParse(s.webPageUrl);
+    final browse = model.browse;
     return ListView(
       padding: const EdgeInsets.fromLTRB(Ink.gutter, 4, Ink.gutter, 16),
       children: [
@@ -215,9 +217,12 @@ class _DetailsState extends State<_Details> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               if (expiry.isNotEmpty) ...[
-                Text(S.validUntil, style: Ink.label),
+                Text(left < 0 ? S.endedOn : S.validUntil, style: Ink.label),
                 const SizedBox(height: 4),
-                Text(expiry, style: Ink.heading.copyWith(color: left <= 3 ? Ink.warning : Ink.text)),
+                Text(
+                  left < 0 ? S.date(DateTime.fromMillisecondsSinceEpoch(s.expire * 1000), now) : expiry,
+                  style: Ink.heading.copyWith(color: left <= 3 ? Ink.warning : Ink.text),
+                ),
                 const SizedBox(height: 18),
               ],
               Text(S.traffic, style: Ink.label),
@@ -228,6 +233,10 @@ class _DetailsState extends State<_Details> {
           ),
         ),
         if (failure?.task == Task.refresh) ...[const SizedBox(height: 8), Notice(S.failure(failure!))],
+        if (browse != null && page != null && page.isScheme('https')) ...[
+          const SizedBox(height: 8),
+          PrimaryButton(label: S.pageAction(s), onTap: () => browse(page.toString())),
+        ],
         const SizedBox(height: 8),
         QuietButton(label: S.refresh, busy: model.running(Task.refresh), onTap: model.refresh),
         const SizedBox(height: 8),

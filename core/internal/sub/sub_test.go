@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -159,5 +160,36 @@ func TestFetchStatus(t *testing.T) {
 	var se *StatusError
 	if !errors.As(err, &se) || se.Code != http.StatusBadGateway {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func notice(remarks, address string) string {
+	b, _ := json.Marshal(remarks)
+	return `{"remarks":` + string(b) + `,"outbounds":[{"tag":"proxy","protocol":"vless","settings":{"vnext":[{"address":"` + address + `","port":1,"users":[{"id":"00000000-0000-0000-0000-000000000000","encryption":"none"}]}]},"streamSettings":{"network":"tcp"}},{"tag":"direct","protocol":"freedom"}]}`
+}
+
+func TestEntriesWithoutAnAddressAreNoticesNotServers(t *testing.T) {
+	p, err := Parse([]byte("["+notice("⏰ Подписка закончилась", "0.0.0.0")+","+notice(" VPN выключен до продления ", "::")+"]"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Servers) != 0 || !reflect.DeepEqual(p.Notes, []string{"⏰ Подписка закончилась", "VPN выключен до продления"}) {
+		t.Fatalf("servers %d, notes %q", len(p.Servers), p.Notes)
+	}
+	body, h := fixture(t)
+	mixed := append([]byte("["+notice("Обходы выключены", "0.0.0.0")+","), body[1:]...)
+	whole, err := Parse(body, h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err = Parse(mixed, h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Servers) != len(whole.Servers) || !reflect.DeepEqual(p.Notes, []string{"Обходы выключены"}) {
+		t.Fatalf("servers %d of %d, notes %q", len(p.Servers), len(whole.Servers), p.Notes)
+	}
+	if _, err := Parse([]byte(`[{"remarks":"x","outbounds":[]}]`), nil); !errors.Is(err, ErrFormat) {
+		t.Fatalf("a list with nothing usable: %v", err)
 	}
 }

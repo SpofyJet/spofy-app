@@ -126,8 +126,12 @@ def config(name, addr):
     }
 
 
-def publish(names, touched=(), every="1"):
-    listed = []
+def publish(names, touched=(), every="1", ended=False):
+    listed = [{"remarks": "\u23f0 Подписка закончилась", "outbounds": [
+        {"tag": "proxy", "protocol": "vless", "settings": {"vnext": [{"address": "0.0.0.0", "port": 1, "users": [{"id": USER, "encryption": "none"}]}]}},
+        {"tag": "direct", "protocol": "freedom"}]}] if ended else []
+    open(WORK + "/expire.new", "w").write("1700000000" if ended else "1798761600")
+    os.replace(WORK + "/expire.new", WORK + "/expire")
     for name in names:
         c = config(name, SERVERS[name])
         if name in touched:
@@ -640,6 +644,21 @@ def platform():
     code, body = fetch("http://foreign.test/ip")
     device = asked("tun")[-1].get("device", "?")
     expect("platform: connect again on a new tunnel", c["ok"] and body in SERVERS.values() and device in links(), "ms=%d seen=%s" % (c["ms"], body))
+
+    publish([], ended=True)
+    r = ui.call("refresh")
+    down = until(lambda: ui.active()["state"] == "idle" and device not in links(), 10, 0.1)
+    snap = ui.call("hello")["snapshot"]
+    code, body = fetch("http://local.test/ip")
+    c = ui.call("connect")
+    expect("platform: the subscription ended: the tunnel is taken down, the reason is known, connecting is refused and the internet is not left closed",
+           r["ok"] and bool(down) and snap["subscription"]["stop"] == "ended" and snap["servers"] == [] and body == CLIENT and not c["ok"] and c.get("code") == "sub_ended",
+           "state=%s stop=%s direct=%s connect=%s" % (ui.active()["state"], snap["subscription"]["stop"], body, c.get("code")))
+    publish(SERVERS)
+    c = ui.call("connect")
+    code, body = fetch("http://foreign.test/ip")
+    expect("platform: after the payment connect asks for the list itself and the VPN is up", c["ok"] and body in SERVERS.values() and ui.call("hello")["snapshot"]["subscription"]["stop"] == "",
+           "ms=%d seen=%s" % (c["ms"], body))
 
     service.kill()
     service.wait()

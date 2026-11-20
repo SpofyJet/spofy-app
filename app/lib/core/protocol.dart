@@ -174,6 +174,8 @@ class Subscription {
     required this.announce,
     required this.fetchedAt,
     required this.updateEvery,
+    this.stop = '',
+    this.notes = const [],
   });
 
   factory Subscription.fromJson(Object? json) {
@@ -189,6 +191,8 @@ class Subscription {
       'announce',
       'fetchedAt',
       'updateEvery',
+      'stop',
+      'notes',
     ]);
     return Subscription(
       title: _get<String>(m, 'title', what),
@@ -201,6 +205,10 @@ class Subscription {
       announce: _get<String>(m, 'announce', what),
       fetchedAt: _get<int>(m, 'fetchedAt', what),
       updateEvery: _get<int>(m, 'updateEvery', what),
+      stop: _get<String>(m, 'stop', what),
+      notes: List<String>.unmodifiable(
+        _get<List<Object?>>(m, 'notes', what).map((n) => _get<String>({'': n}, '', '$what.notes')),
+      ),
     );
   }
 
@@ -214,6 +222,10 @@ class Subscription {
   final String announce;
   final int fetchedAt;
   final int updateEvery;
+  final String stop;
+  final List<String> notes;
+
+  bool get stopped => stop.isNotEmpty;
 
   int get used => upload + download;
 
@@ -230,6 +242,8 @@ class Subscription {
     'announce': announce,
     'fetchedAt': fetchedAt,
     'updateEvery': updateEvery,
+    'stop': stop,
+    'notes': notes,
   };
 }
 

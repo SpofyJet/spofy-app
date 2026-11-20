@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -57,6 +58,8 @@ type Panel struct {
 	last    http.Header
 	usage   string
 	holding chan struct{}
+	links   bool
+	paths   []string
 }
 
 func NewPanel(t testing.TB) *Panel {
@@ -72,7 +75,11 @@ func (p *Panel) serve(w http.ResponseWriter, r *http.Request) {
 	p.mu.Lock()
 	p.hits++
 	p.last = r.Header.Clone()
+	p.paths = append(p.paths, r.URL.Path)
 	body, header, status, usage, holding := p.body, p.header.Clone(), p.status, p.usage, p.holding
+	if p.links && !strings.HasSuffix(r.URL.Path, "/json") {
+		body, header = []byte("dmxlc3M6Ly9saW5rcy5leGFtcGxl"), http.Header{"Content-Type": {"text/plain; charset=utf-8"}}
+	}
 	p.mu.Unlock()
 	if holding != nil {
 		select {
@@ -141,6 +148,18 @@ func (p *Panel) Hold() (release func()) {
 		p.mu.Unlock()
 		close(ch)
 	}
+}
+
+func (p *Panel) Links() {
+	p.mu.Lock()
+	p.links = true
+	p.mu.Unlock()
+}
+
+func (p *Panel) Paths() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]string{}, p.paths...)
 }
 
 func (p *Panel) Hits() int {

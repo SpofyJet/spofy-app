@@ -53,6 +53,41 @@ abstract final class S {
   static const paste = 'Вставить из буфера';
   static const add = 'Добавить';
   static const refresh = 'Обновить';
+  static const checkAgain = 'Проверить ещё раз';
+  static const renew = 'Продлить подписку';
+  static const manage = 'Управление подпиской';
+
+  static String stopTitle(Subscription s) => switch (s.stop) {
+    'ended' => 'Подписка закончилась',
+    'spent' => 'Трафик закончился',
+    'devices' => 'Все места заняты',
+    _ => 'Подписка не работает',
+  };
+
+  static String stopHint(Subscription s) => switch (s.stop) {
+    'ended' => 'VPN выключен до продления. Оплата по СБП или картой',
+    'spent' => 'Докупите трафик, чтобы продолжить пользоваться VPN',
+    'devices' => 'Это устройство не подключится, пока вы не отключите одно из своих или не добавите место',
+    _ => _said(s.notes),
+  };
+
+  static String stopAction(Subscription s) => switch (s.stop) {
+    'ended' => renew,
+    'spent' => 'Докупить трафик',
+    'devices' => 'Добавить устройство',
+    _ => manage,
+  };
+
+  static String pageAction(Subscription s) =>
+      s.stopped ? stopAction(s) : (lifetime(s) || s.expire <= 0 ? manage : renew);
+
+  static String _said(List<String> notes) {
+    final lines = [
+      for (final note in notes.take(3)) note.replaceFirst(RegExp(r'^[^\p{L}\p{N}]+', unicode: true), '').trim(),
+    ].where((line) => line.isNotEmpty);
+    return lines.isEmpty ? 'Причина — на странице подписки' : lines.join('. ');
+  }
+
   static const remove = 'Удалить подписку';
   static const removeConfirm = 'Удалить подписку с этого устройства?';
   static const cancel = 'Отмена';
@@ -77,6 +112,7 @@ abstract final class S {
   static const unlimited = 'Без ограничений';
   static const traffic = 'Трафик';
   static const validUntil = 'Действует';
+  static const endedOn = 'Закончилась';
   static const updated = 'Обновлено';
   static const back = 'Назад';
   static const noDelay = '—';
@@ -154,13 +190,13 @@ abstract final class S {
       return forever;
     }
     final left = daysLeft(s, now);
+    final until = date(DateTime.fromMillisecondsSinceEpoch(s.expire * 1000), now);
     if (left < 0) {
-      return 'Закончилась';
+      return 'Закончилась $until';
     }
     if (left == 0) {
       return 'Заканчивается сегодня';
     }
-    final until = date(DateTime.fromMillisecondsSinceEpoch(s.expire * 1000), now);
     return left <= 7 ? 'Ещё ${days(left)}' : 'До $until';
   }
 
@@ -206,6 +242,12 @@ abstract final class S {
 
   static const _short = ['янв', 'фев', 'мар', 'апр', 'мая', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
 
+  static String day(Subscription s, DateTime now) {
+    final day = DateTime.fromMillisecondsSinceEpoch(s.expire * 1000);
+    final text = '${day.day} ${_short[day.month - 1]}';
+    return day.year == now.year ? text : '$text ${day.year}';
+  }
+
   static String until(Subscription s, DateTime now) {
     if (s.expire <= 0) {
       return '';
@@ -223,9 +265,7 @@ abstract final class S {
     if (left <= 7) {
       return 'ещё ${days(left)}';
     }
-    final day = DateTime.fromMillisecondsSinceEpoch(s.expire * 1000);
-    final text = 'до ${day.day} ${_short[day.month - 1]}';
-    return day.year == now.year ? text : '$text ${day.year}';
+    return 'до ${day(s, now)}';
   }
 
   static String serverName(Server s) {
@@ -267,6 +307,10 @@ abstract final class S {
     'sub_unreachable' => 'Сервер подписки не отвечает. Проверьте интернет',
     'sub_status' => 'Ссылка не принята. Скопируйте её заново',
     'sub_format' => 'По ссылке нет подписки Spofy',
+    'sub_ended' => 'Подписка закончилась',
+    'sub_spent' => 'Трафик закончился',
+    'sub_devices' => 'Все места заняты',
+    'sub_other' => 'Подписка не работает',
     'store_failed' => 'Не удалось сохранить данные на устройстве',
     'connected' => 'Проверка скорости доступна, когда VPN выключен',
     'vpn_denied' || 'guard_failed' => 'Нужно разрешение на VPN. Нажмите ещё раз',

@@ -15,6 +15,7 @@ seen = []
 asked = []
 kicks = []
 seen6 = []
+panel = {"ended": False}
 phone = {"sdk": 0, "nc": "nc", "limit": "timeout %d "}
 os.makedirs(OUT, exist_ok=True)
 
@@ -95,6 +96,11 @@ def config(name, port):
 
 
 BODY = json.dumps([config(n, p) for n, p in SERVERS.items()], ensure_ascii=False).encode()
+ENDED = json.dumps([{"remarks": line, "outbounds": [
+    {"tag": "proxy", "protocol": "vless", "settings": {"vnext": [{"address": "0.0.0.0", "port": 1, "users": [{"id": USER, "encryption": "none"}]}]},
+     "streamSettings": {"network": "tcp", "security": "none"}},
+    {"tag": "direct", "protocol": "freedom"},
+]} for line in ("\u23f0 Подписка закончилась", "VPN выключен до продления")], ensure_ascii=False).encode()
 
 
 class Server(http.server.ThreadingHTTPServer):
@@ -127,8 +133,9 @@ class Site(http.server.BaseHTTPRequestHandler):
             (seen6 if self.server.address_family == socket.AF_INET6 else seen).append(self.client_address[0])
             self.reply(200, b"site sees " + self.client_address[0].encode())
         elif self.path == "/sub/EMULATORTOKEN" and self.server.server_port == 8443:
-            self.reply(200, BODY, [("Content-Type", "application/json"), ("Subscription-Userinfo", "upload=1; download=2; total=1000; expire=1798761600"),
-                                   ("Profile-Update-Interval", "1"), ("Profile-Title", "Emulator")])
+            self.reply(200, ENDED if panel["ended"] else BODY,
+                       [("Content-Type", "application/json"), ("Subscription-Userinfo", "upload=1; download=2; total=1000; expire=%d" % (1700000000 if panel["ended"] else 1798761600)),
+                        ("Profile-Update-Interval", "1"), ("Profile-Title", "Emulator"), ("Profile-Web-Page-Url", "https://%s:8443/page" % GATE)])
         else:
             self.reply(404)
 
@@ -289,6 +296,11 @@ def fetch(target, port, path, host=None):
 
 def as_shell(path="/ip"):
     return shell("su 2000,2000,3003 sh /data/local/tmp/get.sh %s 8081 %s" % (HOST, path), limit=30)
+
+
+def shown():
+    shell("uiautomator dump /sdcard/ui.xml", limit=60)
+    return " | ".join(re.findall(r'content-desc="([^"]+)"', shell("cat /sdcard/ui.xml", limit=30)))
 
 
 def tap(*labels):
@@ -615,6 +627,39 @@ def scenario():
     screen("8-link")
     opened = list(processes().values())
     expect("a link opens the app and adds nothing by itself", PACKAGE in opened and "/sub/OTHERTOKEN" not in asked[before:], "asked=%s" % asked[before:])
+
+    by_system = "am %s -a android.net.VpnService -n %s/.CoreService" % ("start-foreground-service" if phone["sdk"] >= 26 else "startservice", PACKAGE)
+    shell("am force-stop %s" % PACKAGE)
+    panel["ended"] = True
+    shell("am start -W -n %s/.MainActivity" % PACKAGE, limit=120)
+    time.sleep(3)
+    last = Channel(9099)
+    r = last.call("refresh")
+    snap = last.call("hello")["snapshot"]
+    c = last.call("connect", server="auto")
+    time.sleep(2)
+    screen("9-ended")
+    labels = shown()
+    expect("a subscription that ended: no servers, the reason is known, connecting is refused, the screen leads to the payment",
+           r["ok"] and snap["subscription"]["stop"] == "ended" and not snap["servers"] and not c["ok"] and c.get("code") == "sub_ended"
+           and "Подписка закончилась" in labels and "Продлить подписку" in labels and tunnel() == "",
+           "stop=%s servers=%d connect=%s labels=%s" % (snap["subscription"]["stop"], len(snap["servers"]), c.get("code"), labels[:200]))
+    last.s.close()
+    shell("am force-stop %s" % PACKAGE)
+    shell(by_system)
+    told = until(lambda: "Подписка закончилась" in shell("dumpsys notification --noredact"), 40)
+    service = shell("dumpsys activity services %s/.CoreService" % PACKAGE)
+    expect("started by the system with an ended subscription: the service steps down and a notice says why",
+           bool(told) and "isForeground=true" not in service and tunnel() == "", re.sub(r"\s+", " ", service)[:160])
+    panel["ended"] = False
+    shell(by_system)
+    up = until(lambda: tunnel() != "" and through(), 40, 0.2)
+    expect("after the payment a start by the system brings the VPN up without the app being opened, and the notice is gone",
+           bool(up) and "Подписка закончилась" not in shell("dumpsys notification --noredact"))
+    last = Channel(9099)
+    last.call("disconnect")
+    until(lambda: tunnel() == "", 10)
+    last.s.close()
 
     if RELEASE:
         adb("uninstall", PACKAGE, limit=120)

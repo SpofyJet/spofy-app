@@ -151,7 +151,19 @@ class DesktopHost implements Host {
   AppList? get apps => null;
 
   @override
-  void Function(String address)? get browse => null;
+  void Function(String address)? get browse =>
+      (address) => unawaited(_browse(address));
+
+  static Future<void> _browse(String address) async {
+    final (tool, arguments) = Platform.isWindows
+        ? ('rundll32', ['url.dll,FileProtocolHandler', address])
+        : (Platform.isMacOS ? 'open' : 'xdg-open', [address]);
+    try {
+      await Process.start(tool, arguments, mode: ProcessStartMode.detached);
+    } on ProcessException {
+      return;
+    }
+  }
 
   @override
   void links(void Function(String link) hear) {}

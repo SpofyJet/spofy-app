@@ -155,16 +155,45 @@ type Server struct {
 }
 
 type Subscription struct {
-	Title       string `json:"title"`
-	Upload      int64  `json:"upload"`
-	Download    int64  `json:"download"`
-	Total       int64  `json:"total"`
-	Expire      int64  `json:"expire"`
-	SupportURL  string `json:"supportUrl"`
-	WebPageURL  string `json:"webPageUrl"`
-	Announce    string `json:"announce"`
-	FetchedAt   int64  `json:"fetchedAt"`
-	UpdateEvery int64  `json:"updateEvery"`
+	Title       string   `json:"title"`
+	Upload      int64    `json:"upload"`
+	Download    int64    `json:"download"`
+	Total       int64    `json:"total"`
+	Expire      int64    `json:"expire"`
+	SupportURL  string   `json:"supportUrl"`
+	WebPageURL  string   `json:"webPageUrl"`
+	Announce    string   `json:"announce"`
+	FetchedAt   int64    `json:"fetchedAt"`
+	UpdateEvery int64    `json:"updateEvery"`
+	Stop        Stop     `json:"stop"`
+	Notes       []string `json:"notes"`
+}
+
+type Stop string
+
+const (
+	StopEnded   Stop = "ended"
+	StopSpent   Stop = "spent"
+	StopDevices Stop = "devices"
+	StopOther   Stop = "other"
+)
+
+func (s Stop) Code() engine.Code {
+	return engine.Code("sub_" + string(s))
+}
+
+func stop(p *sub.Profile, now time.Time) Stop {
+	switch u := p.Usage; {
+	case len(p.Servers) > 0:
+		return ""
+	case p.Flags["hwid-max-devices-reached"] == "true":
+		return StopDevices
+	case !u.Expire.IsZero() && !u.Expire.After(now):
+		return StopEnded
+	case u.Total > 0 && u.Upload+u.Download >= u.Total:
+		return StopSpent
+	}
+	return StopOther
 }
 
 type Entry struct {
@@ -357,7 +386,7 @@ func (a *App) Snapshot() Snapshot {
 		Version:      a.cfg.Version,
 		Protocol:     Protocol,
 		Connection:   conn,
-		Subscription: subscription(st),
+		Subscription: subscription(st, a.now()),
 		Servers:      a.servers(st),
 		Settings:     settings(st),
 	}
@@ -369,6 +398,12 @@ func (a *App) Subscribe(ctx context.Context, address string) error {
 		return fail(CodeBadURL, "the address must start with https://")
 	}
 	p, err := sub.Fetch(ctx, a.cfg.HTTP, u.String(), a.cfg.Device, "")
+	if errors.Is(err, sub.ErrFormat) {
+		named := u.JoinPath("json")
+		if again, failed := sub.Fetch(ctx, a.cfg.HTTP, named.String(), a.cfg.Device, ""); failed == nil {
+			u, p, err = named, again, nil
+		}
+	}
 	if err != nil {
 		return fetchError(err)
 	}
@@ -394,7 +429,7 @@ func (a *App) Refresh(ctx context.Context) (bool, error) {
 		if err == nil {
 			now := a.cfg.Store.Get()
 			a.plan(now, false)
-			a.emit(Event{Ev: EvSubscription, Subscription: subscription(now)})
+			a.emit(Event{Ev: EvSubscription, Subscription: subscription(now, a.now())})
 		}
 		return false, err
 	}
@@ -483,6 +518,20 @@ func (a *App) Connect(server string) error {
 	st := a.cfg.Store.Get()
 	if st.Profile == nil {
 		return fail(CodeNoSubscription, "no subscription")
+	}
+	if len(st.Profile.Servers) == 0 {
+		if a.online.Load() {
+			ctx, cancel := context.WithTimeout(a.ctx, 15*time.Second)
+			a.Refresh(ctx)
+			cancel()
+			st = a.cfg.Store.Get()
+		}
+		if st.Profile == nil {
+			return fail(CodeNoSubscription, "no subscription")
+		}
+		if why := stop(st.Profile, a.now()); why != "" {
+			return fail(why.Code(), "the subscription gives no servers")
+		}
 	}
 	if server == "" {
 		server = a.choice(st)
@@ -699,9 +748,12 @@ func (a *App) adopt(address string, p *sub.Profile) error {
 	st := a.cfg.Store.Get()
 	a.plan(st, false)
 	a.setChoice(a.choice(st))
-	a.emit(Event{Ev: EvSubscription, Subscription: subscription(st)})
+	a.emit(Event{Ev: EvSubscription, Subscription: subscription(st, a.now())})
 	a.emit(Event{Ev: EvServers, Servers: a.servers(st)})
-	if a.sess.State() != session.Idle && a.sess.Rebase(a.candidates(st)) {
+	switch {
+	case len(p.Servers) == 0:
+		a.sess.Disconnect()
+	case a.sess.State() != session.Idle && a.sess.Rebase(a.candidates(st)):
 		a.spawn(a.renew)
 	}
 	return nil
@@ -835,7 +887,7 @@ func (a *App) candidates(st store.State) []session.Candidate {
 	return out
 }
 
-func subscription(st store.State) *Subscription {
+func subscription(st store.State, now time.Time) *Subscription {
 	p := st.Profile
 	if p == nil {
 		return nil
@@ -849,6 +901,8 @@ func subscription(st store.State) *Subscription {
 		WebPageURL:  p.WebPageURL,
 		Announce:    p.Announce,
 		UpdateEvery: int64(p.UpdateEvery / time.Second),
+		Stop:        stop(p, now),
+		Notes:       append([]string{}, p.Notes...),
 	}
 	if !p.Usage.Expire.IsZero() {
 		s.Expire = p.Usage.Expire.Unix()

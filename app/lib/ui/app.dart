@@ -59,6 +59,9 @@ class _SpofyAppState extends State<SpofyApp> with WidgetsBindingObserver {
     final visible = state == AppLifecycleState.resumed;
     if (visible && !_visible) {
       widget.model.check();
+      if (widget.model.subscription?.stopped ?? false) {
+        widget.model.refresh();
+      }
     }
     _visible = visible;
     _schedule();

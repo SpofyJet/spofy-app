@@ -64,7 +64,7 @@ class Site(http.server.BaseHTTPRequestHandler):
         elif self.path == "/ip":
             self.reply(200, self.client_address[0].encode())
         elif self.path == "/sub/HERMETICTOKEN" and self.server.server_port == 443:
-            usage = ("Subscription-Userinfo", "upload=1; download=2; total=1000; expire=1798761600")
+            usage = ("Subscription-Userinfo", "upload=1; download=2; total=1000; expire=%s" % open(WORK + "/expire").read().strip())
             body, every, etag = published()
             if self.headers.get("If-None-Match") == etag:
                 hits.write("unchanged\n")

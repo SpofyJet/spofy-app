@@ -56,8 +56,12 @@ class HomeScreen extends StatelessWidget {
     if (!model.ready) {
       return model.fault.isEmpty ? const _Loading() : const SizedBox.shrink();
     }
-    if (model.subscription == null) {
+    final subscription = model.subscription;
+    if (subscription == null) {
       return _Empty(model: model, onManual: onSubscription);
+    }
+    if (subscription.stopped) {
+      return _Stopped(model: model, subscription: subscription, now: now, onSubscription: onSubscription);
     }
     return _Status(model: model, now: now, onServers: onServers, onSubscription: onSubscription);
   }
@@ -223,6 +227,56 @@ class _EmptyState extends State<_Empty> {
         QuietButton(label: S.manual, onTap: widget.onManual),
         const SizedBox(height: 8),
         PrimaryButton(label: S.pasteLink, busy: widget.model.running(Task.subscribe), onTap: _paste),
+      ],
+    );
+  }
+}
+
+class _Stopped extends StatelessWidget {
+  const _Stopped({required this.model, required this.subscription, required this.now, required this.onSubscription});
+
+  final AppModel model;
+  final Subscription subscription;
+  final DateTime Function() now;
+  final VoidCallback onSubscription;
+
+  @override
+  Widget build(BuildContext context) {
+    final failure = model.failure;
+    final page = Uri.tryParse(subscription.webPageUrl);
+    final browse = model.browse;
+    return _Stretch(
+      children: [
+        const Spacer(flex: 2),
+        const Center(child: GlyphIcon(Glyph.warning, color: Ink.warning, size: 40, stroke: 1.9)),
+        const SizedBox(height: 16),
+        Semantics(
+          liveRegion: true,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(S.stopTitle(subscription), style: Ink.title, textAlign: TextAlign.center),
+              const SizedBox(height: 8),
+              Text(S.stopHint(subscription), style: Ink.note, textAlign: TextAlign.center),
+            ],
+          ),
+        ),
+        const Spacer(flex: 3),
+        if (failure?.task == Task.refresh) ...[Notice(S.failure(failure!)), const SizedBox(height: 8)],
+        Tile(
+          leading: RemainderMark(S.remainder(subscription, now()), low: S.low(subscription, now())),
+          title: S.subscription,
+          subtitle: S.usage(subscription),
+          trailing: subscription.stop == 'ended' ? S.day(subscription, now()) : S.until(subscription, now()),
+          trailingColor: S.low(subscription, now()) ? Ink.warning : Ink.muted,
+          onTap: onSubscription,
+        ),
+        const SizedBox(height: 8),
+        QuietButton(label: S.checkAgain, busy: model.running(Task.refresh), onTap: model.refresh),
+        if (browse != null && page != null && page.isScheme('https')) ...[
+          const SizedBox(height: 8),
+          PrimaryButton(label: S.stopAction(subscription), onTap: () => browse(page.toString())),
+        ],
       ],
     );
   }

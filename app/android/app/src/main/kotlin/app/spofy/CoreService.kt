@@ -58,6 +58,9 @@ class CoreService : VpnService() {
     @Volatile
     private var wanted = false
 
+    @Volatile
+    private var connecting = 0
+
     private var watching = false
     private var ready = false
     private val waiting = ArrayDeque<JSONObject>()
@@ -256,8 +259,14 @@ class CoreService : VpnService() {
                 } else {
                     show(state)
                 }
+                if (state == "connected") {
+                    getSystemService(NotificationManager::class.java).cancel(REFUSED)
+                }
             } else if (message.has("re") && !message.optBoolean("ok")) {
                 note("request ${message.optInt("re")} failed: ${message.optString("code")}")
+                if (message.optInt("re") == connecting && now == "idle") {
+                    refused(message.optString("code"))
+                }
             }
             return
         }
@@ -373,6 +382,27 @@ class CoreService : VpnService() {
         }
     }
 
+    private fun refused(code: String) {
+        wanted = false
+        lower()
+        val title = when (code) {
+            "sub_ended" -> R.string.refused_ended
+            "sub_spent" -> R.string.refused_spent
+            "sub_devices" -> R.string.refused_devices
+            "sub_other" -> R.string.refused_other
+            "no_subscription" -> R.string.refused_none
+            else -> R.string.refused
+        }
+        try {
+            val notice = notice(getString(title), getString(R.string.refused_hint), false)
+            getSystemService(NotificationManager::class.java).notify(REFUSED, notice)
+        } catch (e: Exception) {
+            if (BuildConfig.DEBUG) {
+                Log.e(TAG, "no notice", e)
+            }
+        }
+    }
+
     private fun lower() {
         watch(false)
         if (shown) {
@@ -429,7 +459,7 @@ class CoreService : VpnService() {
         }
     }
 
-    private fun notice(title: String, text: String): Notification {
+    private fun notice(title: String, text: String, running: Boolean = true): Notification {
         val manager = getSystemService(NotificationManager::class.java)
         val builder = if (Build.VERSION.SDK_INT >= 26) {
             if (manager.getNotificationChannel(CHANNEL) == null) {
@@ -447,12 +477,15 @@ class CoreService : VpnService() {
         val stop = PendingIntent.getService(this, 1, Intent(this, CoreService::class.java).setAction(DISCONNECT), flags)
         builder.setSmallIcon(R.drawable.ic_notice)
             .setContentTitle(title)
-            .setOngoing(true)
+            .setOngoing(running)
+            .setAutoCancel(!running)
             .setShowWhen(false)
             .setOnlyAlertOnce(true)
-            .setCategory(Notification.CATEGORY_SERVICE)
+            .setCategory(if (running) Notification.CATEGORY_SERVICE else Notification.CATEGORY_STATUS)
             .setContentIntent(open)
-            .addAction(Notification.Action.Builder(null, getString(R.string.disconnect), stop).build())
+        if (running) {
+            builder.addAction(Notification.Action.Builder(null, getString(R.string.disconnect), stop).build())
+        }
         if (text.isNotEmpty()) {
             builder.setContentText(text)
         }
@@ -462,6 +495,9 @@ class CoreService : VpnService() {
     private fun request(op: String, fill: (JSONObject) -> Unit = {}) {
         asks.execute {
             val id = synchronized(writing) { ++sent }
+            if (op == "connect") {
+                connecting = id
+            }
             val message = JSONObject().put("id", id).put("op", op).also(fill)
             note("request $message")
             if (ready) {
@@ -505,6 +541,7 @@ class CoreService : VpnService() {
         private const val TAG = "spofy"
         private const val CHANNEL = "state"
         private const val NOTICE = 1
+        private const val REFUSED = 2
         private const val RESTARTS = 5
         private const val PENDING = 8
         private val ROOTS = listOf("/apex/com.android.conscrypt/cacerts", "/system/etc/security/cacerts")
