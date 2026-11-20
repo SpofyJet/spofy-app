@@ -1,8 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
-IMAGE=spofy-kotlin:$(cat "$ROOT/tools/android/kotlin/Dockerfile" "$ROOT/tools/android/kotlin/fetch.py" | sha256sum | cut -c1-12)
-docker image inspect "$IMAGE" >/dev/null 2>&1 || docker build -q -t "$IMAGE" "$ROOT/tools/android/kotlin" >/dev/null
+IMAGE=$("$ROOT/tools/android/image.sh")
 REV=${FLUTTER_ENGINE:-$("$ROOT/tools/flutter.sh" bash -c 'cat "$(dirname "$(readlink -f "$(command -v flutter)")")/internal/engine.version"' | tail -1)}
 CACHE=${KOTLIN_CACHE:-$HOME/.cache/spofy-kotlin}/$REV
 mkdir -p "$CACHE"
