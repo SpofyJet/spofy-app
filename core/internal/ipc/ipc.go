@@ -51,13 +51,14 @@ func Serve(ctx context.Context, r io.Reader, w io.Writer, a *app.App, p *host.Pl
 	ctx, cancel := context.WithCancel(ctx)
 	var out sync.Mutex
 	var jobs sync.WaitGroup
-	send := func(v any) {
-		b, err := json.Marshal(v)
-		if err != nil {
-			return
+	put := func(v any) {
+		if b, err := json.Marshal(v); err == nil {
+			w.Write(append(b, '\n'))
 		}
+	}
+	send := func(v any) {
 		out.Lock()
-		w.Write(append(b, '\n'))
+		put(v)
 		out.Unlock()
 	}
 	stop := a.Listen(func(e app.Event) { send(e) })
@@ -127,8 +128,10 @@ func Serve(ctx context.Context, r io.Reader, w io.Writer, a *app.App, p *host.Pl
 			}
 			send(Reply{Re: req.ID, OK: true})
 		case "hello":
+			out.Lock()
 			snap := a.Snapshot()
-			send(Reply{Re: req.ID, OK: true, Snapshot: &snap})
+			put(Reply{Re: req.ID, OK: true, Snapshot: &snap})
+			out.Unlock()
 		case "subscribe":
 			later(req.ID, func() error { return a.Subscribe(ctx, req.URL) })
 		case "refresh":

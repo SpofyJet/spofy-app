@@ -18,6 +18,7 @@ import time
 CORE = os.path.abspath(sys.argv[1])
 APP = os.path.abspath(sys.argv[2]) if len(sys.argv) > 2 else ""
 SHOTS = os.path.abspath(sys.argv[3]) if len(sys.argv) > 3 else ""
+TRAY = os.path.abspath(sys.argv[4]) if len(sys.argv) > 4 else ""
 WORK = tempfile.mkdtemp(prefix="spofy-stand-")
 USER = "00000000-0000-4000-8000-000000000001"
 SITE = "http://cp.cloudflare.com/generate_204"
@@ -328,6 +329,189 @@ def window_scenario(source):
         app.kill()
 
 
+class Ident(ctypes.Structure):
+    _fields_ = [("size", ctypes.c_uint32), ("hwnd", ctypes.c_void_p), ("id", ctypes.c_uint32), ("guid", ctypes.c_byte * 16)]
+
+
+class Counters(ctypes.Structure):
+    _fields_ = [("cb", ctypes.c_uint32), ("faults", ctypes.c_uint32)] + [(n, ctypes.c_size_t) for n in
+                ("peak", "working", "peak_paged", "paged", "peak_nonpaged", "nonpaged", "commit", "peak_commit", "private")]
+
+
+def tray_window():
+    return ctypes.windll.user32.FindWindowW("SPOFY_TRAY", None)
+
+
+def tray_icon(hwnd):
+    rect = ctypes.windll.shell32.Shell_NotifyIconGetRect
+    rect.restype = ctypes.c_long
+    return rect(ctypes.byref(Ident(ctypes.sizeof(Ident), hwnd, 1)), ctypes.byref(ctypes.wintypes.RECT())) >= 0
+
+
+def tray_post(hwnd, message, w=0, l=0):
+    ctypes.windll.user32.PostMessageW(ctypes.c_void_p(hwnd), message, w, l)
+
+
+def memory(pid):
+    k = ctypes.windll.kernel32
+    k.OpenProcess.restype = ctypes.c_void_p
+    h = k.OpenProcess(0x1000, False, pid)
+    c = Counters()
+    c.cb = ctypes.sizeof(c)
+    k.K32GetProcessMemoryInfo(ctypes.c_void_p(h), ctypes.byref(c), c.cb)
+    k.CloseHandle(ctypes.c_void_p(h))
+    return c.working / 2**20, c.private / 2**20
+
+
+user32 = ctypes.WinDLL("user32", use_last_error=True)
+EnumProc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+for name, args, result in [
+    ("EnumWindows", [EnumProc, ctypes.c_void_p], ctypes.c_bool),
+    ("GetClassNameW", [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_int], ctypes.c_int),
+    ("GetWindowThreadProcessId", [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32)], ctypes.c_uint32),
+    ("IsWindowVisible", [ctypes.c_void_p], ctypes.c_bool),
+    ("SendMessageTimeoutW", [ctypes.c_void_p, ctypes.c_uint, ctypes.c_size_t, ctypes.c_ssize_t, ctypes.c_uint, ctypes.c_uint, ctypes.POINTER(ctypes.c_size_t)], ctypes.c_ssize_t),
+    ("GetMenuItemCount", [ctypes.c_void_p], ctypes.c_int),
+    ("GetMenuStringW", [ctypes.c_void_p, ctypes.c_uint, ctypes.c_wchar_p, ctypes.c_int, ctypes.c_uint], ctypes.c_int),
+    ("GetMenuState", [ctypes.c_void_p, ctypes.c_uint, ctypes.c_uint], ctypes.c_uint),
+    ("PostMessageW", [ctypes.c_void_p, ctypes.c_uint, ctypes.c_size_t, ctypes.c_ssize_t], ctypes.c_bool),
+]:
+    getattr(user32, name).argtypes, getattr(user32, name).restype = args, result
+
+
+def menu_of(pid):
+    found = []
+
+    def each(h, _):
+        name, owner = ctypes.create_unicode_buffer(16), ctypes.c_uint32()
+        user32.GetClassNameW(h, name, 16)
+        user32.GetWindowThreadProcessId(h, ctypes.byref(owner))
+        if name.value == "#32768" and owner.value == pid and user32.IsWindowVisible(h):
+            found.append(h)
+        return True
+    user32.EnumWindows(EnumProc(each), None)
+    return found[0] if found else None
+
+
+def menu_items(menu):
+    got = ctypes.c_size_t()
+    if not user32.SendMessageTimeoutW(menu, 0x01E1, 0, 0, 0x2, 2000, ctypes.byref(got)) or not got.value:
+        return None, []
+    items = []
+    for i in range(max(user32.GetMenuItemCount(got.value), 0)):
+        text = ctypes.create_unicode_buffer(256)
+        user32.GetMenuStringW(got.value, i, text, 256, 0x400)
+        items.append((text.value, user32.GetMenuState(got.value, i, 0x400)))
+    return got.value, items
+
+
+def menu_close(pid, menu, key):
+    user32.PostMessageW(menu, 0x100, key, 0)
+    until(lambda: not menu_of(pid), 5, 0.05)
+
+
+def tray_menu(tray, hwnd, label, limit):
+    end, shown = time.time() + limit, []
+    while time.time() < end:
+        tray_post(hwnd, 0x8001, 0, 0x007B | 1 << 16)
+        menu = until(lambda: menu_of(tray.pid), 5, 0.05)
+        if not menu:
+            continue
+        handle, items = menu_items(menu)
+        shown = [text for text, _ in items]
+        at = next((i for i, (text, state) in enumerate(items) if text == label and not state & 0x3), None)
+        if handle is None or at is None:
+            menu_close(tray.pid, menu, 0x1B)
+            time.sleep(0.2)
+            continue
+        lit = lambda: [bool(user32.GetMenuState(handle, i, 0x400) & 0x80) for i in range(len(items))]
+        for _ in range(2 * len(items)):
+            now = lit()
+            if now[at]:
+                menu_close(tray.pid, menu, 0x0D)
+                return shown
+            user32.PostMessageW(menu, 0x100, 0x28, 0)
+            until(lambda: lit() != now, 2, 0.02)
+        menu_close(tray.pid, menu, 0x1B)
+    print("     the tray menu never offered %a: %a" % (label, shown))
+    return None
+
+
+def reached(ui, mark, state, limit):
+    def find():
+        with ui.lock:
+            return any(m.get("ev") == "connection" and m["connection"].get("state") == state for m in ui.seen[mark:])
+    return until(find, limit, 0.05)
+
+
+def through_tray(ui, tray, hwnd, label, state, limit):
+    mark = len(ui.seen)
+    return bool(tray_menu(tray, hwnd, label, 30)) and reached(ui, mark, state, limit)
+
+
+def tray_scenario(ui):
+    shell = "explorer.exe" in subprocess.run(["tasklist", "/FI", "IMAGENAME eq explorer.exe", "/NH"], capture_output=True, text=True).stdout.lower()
+    tray = subprocess.Popen([TRAY])
+    hwnd = until(tray_window, 15, 0.1)
+    shown = bool(hwnd) and bool(until(lambda: tray_icon(hwnd), 15, 0.2))
+    expect("the tray starts and puts its icon next to the clock", shown, "shell=%s code=%s" % (shell, tray.poll()))
+    if not hwnd:
+        if tray.poll() is None:
+            tray.kill()
+        return None
+    again = subprocess.run([TRAY], timeout=15)
+    expect("a second tray exits at once and the first stays", again.returncode == 0 and tray.poll() is None and tray_window() == hwnd, "code=%s" % again.returncode)
+    off = through_tray(ui, tray, hwnd, "Выключить VPN", "idle", 30)
+    on = bool(off) and through_tray(ui, tray, hwnd, "Включить VPN", "connected", 60)
+    expect("the tray menu turns the VPN off and on through the service", bool(off) and bool(on) and fetch() == "204", "off=%s on=%s" % (bool(off), bool(on)))
+    tray_post(hwnd, 0x8001, 0, 0x0400 | 1 << 16)
+    opened = until(window, 30, 0.2)
+    expect("the tray opens the window", bool(opened))
+    if opened:
+        tray_post(opened, 0x10)
+        until(lambda: not window(), 15, 0.2)
+    working, private = memory(tray.pid)
+    expect("the tray takes little memory", private < 16, "working=%.1f MB private=%.1f MB" % (working, private))
+    if shell:
+        subprocess.run(["taskkill", "/F", "/IM", "explorer.exe"], capture_output=True)
+        gone = until(lambda: not tray_icon(hwnd), 10, 0.2)
+        subprocess.Popen(["explorer.exe"])
+        back = until(lambda: tray_icon(hwnd), 60, 0.5)
+        expect("the shell restarts: the tray puts its icon back", bool(gone) and bool(back) and tray.poll() is None, "gone=%s back=%s" % (bool(gone), bool(back)))
+    else:
+        print("     no shell on this machine: the icon after a shell restart is not checked")
+    mark = len(ui.seen)
+    shown = tray_menu(tray, hwnd, "Выключить VPN и выйти", 30) or [""]
+    quit_off = reached(ui, mark, "idle", 15)
+    ended = until(lambda: tray.poll() is not None, 15, 0.1)
+    expect("quit while the VPN works: the menu says it works, the VPN is off, the tray is gone, no icon is left behind",
+           shown[0].startswith("VPN работает") and bool(quit_off) and bool(ended) and tray.returncode == 0 and not tray_icon(hwnd),
+           "status=%a off=%s code=%s" % (shown[0], bool(quit_off), tray.poll()))
+    if tray.poll() is None:
+        tray.kill()
+    mark = len(ui.seen)
+    ui.ask("connect", 60)
+    reached(ui, mark, "connected", 60)
+    tray = subprocess.Popen([TRAY])
+    hwnd = until(tray_window, 15, 0.1)
+    return (tray, hwnd) if hwnd else None
+
+
+def tray_after_restart(started):
+    tray, hwnd = started
+    ui = Pipe(PIPE)
+    ui.ask("hello")
+    off = through_tray(ui, tray, hwnd, "Выключить VPN", "idle", 30)
+    on = bool(off) and through_tray(ui, tray, hwnd, "Включить VPN", "connected", 60)
+    expect("the service is killed and back: the tray finds it again and controls it", bool(off) and bool(on) and tray_icon(hwnd), "off=%s on=%s" % (bool(off), bool(on)))
+    tray_post(hwnd, 0x16, 1, 1)
+    ended = until(lambda: tray.poll() is not None, 15, 0.1)
+    expect("the session ends: the tray leaves with its icon", bool(ended) and tray.returncode == 0 and not tray_icon(hwnd), "code=%s" % tray.poll())
+    if tray.poll() is None:
+        tray.kill()
+    ui.close()
+
+
 def kill_service():
     leaks, watching = [], threading.Event()
     watching.set()
@@ -434,10 +618,13 @@ def service_scenario(source, servers, sub):
     switch_scenario(ui, servers)
     if APP:
         window_scenario(source)
+    started = tray_scenario(ui) if TRAY else None
     ui.close()
 
     took, leaked = kill_service()
     expect("the service is killed: the system starts it again and it reconnects by itself", took is not None, "s=%.1f leaked=%d" % (took or -1, leaked))
+    if started:
+        tray_after_restart(started)
 
     subprocess.run(["sc", "stop", "Spofy"], capture_output=True, text=True)
     stopped = until(lambda: "STOPPED" in subprocess.run(["sc", "query", "Spofy"], capture_output=True, text=True).stdout, 40, 0.5)

@@ -9,10 +9,14 @@ ROOT = Path(__file__).resolve().parents[2]
 LOGO = ROOT / "tools/icon/logo.svg"
 RES = ROOT / "app/android/app/src/main/res"
 ICO = ROOT / "app/windows/runner/resources/app_icon.ico"
+TRAY = ROOT / "core/cmd/spofy-tray/icons"
 BRAND = (0x25, 0x63, 0xEB)
 WHITE = (0xFF, 0xFF, 0xFF)
+GREY = (0x64, 0x74, 0x8B)
+AMBER = (0xFB, 0xBF, 0x24)
 LEGACY = {"mdpi": 48, "hdpi": 72, "xhdpi": 96, "xxhdpi": 144, "xxxhdpi": 192}
 WINDOWS = (16, 20, 24, 32, 40, 48, 64, 96, 128, 256)
+TRAY_SIZES = (16, 20, 24, 32, 40, 48, 64)
 ROWS = 16
 
 
@@ -126,7 +130,7 @@ def place(shapes, size, height):
     return [[(x * scale + dx, y * scale + dy) for x, y in s] for s in shapes]
 
 
-def tile(size, margin, radius, height):
+def tile(size, margin, radius, height, back_color=BRAND):
     inset = size * margin
     back = coverage(rounded(inset, inset, size - inset, size - inset, size * radius), size)
     mark = coverage(place(logo(), size, size * height), size)
@@ -135,7 +139,7 @@ def tile(size, margin, radius, height):
         for x in range(size):
             a = min(back[y][x], 1.0)
             m = min(mark[y][x], 1.0)
-            pixels += bytes(round(b * (1 - m) + w * m) for b, w in zip(BRAND, WHITE))
+            pixels += bytes(round(b * (1 - m) + w * m) for b, w in zip(back_color, WHITE))
             pixels.append(round(a * 255))
     return size, pixels
 
@@ -238,11 +242,38 @@ def windows(size):
     return tile(size, 1 / 32, 0.22, 0.66 if size < 32 else 0.6)
 
 
+def tray(size, back_color, fade=1.0, dot=None):
+    _, pixels = tile(size, 1 / 32, 0.22, 0.66 if size < 32 else 0.6, back_color)
+    r = size * 0.22
+    gap = max(1.0, size * 0.08)
+    c = size - r
+    ring = coverage(rounded(c - r - gap, c - r - gap, c + r + gap, c + r + gap, r + gap), size) if dot else None
+    spot = coverage(rounded(c - r, c - r, c + r, c + r, r), size) if dot else None
+    out = bytearray()
+    for y in range(size):
+        for x in range(size):
+            i = (y * size + x) * 4
+            rgb, a = pixels[i:i + 3], pixels[i + 3] / 255 * fade
+            if dot:
+                s = min(spot[y][x], 1.0)
+                a *= 1 - min(ring[y][x], 1.0)
+                total = s + a * (1 - s)
+                rgb = [(d * s + v * a * (1 - s)) / total if total else 0 for v, d in zip(rgb, dot)]
+                a = total
+            out += bytes(round(v) for v in rgb)
+            out.append(round(a * 255))
+    return size, out
+
+
 def wanted():
     files = {RES / "drawable/ic_launcher_foreground.xml": vector().encode()}
     for name, size in LEGACY.items():
         files[RES / ("mipmap-%s/ic_launcher.png" % name)] = legacy(size)
     files[ICO] = [windows(size) for size in WINDOWS]
+    files[TRAY / "on.ico"] = [tray(size, BRAND) for size in TRAY_SIZES]
+    files[TRAY / "off.ico"] = [tray(size, GREY) for size in TRAY_SIZES]
+    files[TRAY / "busy.ico"] = [tray(size, BRAND, fade=0.5) for size in TRAY_SIZES]
+    files[TRAY / "alert.ico"] = [tray(size, BRAND, dot=AMBER) for size in TRAY_SIZES]
     return files
 
 

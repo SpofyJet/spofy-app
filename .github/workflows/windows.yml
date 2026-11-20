@@ -56,6 +56,8 @@ jobs:
       - working-directory: spofy-app/core
         run: |
           CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -checklinkname=0" -o ../dist/spofy-core.exe ./cmd/spofy-core
+          CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -H windowsgui" -o ../dist/spofy-tray.exe ./cmd/spofy-tray
+          ls -l ../dist/spofy-core.exe ../dist/spofy-tray.exe
       - name: flutter
         run: |
           read -r version sum < spofy-app/tools/windows/flutter.sha256
@@ -75,13 +77,14 @@ jobs:
           bundle=build/windows/x64/runner/Release
           cp ../dist/wintun.dll "$bundle/"
           cp ../dist/spofy-core.exe "$bundle/"
+          cp ../dist/spofy-tray.exe "$bundle/"
           ls -l "$bundle"
           du -sh "$bundle"
       - working-directory: spofy-app
         timeout-minutes: 25
         run: |
           mkdir -p dist/shots
-          SPOFY_KILLS=${{ inputs.kills }} SPOFY_SWITCHES=${{ inputs.switches }} python tools/windows/stand.py dist/spofy-core.exe app/build/windows/x64/runner/Release/spofy.exe dist/shots
+          SPOFY_KILLS=${{ inputs.kills }} SPOFY_SWITCHES=${{ inputs.switches }} python tools/windows/stand.py dist/spofy-core.exe app/build/windows/x64/runner/Release/spofy.exe dist/shots app/build/windows/x64/runner/Release/spofy-tray.exe
       - if: always()
         uses: actions/upload-artifact@v7
         with:
