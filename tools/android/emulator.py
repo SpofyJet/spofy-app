@@ -379,8 +379,12 @@ def scenario():
     time.sleep(3)
     adb("wait-for-device")
     learn()
-    code, out = run("adb", "install", "-r", "-g", APK, limit=300)
-    need("the app installs", code == 0 and "Success" in out, out[-300:])
+    for attempt in (1, 2):
+        code, out = run("adb", "install", "-r", "-g", APK, limit=240)
+        if code == 0 and "Success" in out:
+            break
+        adb("wait-for-device")
+    need("the app installs", code == 0 and "Success" in out, "attempt=%d %s" % (attempt, out[-300:]))
     shell("appops set %s ACTIVATE_VPN allow" % PACKAGE)
     cert = open(OUT + "/cert.pem", "rb").read()
     run("adb", "shell", "run-as %s sh -c 'mkdir -p files && cat > files/test-ca.pem'" % PACKAGE, data=cert)
