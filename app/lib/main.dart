@@ -29,6 +29,7 @@ void main() {
     permit: platform.permit,
     always: platform.always,
     apps: platform.apps,
+    browse: platform.browse,
   );
   platform.links(model.offer);
   runApp(SpofyApp(model: model));

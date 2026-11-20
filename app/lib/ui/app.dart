@@ -9,6 +9,7 @@ import 'servers.dart';
 import 'settings.dart';
 import 'strings.dart';
 import 'subscription.dart';
+import 'support.dart';
 import 'theme.dart';
 
 class SpofyApp extends StatefulWidget {
@@ -132,6 +133,7 @@ class _SpofyAppState extends State<SpofyApp> with WidgetsBindingObserver {
             model: model,
             onDone: done,
             onApps: () => _open((done) => AppsScreen(model: model, onDone: done)),
+            onSupport: () => _open((done) => SupportScreen(model: model, onDone: done, now: widget.now)),
           ),
         ),
       ),

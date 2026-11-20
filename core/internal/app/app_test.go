@@ -1015,3 +1015,44 @@ func TestTrafficAndEvents(t *testing.T) {
 		t.Fatalf("heard %d events", heard)
 	}
 }
+
+func TestReportKeepsAShortJournalOfChangesAndNothingSecret(t *testing.T) {
+	b := newBench(t, nil).subscribed()
+	if err := b.app.Connect(Auto); err != nil {
+		t.Fatal(err)
+	}
+	b.tunnel.Answer(map[string]time.Duration{"de": ms(80), "nl": ms(40), "us": ms(120), "обход1": ms(15)})
+	if err := b.app.Check(); err != nil {
+		t.Fatal(err)
+	}
+	r := b.app.Report()
+	var got []string
+	for _, e := range r.Journal {
+		got = append(got, string(e.State)+":"+e.Server)
+	}
+	same(t, got, []string{"measuring:", "connecting:обход1", "connected:обход1"})
+	if r.Device == "" || r.OS == "" || r.StartedAt == 0 || r.Journal[0].At == 0 {
+		t.Fatalf("report = %+v", r)
+	}
+	for i := 0; i < journalSize; i++ {
+		if err := b.app.Disconnect(); err != nil {
+			t.Fatal(err)
+		}
+		if err := b.app.Connect(Auto); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r = b.app.Report()
+	if last := r.Journal[len(r.Journal)-1]; len(r.Journal) != journalSize || last.State != session.Connected {
+		t.Fatalf("%d entries, the last is %+v", len(r.Journal), last)
+	}
+	text, err := json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{apptest.Address, "outbounds", "vnext"} {
+		if strings.Contains(string(text), secret) {
+			t.Fatalf("the report holds %q", secret)
+		}
+	}
+}

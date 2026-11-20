@@ -21,6 +21,7 @@ import android.net.VpnService
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
+import android.os.Parcel
 import android.service.quicksettings.TileService
 import android.util.Log
 import java.io.File
@@ -33,7 +34,15 @@ import kotlin.concurrent.thread
 import org.json.JSONObject
 
 class CoreService : VpnService() {
-    private val local = Binder()
+    private val local = object : Binder() {
+        override fun onTransact(code: Int, data: Parcel, reply: Parcel?, flags: Int): Boolean {
+            if (code != LOCKED) {
+                return super.onTransact(code, data, reply, flags)
+            }
+            reply?.writeInt(if (Build.VERSION.SDK_INT >= 29 && isLockdownEnabled) 1 else 0)
+            return true
+        }
+    }
     private val writing = Any()
     private val asks = Executors.newSingleThreadExecutor()
     private var core: Process? = null
@@ -488,6 +497,7 @@ class CoreService : VpnService() {
 
     companion object {
         const val DISCONNECT = "app.spofy.DISCONNECT"
+        const val LOCKED = IBinder.FIRST_CALL_TRANSACTION
         private const val TAG = "spofy"
         private const val CHANNEL = "state"
         private const val NOTICE = 1

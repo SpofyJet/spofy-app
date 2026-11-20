@@ -14,6 +14,8 @@ class SilentTransport implements Transport {
   final sent = <String>[];
   final _never = StreamController<String>();
 
+  void answer(String line) => _never.add(line);
+
   @override
   Stream<String> get lines => _never.stream;
 
@@ -44,10 +46,11 @@ final phoneApps = [
 ];
 
 class FakeApps implements AppList {
-  FakeApps({List<InstalledApp>? list, this.broken = false}) : list = list ?? phoneApps;
+  FakeApps({List<InstalledApp>? list, this.broken = false, this.lockdown = false}) : list = list ?? phoneApps;
 
   final List<InstalledApp> list;
   final bool broken;
+  final bool lockdown;
   final icons = <String>[];
 
   @override
@@ -63,6 +66,9 @@ class FakeApps implements AppList {
     icons.add(id);
     return null;
   }
+
+  @override
+  Future<bool> locked() async => lockdown;
 }
 
 const _names = [
@@ -118,8 +124,9 @@ class Scene {
     Failure? failure,
     VoidCallback? always,
     AppList? apps,
+    void Function(String address)? browse,
   }) : transport = SilentTransport() {
-    model = AppModel(CoreClient(transport), always: always, apps: apps)
+    model = AppModel(CoreClient(transport), always: always, apps: apps, browse: browse)
       ..snapshot = Snapshot(
         version: '0.1.0',
         connection: connection,
@@ -148,9 +155,11 @@ Scene home(
   Map<String, Object?> settings = const {},
   VoidCallback? always,
   AppList? apps,
+  void Function(String address)? browse,
 }) => Scene(
   always: always,
   apps: apps,
+  browse: browse,
   connection: Connection(state: state, choice: choice, server: server, delayMs: delay, code: code),
   subscription: subscription(),
   servers: servers(),

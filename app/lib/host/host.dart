@@ -19,6 +19,8 @@ abstract interface class Host {
 
   AppList? get apps;
 
+  void Function(String address)? get browse;
+
   void links(void Function(String link) hear);
 }
 
@@ -46,6 +48,10 @@ class AndroidHost implements Host {
 
   @override
   AppList? get apps => const _AndroidApps();
+
+  @override
+  void Function(String address)? get browse =>
+      (address) => unawaited(_channel.invokeMethod<void>('browse', address));
 
   @override
   void links(void Function(String link) hear) {
@@ -90,6 +96,9 @@ class _AndroidApps implements AppList {
 
   @override
   Future<Uint8List?> icon(String id) => AndroidHost._channel.invokeMethod<Uint8List>('icon', id);
+
+  @override
+  Future<bool> locked() async => await AndroidHost._channel.invokeMethod<bool>('locked') ?? false;
 }
 
 class DesktopHost implements Host {
@@ -140,6 +149,9 @@ class DesktopHost implements Host {
 
   @override
   AppList? get apps => null;
+
+  @override
+  void Function(String address)? get browse => null;
 
   @override
   void links(void Function(String link) hear) {}

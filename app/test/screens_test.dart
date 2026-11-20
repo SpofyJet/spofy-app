@@ -527,6 +527,108 @@ void main() {
     );
   });
 
+  testWidgets('the system blocks traffic outside the VPN: the apps screen says what that does to the choice', (
+    tester,
+  ) async {
+    final scene = home(
+      VpnState.idle,
+      settings: {
+        appsKey: {
+          'mode': 'except',
+          'list': ['org.example.bank'],
+        },
+      },
+      apps: FakeApps(lockdown: true),
+    );
+    await show(tester, scene, phone);
+    await open(tester, S.settings);
+    await open(tester, S.apps);
+    expect(find.text(S.appsLocked), findsOneWidget);
+    await golden(tester, 'apps_locked_360');
+    await tester.tap(find.bySemanticsLabel(S.appsAll));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.text(S.appsLocked), findsNothing);
+    await tester.pump(const Duration(seconds: 1));
+  });
+
+  testWidgets('the system does not block traffic outside the VPN: no notice', (tester) async {
+    final scene = home(
+      VpnState.idle,
+      settings: {
+        appsKey: {
+          'mode': 'except',
+          'list': ['org.example.bank'],
+        },
+      },
+      apps: FakeApps(),
+    );
+    await show(tester, scene, phone);
+    await open(tester, S.settings);
+    await open(tester, S.apps);
+    expect(find.byType(Tile), findsWidgets);
+    expect(find.text(S.appsLocked), findsNothing);
+  });
+
+  testWidgets('support: the report shows what the core knows, is copied whole and holds no address', (tester) async {
+    final opened = <String>[];
+    final copied = <String>[];
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+      if (call.method == 'Clipboard.setData') {
+        copied.add((call.arguments as Map<Object?, Object?>)['text']! as String);
+      }
+      return null;
+    });
+    addTearDown(() => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(SystemChannels.platform, null));
+    final scene = home(VpnState.stalled, server: 'de', code: 'server_unreachable', browse: opened.add);
+    await show(tester, scene, phone);
+    await open(tester, S.settings);
+    await open(tester, S.support);
+    expect(scene.transport.sent.last, '{"id":2,"op":"report"}');
+    expect(find.textContaining('Журнал'), findsNothing);
+    scene.transport.answer(
+      '{"re":2,"ok":true,"report":{"os":"Android","osVersion":"15","model":"Pixel 8","device":"hw-1","startedAt":1795089600,'
+      '"journal":[{"at":1795089960,"state":"connected","server":"nl","code":""},'
+      '{"at":1795090440,"state":"stalled","server":"de","code":"server_unreachable"}]}}',
+    );
+    await tester.pump();
+    await tester.pump();
+    await golden(tester, 'support_360');
+    await tester.tap(find.bySemanticsLabel(S.copyReport));
+    await tester.pump();
+    expect(find.bySemanticsLabel(S.copied), findsOneWidget);
+    final text = copied.single;
+    for (final part in [
+      'Spofy 0.1.0',
+      'Android 15 · Pixel 8',
+      'hw-1',
+      'Сервер не отвечает',
+      'server_unreachable',
+      '19.11 12:06:00 connected',
+      'Журнал',
+    ]) {
+      expect(text, contains(part));
+    }
+    for (final secret in ['https://', 'example.test', 'sub.']) {
+      expect(text, isNot(contains(secret)));
+    }
+    await tester.pump(const Duration(seconds: 3));
+    expect(find.bySemanticsLabel(S.copyReport), findsOneWidget);
+    await tester.tap(find.bySemanticsLabel(S.writeSupport));
+    expect(opened, ['https://support.example.test']);
+  });
+
+  testWidgets('support fits a 320 px phone with 130 % text and hides the link it cannot open', (tester) async {
+    final scene = home(VpnState.connected, server: 'de', delay: 34);
+    await show(tester, scene, const Size(320, 568), textScale: 1.3);
+    await open(tester, S.settings);
+    expect(tester.takeException(), isNull);
+    await open(tester, S.support);
+    expect(tester.takeException(), isNull);
+    expect(find.bySemanticsLabel(S.copyReport), findsOneWidget);
+    expect(find.bySemanticsLabel(S.writeSupport), findsNothing);
+  });
+
   testWidgets('the apps screen fits a 320 px phone with 130 % text', (tester) async {
     final scene = home(
       VpnState.idle,
@@ -536,7 +638,7 @@ void main() {
           'list': ['org.example.game'],
         },
       },
-      apps: FakeApps(),
+      apps: FakeApps(lockdown: true),
     );
     await show(tester, scene, const Size(320, 568), textScale: 1.3);
     await open(tester, S.settings);

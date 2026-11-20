@@ -9,10 +9,12 @@ import android.content.ServiceConnection
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.net.Uri
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
+import android.os.Parcel
 import android.provider.Settings
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -28,17 +30,20 @@ class MainActivity : FlutterActivity() {
     private var offered: String? = null
     private var binding = false
     private var bound = false
+    private var remote: IBinder? = null
     private val worker = Executors.newSingleThreadExecutor()
 
     private val link = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName, binder: IBinder) {
             bound = true
+            remote = binder
             starting.forEach { it.success(CoreService.socket(this@MainActivity).path) }
             starting.clear()
         }
 
         override fun onServiceDisconnected(name: ComponentName) {
             bound = false
+            remote = null
         }
     }
 
@@ -77,6 +82,17 @@ class MainActivity : FlutterActivity() {
                 }
                 "apps" -> apps(result)
                 "icon" -> icon(call.arguments as? String, result)
+                "locked" -> result.success(locked())
+                "browse" -> {
+                    val target = Uri.parse(call.arguments as? String ?: "")
+                    if (target.scheme == "https") {
+                        try {
+                            startActivity(Intent(Intent.ACTION_VIEW, target))
+                        } catch (e: Exception) {
+                        }
+                    }
+                    result.success(null)
+                }
                 "always" -> {
                     try {
                         startActivity(Intent(Settings.ACTION_VPN_SETTINGS))
@@ -144,6 +160,20 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    private fun locked(): Boolean {
+        val service = remote ?: return false
+        val data = Parcel.obtain()
+        val reply = Parcel.obtain()
+        return try {
+            service.transact(CoreService.LOCKED, data, reply, 0) && reply.readInt() == 1
+        } catch (e: Exception) {
+            false
+        } finally {
+            data.recycle()
+            reply.recycle()
+        }
+    }
+
     private fun prepare(result: MethodChannel.Result) {
         val consent = VpnService.prepare(this)
         if (consent == null) {
@@ -181,6 +211,7 @@ class MainActivity : FlutterActivity() {
             unbindService(link)
             binding = false
             bound = false
+            remote = null
         }
         super.onDestroy()
     }

@@ -44,6 +44,7 @@ type Reply struct {
 	Snapshot *app.Snapshot   `json:"snapshot,omitempty"`
 	Changed  *bool           `json:"changed,omitempty"`
 	Traffic  *engine.Traffic `json:"traffic,omitempty"`
+	Report   *app.Report     `json:"report,omitempty"`
 }
 
 func Serve(ctx context.Context, r io.Reader, w io.Writer, a *app.App, p *host.Platform) error {
@@ -162,6 +163,9 @@ func Serve(ctx context.Context, r io.Reader, w io.Writer, a *app.App, p *host.Pl
 		case "traffic":
 			t := a.Traffic()
 			send(Reply{Re: req.ID, OK: true, Traffic: &t})
+		case "report":
+			r := a.Report()
+			send(Reply{Re: req.ID, OK: true, Report: &r})
 		default:
 			send(Reply{Re: req.ID, Code: CodeOp, Error: "unknown operation"})
 		}

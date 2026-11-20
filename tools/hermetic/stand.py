@@ -646,6 +646,12 @@ def platform():
     c = ui.call("connect", server=[n for n in SERVERS if n != ui.active()["server"]][0])
     code, body = fetch("http://foreign.test/ip")
     expect("platform: the platform is gone: the tunnel it gave keeps working", c["ok"] and body in SERVERS.values(), "seen=%s" % body)
+    r = ui.call("report")
+    told = json.dumps(r)
+    journal = [e["state"] for e in (r.get("report") or {}).get("journal", [])]
+    expect("platform: the report for support has the story of the session and no address of a server or of the subscription",
+           r["ok"] and journal.count("connected") >= 3 and "failed" in journal and len(journal) <= 40 and "HERMETICTOKEN" not in told and "10.77." not in told,
+           "entries=%d last=%s" % (len(journal), journal[-3:]))
     core.stdin.close()
     code = core.wait(timeout=15)
     left = until(lambda: not engines() and "spofy0" not in links(), 5, 0.1)

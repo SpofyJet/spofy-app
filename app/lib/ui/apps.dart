@@ -29,6 +29,7 @@ class _AppsScreenState extends State<AppsScreen> {
   late final Set<String> _marked;
   List<InstalledApp>? _apps;
   bool _touched = false;
+  bool _locked = false;
   Timer? _later;
 
   @override
@@ -45,8 +46,10 @@ class _AppsScreenState extends State<AppsScreen> {
 
   Future<void> _load(Set<String> first) async {
     var found = const <InstalledApp>[];
+    var locked = false;
     try {
       found = await widget.model.apps?.installed() ?? found;
+      locked = await widget.model.apps?.locked() ?? false;
     } on Exception {
       found = const [];
     }
@@ -54,6 +57,7 @@ class _AppsScreenState extends State<AppsScreen> {
       return;
     }
     setState(() {
+      _locked = locked;
       _apps = [
         for (final app in found)
           if (first.contains(app.id)) app,
@@ -162,6 +166,7 @@ class _AppsScreenState extends State<AppsScreen> {
               if (app.name.toLowerCase().contains(text) || app.id.toLowerCase().contains(text)) app,
           ];
     final notes = [
+      if (_locked) const Notice(S.appsLocked),
       if (apps.isEmpty)
         const Notice(S.appsFailed)
       else if (_mode == AppsMode.only && _marked.isEmpty)

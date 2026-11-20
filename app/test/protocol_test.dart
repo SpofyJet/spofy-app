@@ -20,6 +20,7 @@ Request? build(Map<String, Object?> sent) {
     'measure' => const Request.measure(),
     'set' => Request.set(sent['key']! as String, sent['value']),
     'traffic' => const Request.traffic(),
+    'report' => const Request.report(),
     _ => null,
   };
 }

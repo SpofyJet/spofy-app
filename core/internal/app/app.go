@@ -167,6 +167,24 @@ type Subscription struct {
 	UpdateEvery int64  `json:"updateEvery"`
 }
 
+type Entry struct {
+	At     int64         `json:"at"`
+	State  session.State `json:"state"`
+	Server string        `json:"server"`
+	Code   engine.Code   `json:"code"`
+}
+
+type Report struct {
+	OS        string  `json:"os"`
+	OSVersion string  `json:"osVersion"`
+	Model     string  `json:"model"`
+	Device    string  `json:"device"`
+	StartedAt int64   `json:"startedAt"`
+	Journal   []Entry `json:"journal"`
+}
+
+const journalSize = 40
+
 type Snapshot struct {
 	Version      string                     `json:"version"`
 	Protocol     int                        `json:"protocol"`
@@ -222,6 +240,8 @@ type App struct {
 	sampled time.Time
 	closed  bool
 	tasks   sync.WaitGroup
+	journal []Entry
+	started int64
 	renews  bool
 	tried   time.Time
 }
@@ -249,6 +269,7 @@ func New(cfg Config) *App {
 		cfg.Settle = 10 * time.Second
 	}
 	a := &App{cfg: cfg, hearers: map[int]func(Event){}}
+	a.started = a.now().Unix()
 	a.ctx, a.cancel = context.WithCancel(context.Background())
 	a.online.Store(true)
 	a.plan(cfg.Store.Get(), false)
@@ -630,6 +651,13 @@ func on(st store.State, key string) bool {
 	return string(st.Settings[key]) == "true"
 }
 
+func (a *App) Report() Report {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	d := a.cfg.Device
+	return Report{OS: d.OS, OSVersion: d.OSVersion, Model: d.Model, Device: d.HWID, StartedAt: a.started, Journal: append([]Entry{}, a.journal...)}
+}
+
 func (a *App) Traffic() engine.Traffic {
 	t := a.flow()
 	return engine.Traffic{Up: t.Up, Down: t.Down}
@@ -713,6 +741,10 @@ func (a *App) onState(e session.Event) {
 	conn := Connection{State: e.State, Choice: a.conn.Choice, Server: e.Server, DelayMs: e.Delay.Milliseconds(), Code: e.Code, Error: e.Error}
 	same := conn == a.conn
 	arrived := e.State == session.Connected && a.conn.State != session.Connected
+	if conn.State != a.conn.State || conn.Server != a.conn.Server || conn.Code != a.conn.Code {
+		a.journal = append(a.journal, Entry{At: a.now().Unix(), State: conn.State, Server: conn.Server, Code: conn.Code})
+		a.journal = a.journal[max(len(a.journal)-journalSize, 0):]
+	}
 	a.conn = conn
 	hush := a.hush
 	a.mu.Unlock()

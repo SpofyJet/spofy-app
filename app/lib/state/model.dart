@@ -17,11 +17,12 @@ class Failure {
 }
 
 class AppModel extends ChangeNotifier {
-  AppModel(CoreClient client, {this.reopen, this.permit, this.always, this.apps}) {
+  AppModel(CoreClient client, {this.reopen, this.permit, this.always, this.apps, this.browse}) {
     _attach(client);
   }
 
-  AppModel.opening(Future<CoreClient> Function() open, {this.permit, this.always, this.apps}) : reopen = open {
+  AppModel.opening(Future<CoreClient> Function() open, {this.permit, this.always, this.apps, this.browse})
+    : reopen = open {
     unawaited(revive());
   }
 
@@ -33,6 +34,7 @@ class AppModel extends ChangeNotifier {
   final Future<bool> Function()? permit;
   final VoidCallback? always;
   final AppList? apps;
+  final void Function(String address)? browse;
 
   CoreClient? _client;
   StreamSubscription<Event>? _events;
@@ -179,6 +181,8 @@ class AppModel extends ChangeNotifier {
   Future<void> set(String key, Object? value) async {
     await _ask(Request.set(key, value));
   }
+
+  Future<Report?> report() async => (await _ask(const Request.report()))?.report;
 
   Future<void> poll() async {
     final seen = (await _ask(const Request.traffic()))?.traffic;

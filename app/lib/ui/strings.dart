@@ -25,6 +25,8 @@ abstract final class S {
   static const appsClear = 'Очистить поиск';
   static const appsNone = 'Ничего не найдено';
   static const appsFailed = 'Не удалось получить список приложений';
+  static const appsLocked =
+      'В Android включено «Блокировать соединения без VPN». Приложения, которые работают без VPN, останутся без интернета';
   static const appsOnlyEmpty = 'Отметьте хотя бы одно приложение. Пока действует прежний выбор';
 
   static String appsHint(AppsMode mode) => switch (mode) {
@@ -60,6 +62,15 @@ abstract final class S {
 
   static String replaceFrom(String address) => 'Новая ссылка: ${Uri.tryParse(address)?.host ?? ''}';
   static const support = 'Поддержка';
+  static const supportHint =
+      'Если что-то не работает, скопируйте отчёт и отправьте его в поддержку. Ссылки на подписку и адресов серверов в нём нет';
+  static const copyReport = 'Скопировать отчёт';
+  static const copied = 'Скопировано';
+  static const writeSupport = 'Написать в поддержку';
+  static const reportDevice = 'Устройство';
+  static const reportJournal = 'Журнал, UTC';
+
+  static String yes(bool on) => on ? 'да' : 'нет';
   static const measure = 'Проверить скорость';
   static const measuring = 'Проверяем серверы';
   static const forever = 'Навсегда';

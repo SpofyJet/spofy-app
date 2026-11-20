@@ -13,6 +13,8 @@ abstract interface class AppList {
   Future<List<InstalledApp>> installed();
 
   Future<Uint8List?> icon(String id);
+
+  Future<bool> locked();
 }
 
 enum AppsMode { all, except, only }

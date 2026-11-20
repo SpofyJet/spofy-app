@@ -159,6 +159,7 @@ func TestSessionTranscript(t *testing.T) {
 	step("connect", `"server":"mars"`, "server_not_found")
 	step("measure", "", "connected")
 	step("disconnect", "", "")
+	step("report", "", "")
 	step("refresh", "", "")
 	step("set", `"key":"apps","value":null`, "")
 	step("hello", "", "")

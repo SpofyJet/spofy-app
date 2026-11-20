@@ -104,6 +104,10 @@ class Server(http.server.ThreadingHTTPServer):
         self.server_name, self.server_port = "site", self.server_address[1]
 
 
+class Server6(Server):
+    address_family = socket.AF_INET6
+
+
 class Site(http.server.BaseHTTPRequestHandler):
     def reply(self, code, body=b"", headers=()):
         self.send_response(code)
@@ -143,6 +147,10 @@ def host_side():
     secure.socket = context.wrap_socket(secure.socket, server_side=True)
     for s in (plain, secure):
         threading.Thread(target=s.serve_forever, daemon=True).start()
+    try:
+        threading.Thread(target=Server6(("::", 8083), Site).serve_forever, daemon=True).start()
+    except OSError as e:
+        print("the host has no IPv6: %s" % e, flush=True)
     counted = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     counted.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     counted.bind(("0.0.0.0", 8082))
@@ -378,11 +386,19 @@ def scenario():
 
     s = ui.call("subscribe", url="https://example.com/sub/none")
     expect("the core resolves names and trusts the system certificates", not s["ok"] and s.get("code") in ("sub_status", "sub_format"), "code=%s %s" % (s.get("code"), s.get("error", "")[:200]))
+    trust = {}
+    for site in ("valid-isrgrootx1.letsencrypt.org", "valid-isrgrootx2.letsencrypt.org", "1.1.1.1/dns-query", "8.8.8.8/dns-query", "dns.google"):
+        r = ui.call("subscribe", url="https://%s" % site)
+        trust[site] = "not trusted" if "x509" in r.get("error", "") else r.get("code") or "ok"
+    print("certificates of public sites as the core sees them: %s" % trust, flush=True)
     s = ui.call("subscribe", url="https://%s:8443/sub/EMULATORTOKEN" % GATE)
     need("subscribe", s["ok"], "ms=%d %s %s" % (s["ms"], s.get("code"), s.get("error", "")[:300]))
     m = ui.call("measure")
     servers = ([e for e in ui.events if e.get("ev") == "servers"] or [{"servers": []}])[-1]["servers"]
     expect("measure both servers", m["ok"] and len([x for x in servers if x["delayMs"] > 0]) == 2, "ms=%d delays=%s" % (m["ms"], {x["id"]: x["delayMs"] for x in servers}))
+    six = shell("printf 'GET /generate_204 HTTP/1.0\\r\\n\\r\\n' | %s%s -6 -w 3 fec0::2 8083 2>&1" % (phone["limit"] % 4 if phone["limit"] else "", phone["nc"]), limit=20)
+    print("IPv6 on the device: %s; routes: %s; the host over IPv6 answers: %s"
+          % (re.findall(r"inet6 (\S+)", shell("ip -6 -o addr show scope global")), len(shell("ip -6 route show table all").splitlines()), six[:60].replace("\r\n", " | ")), flush=True)
     direct = fetch(HOST, 8081, "/ip")
     expect("without the tunnel the site is reached directly", "site sees" in direct and not direct.endswith(INSIDE), direct[-40:])
 
@@ -540,8 +556,8 @@ def scenario():
     time.sleep(1)
     shell("input keyevent KEYCODE_BACK")
     time.sleep(1)
-    state = shell("cat %s/files/state/state | head -c 4000" % DATA)
-    expect("saved state has nothing in the clear", "EMULATORTOKEN" not in state and "outbounds" not in state and len(state) > 40, "bytes=%d" % len(state))
+    state = subprocess.run(["adb", "exec-out", "cat %s/files/state/state" % DATA], capture_output=True, timeout=60).stdout
+    expect("saved state has nothing in the clear", b"EMULATORTOKEN" not in state and b"outbounds" not in state and len(state) > 400, "bytes=%d" % len(state))
     key = shell("cat %s/files/key | wc -c" % DATA)
     expect("the key file holds only the wrapped key", key.strip() == "60", "bytes=%s" % key.strip())
     ui.s.close()

@@ -248,6 +248,68 @@ class Traffic {
   Map<String, Object?> toJson() => {'up': up, 'down': down};
 }
 
+class JournalEntry {
+  const JournalEntry({required this.at, required this.state, this.server = '', this.code = ''});
+
+  factory JournalEntry.fromJson(Object? json) {
+    const what = 'journal entry';
+    final m = _object(json, what, const ['at', 'state', 'server', 'code']);
+    return JournalEntry(
+      at: _get<int>(m, 'at', what),
+      state: VpnState.parse(_get<String>(m, 'state', what)),
+      server: _get<String>(m, 'server', what),
+      code: _get<String>(m, 'code', what),
+    );
+  }
+
+  final int at;
+  final VpnState state;
+  final String server;
+  final String code;
+
+  Map<String, Object?> toJson() => {'at': at, 'state': state.name, 'server': server, 'code': code};
+}
+
+class Report {
+  const Report({
+    this.os = '',
+    this.osVersion = '',
+    this.model = '',
+    this.device = '',
+    this.startedAt = 0,
+    this.journal = const [],
+  });
+
+  factory Report.fromJson(Object? json) {
+    const what = 'report';
+    final m = _object(json, what, const ['os', 'osVersion', 'model', 'device', 'startedAt', 'journal']);
+    return Report(
+      os: _get<String>(m, 'os', what),
+      osVersion: _get<String>(m, 'osVersion', what),
+      model: _get<String>(m, 'model', what),
+      device: _get<String>(m, 'device', what),
+      startedAt: _get<int>(m, 'startedAt', what),
+      journal: List<JournalEntry>.unmodifiable(_get<List<Object?>>(m, 'journal', what).map(JournalEntry.fromJson)),
+    );
+  }
+
+  final String os;
+  final String osVersion;
+  final String model;
+  final String device;
+  final int startedAt;
+  final List<JournalEntry> journal;
+
+  Map<String, Object?> toJson() => {
+    'os': os,
+    'osVersion': osVersion,
+    'model': model,
+    'device': device,
+    'startedAt': startedAt,
+    'journal': [for (final e in journal) e.toJson()],
+  };
+}
+
 List<Server> _servers(Object? json) {
   if (json is! List<Object?>) {
     throw const ProtocolError('servers is not a list');
@@ -368,11 +430,17 @@ class Reply extends Message {
     this.snapshot,
     this.changed,
     this.traffic,
+    this.report,
   });
 
   factory Reply.fromJson(Object? json) {
     const what = 'reply';
-    final m = _object(json, what, const ['re', 'ok'], const ['code', 'error', 'snapshot', 'changed', 'traffic']);
+    final m = _object(
+      json,
+      what,
+      const ['re', 'ok'],
+      const ['code', 'error', 'snapshot', 'changed', 'traffic', 'report'],
+    );
     return Reply(
       re: _get<int>(m, 're', what),
       ok: _get<bool>(m, 'ok', what),
@@ -381,6 +449,7 @@ class Reply extends Message {
       snapshot: m['snapshot'] == null ? null : Snapshot.fromJson(m['snapshot']),
       changed: _get<bool?>(m, 'changed', what),
       traffic: m['traffic'] == null ? null : Traffic.fromJson(m['traffic']),
+      report: m['report'] == null ? null : Report.fromJson(m['report']),
     );
   }
 
@@ -391,6 +460,7 @@ class Reply extends Message {
   final Snapshot? snapshot;
   final bool? changed;
   final Traffic? traffic;
+  final Report? report;
 
   @override
   Map<String, Object?> toJson() => {
@@ -401,6 +471,7 @@ class Reply extends Message {
     if (snapshot != null) 'snapshot': snapshot!.toJson(),
     if (changed != null) 'changed': changed,
     if (traffic != null) 'traffic': traffic!.toJson(),
+    if (report != null) 'report': report!.toJson(),
   };
 }
 
@@ -489,6 +560,8 @@ class Request {
   Request.set(String key, Object? value) : this._('set', {'key': key, 'value': value});
 
   const Request.traffic() : this._('traffic');
+
+  const Request.report() : this._('report');
 
   final String op;
   final Map<String, Object?> _fields;

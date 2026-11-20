@@ -9,11 +9,12 @@ const autoConnectKey = 'autoConnect';
 const killSwitchKey = 'killSwitch';
 
 class SettingsScreen extends StatelessWidget {
-  const SettingsScreen({super.key, required this.model, required this.onDone, this.onApps});
+  const SettingsScreen({super.key, required this.model, required this.onDone, this.onApps, this.onSupport});
 
   final AppModel model;
   final VoidCallback onDone;
   final VoidCallback? onApps;
+  final VoidCallback? onSupport;
 
   @override
   Widget build(BuildContext context) {
@@ -51,6 +52,7 @@ class SettingsScreen extends StatelessWidget {
                       const SizedBox(height: 8),
                       Tile(title: S.alwaysOn, subtitle: S.alwaysOnHint, wrap: true, onTap: model.always),
                     ],
+                    if (onSupport != null) ...[const SizedBox(height: 8), Tile(title: S.support, onTap: onSupport)],
                     const SizedBox(height: 20),
                     Text(S.version(model.snapshot.version), style: Ink.label, textAlign: TextAlign.center),
                   ],
