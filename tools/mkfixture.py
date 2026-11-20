@@ -183,7 +183,7 @@ def resolver(s):
 
 
 configs = json.load(open(src + "/sub.json"))
-out = []
+made = []
 for c in configs:
     plain = [
         i for i, o in enumerate(c["outbounds"])
@@ -193,7 +193,7 @@ for c in configs:
     for i in plain:
         for v in f["outbounds"][i]["settings"]["vnext"]:
             v["address"] = "10.203.0.%d" % (i + 10)
-    out.append(f)
+    made.append(f)
 
 keep = {}
 for line in open(src + "/sub.headers", encoding="utf-8", errors="replace"):
@@ -216,7 +216,7 @@ headers = {
     "X-Hwid-Active": "true",
 }
 
-body = json.dumps(out, ensure_ascii=False, separators=(",", ":"))
+body = json.dumps(made, ensure_ascii=False, separators=(",", ":"))
 head = json.dumps(headers, ensure_ascii=False, indent=1)
 leaks = sorted(v for v in real if v in body or v in head)
 if leaks:
@@ -231,4 +231,4 @@ for path in sys.argv[3:]:
         sys.exit("%s contains real values of kinds %s" % (path, found))
 open(dst + "/sub.json", "w").write(body)
 open(dst + "/headers.json", "w").write(head)
-print(len(out), "configs,", len(body), "bytes; replaced", len(real), "real values, 0 left")
+print(len(made), "configs,", len(body), "bytes; replaced", len(real), "real values, 0 left")

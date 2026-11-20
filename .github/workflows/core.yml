@@ -20,6 +20,8 @@ jobs:
         with:
           go-version-file: spofy-app/core/go.mod
           cache-dependency-path: spofy-app/core/go.sum
+      - working-directory: spofy-app
+        run: git ls-files -z '*.py' | xargs -0 python3 -B tools/pycheck.py
       - working-directory: spofy-app/core
         run: |
           go vet ./...
@@ -39,9 +41,9 @@ jobs:
           FLUTTER_CACHE="$RUNNER_TEMP/flutter-cache" spofy-app/tools/app-check.sh
       - timeout-minutes: 10
         run: FLUTTER_CACHE="$RUNNER_TEMP/flutter-cache" spofy-app/tools/app-stand.sh
-  android:
+  apk:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
         with:
@@ -88,6 +90,36 @@ jobs:
           name: apk
           path: spofy-app/app/build/app/outputs/flutter-apk/*.apk
           retention-days: 7
+      - uses: actions/upload-artifact@v7
+        with:
+          name: host
+          path: ${{ runner.temp }}/spofy-core
+          retention-days: 1
+      - name: lint
+        working-directory: spofy-app/app/android
+        run: ./gradlew :app:lintDebug || { find .. -name 'lint-results*.txt' -exec cat {} +; exit 1; }
+  android:
+    needs: apk
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        api: [34, 24]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: spofy-app
+      - uses: actions/download-artifact@v8
+        with:
+          name: apk
+          path: ${{ runner.temp }}/apk
+      - uses: actions/download-artifact@v8
+        with:
+          name: host
+          path: ${{ runner.temp }}/host
+      - run: chmod +x "$RUNNER_TEMP/host/spofy-core"
       - name: kvm
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -95,15 +127,15 @@ jobs:
           sudo udevadm trigger --name-match=kvm
       - uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 34
+          api-level: ${{ matrix.api }}
           arch: x86_64
           target: default
           disable-animations: true
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
-          script: python3 spofy-app/tools/android/emulator.py spofy-app/app/build/app/outputs/flutter-apk/app-debug.apk "$RUNNER_TEMP/spofy-core" "$RUNNER_TEMP/android-out" spofy-app/app/build/app/outputs/flutter-apk/app-x86_64-release.apk
+          script: python3 spofy-app/tools/android/emulator.py "$RUNNER_TEMP/apk/app-debug.apk" "$RUNNER_TEMP/host/spofy-core" "$RUNNER_TEMP/android-out" "$RUNNER_TEMP/apk/app-x86_64-release.apk"
       - if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: emulator
+          name: emulator-${{ matrix.api }}
           path: ${{ runner.temp }}/android-out
           retention-days: 7

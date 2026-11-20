@@ -14,6 +14,7 @@ remote = {}
 seen = []
 asked = []
 kicks = []
+phone = {"sdk": 0, "nc": "nc", "limit": "timeout %d "}
 os.makedirs(OUT, exist_ok=True)
 
 
@@ -253,9 +254,28 @@ class Channel:
         return self.call("hello")["snapshot"]["connection"]
 
 
+def piped(seconds, target, port):
+    return "%s%s -w %d %s %s" % (phone["limit"] % seconds if phone["limit"] else "", phone["nc"], seconds, target, port)
+
+
+def learn():
+    phone["sdk"] = int(shell("getprop ro.build.version.sdk").strip() or 0)
+    if not shell("timeout 1 true; echo rc=$?").endswith("rc=0"):
+        phone["limit"] = ""
+    for tool in ("nc", "/system/xbin/nc", "toybox nc", "busybox nc"):
+        phone["nc"] = tool
+        if " 204" in fetch(HOST, 8081, "/generate_204"):
+            break
+    else:
+        phone["nc"] = ""
+    print("device: Android %s (API %d, %s), connections are made with %r, time limit %r"
+          % (shell("getprop ro.build.version.release").strip(), phone["sdk"], shell("getprop ro.product.cpu.abi").strip(), phone["nc"], phone["limit"]), flush=True)
+    need("the device can open connections for the checks", phone["nc"] != "")
+
+
 def fetch(target, port, path, host=None):
     request = "GET %s HTTP/1.0\\r\\nHost: %s\\r\\n\\r\\n" % (path, host or target)
-    return shell("printf '%s' | timeout 8 nc -w 8 %s %d" % (request, target, port), limit=30)
+    return shell("printf '%s' | %s" % (request, piped(8, target, port)), limit=30)
 
 
 def as_shell(path="/ip"):
@@ -282,25 +302,34 @@ def linked(kind):
 
 
 def processes():
+    listing = "for f in $(grep -l -a -e %s -e libspofycore.so /proc/[0-9]*/cmdline 2>/dev/null); do echo \"@@$f\"; cat $f 2>/dev/null; echo; done" % PACKAGE
+    raw = subprocess.run(["adb", "exec-out", listing], capture_output=True, timeout=60).stdout
     out = {}
-    for line in shell("ps -A -o PID,RSS,ARGS").splitlines():
-        parts = line.split(None, 2)
-        if len(parts) == 3 and (PACKAGE in parts[2] or "libspofycore.so" in parts[2]) and parts[0].isdigit():
-            out[int(parts[0])] = (int(parts[1]), parts[2])
+    for pid, body in re.findall(rb"@@/proc/(\d+)/cmdline\r?\n([^@]*)", raw):
+        args = body.strip(b"\r\n\0").replace(b"\0", b" ").decode(errors="replace").strip()
+        if args in (PACKAGE, PACKAGE + ":core") or args.split(" ")[0].endswith("libspofycore.so"):
+            out[int(pid)] = args
     return out
 
 
+def flight(on):
+    if phone["sdk"] >= 30:
+        shell("cmd connectivity airplane-mode %s" % ("enable" if on else "disable"))
+    else:
+        shell("settings put global airplane_mode_on %d; am broadcast -a android.intent.action.AIRPLANE_MODE --ez state %s" % (on, "true" if on else "false"))
+
+
 def engines():
-    return [pid for pid, (_, args) in processes().items() if args.rstrip().endswith("libspofycore.so engine")]
+    return [pid for pid, args in processes().items() if args.endswith("libspofycore.so engine")]
 
 
 def role(args):
-    return "interface" if args.strip() == PACKAGE else "service" if args.strip() == PACKAGE + ":core" else "engine" if args.rstrip().endswith(" engine") else "core"
+    return "interface" if args == PACKAGE else "service" if args == PACKAGE + ":core" else "engine" if args.endswith(" engine") else "core"
 
 
 def memory():
     total = {}
-    for pid, (_, args) in processes().items():
+    for pid, args in processes().items():
         text = shell("dumpsys meminfo %d" % pid, limit=60)
         m = re.search(r"TOTAL PSS:\s+(\d+)", text) or re.search(r"TOTAL\s+(\d+)", text)
         if m:
@@ -310,7 +339,7 @@ def memory():
 
 def cpu():
     total = {}
-    for pid, (_, args) in processes().items():
+    for pid, args in processes().items():
         fields = shell("cat /proc/%d/stat" % pid).rsplit(")", 1)[-1].split()
         if len(fields) > 12:
             total[role(args)] = total.get(role(args), 0) + (int(fields[11]) + int(fields[12])) * 10
@@ -328,6 +357,7 @@ def scenario():
     adb("root")
     time.sleep(3)
     adb("wait-for-device")
+    learn()
     code, out = run("adb", "install", "-r", "-g", APK, limit=300)
     need("the app installs", code == 0 and "Success" in out, out[-300:])
     shell("appops set %s ACTIVATE_VPN allow" % PACKAGE)
@@ -343,8 +373,8 @@ def scenario():
     print("core version %s" % hello["snapshot"].get("version"), flush=True)
     time.sleep(2)
     screen("1-start")
-    kinds = [args for _, args in processes().values()]
-    expect("the service runs in its own process", any(a.strip() == PACKAGE + ":core" for a in kinds) and any(a.strip() == PACKAGE for a in kinds), str(kinds))
+    kinds = list(processes().values())
+    expect("the service runs in its own process", PACKAGE + ":core" in kinds and PACKAGE in kinds, str(kinds))
 
     s = ui.call("subscribe", url="https://example.com/sub/none")
     expect("the core resolves names and trusts the system certificates", not s["ok"] and s.get("code") in ("sub_status", "sub_format"), "code=%s %s" % (s.get("code"), s.get("error", "")[:200]))
@@ -363,7 +393,7 @@ def scenario():
     body = fetch(HOST, 8081, "/ip")
     need("another app's traffic goes through the tunnel", body.endswith("site sees " + INSIDE) and accepted(first, "%s:8081" % HOST) > 0, "body=%s accepted=%d" % (body[-60:], accepted(first, "%s:8081" % HOST)))
     leaked, flowing = outside(), len(seen)
-    loop = "while [ -e /data/local/tmp/noise ]; do printf 'GET /ip HTTP/1.0\\r\\n\\r\\n' | timeout 2 nc -w 2 %s 8081 >/dev/null 2>&1; sleep 0.2; done\n" % HOST
+    loop = "while [ -e /data/local/tmp/noise ]; do printf 'GET /ip HTTP/1.0\\r\\n\\r\\n' | %s >/dev/null 2>&1; sleep 0.2; done\n" % piped(2, HOST, 8081)
     run("adb", "shell", "cat > /data/local/tmp/noise.sh", data=loop.encode())
     shell("touch /data/local/tmp/noise; nohup sh /data/local/tmp/noise.sh >/dev/null 2>&1 &")
     time.sleep(5)
@@ -390,9 +420,9 @@ def scenario():
         return out
     rounds, outside_ms = probed(), []
     owner = shell("stat -c %%u %s" % DATA).strip()
-    kick = "while [ -e /data/local/tmp/kick ]; do timeout 1 nc -w 1 %s 8082 </dev/null >/dev/null 2>&1; done\n" % GATE
+    kick = "while [ -e /data/local/tmp/kick ]; do %s </dev/null >/dev/null 2>&1; done\n" % piped(1, GATE, 8082)
     run("adb", "shell", "cat > /data/local/tmp/kick.sh", data=kick.encode())
-    alone = shell("su %s,%s,3003 sh -c 'timeout 2 nc -w 2 %s 8082 </dev/null; echo rc=$?' 2>&1" % (owner, owner, GATE), limit=20).strip()
+    alone = shell("su %s,%s,3003 sh -c '%s </dev/null; echo rc=$?' 2>&1" % (owner, owner, piped(2, GATE, 8082)), limit=20).strip()
     sent, began = len(kicks), time.time()
     shell("touch /data/local/tmp/kick; nohup su %s,%s,3003 sh /data/local/tmp/kick.sh >/dev/null 2>&1 &" % (owner, owner))
     time.sleep(1)
@@ -423,12 +453,12 @@ def scenario():
     time.sleep(1)
     shell("am kill %s" % PACKAGE)
     time.sleep(2)
-    alive = [args.strip() for _, args in processes().values()]
+    alive = list(processes().values())
     expect("the interface is closed: the tunnel keeps working", through() and PACKAGE + ":core" in alive, "processes=%s" % alive)
     shell("am start -W -n %s/.MainActivity" % PACKAGE, limit=120)
     time.sleep(4)
     screen("4-reopened")
-    expect("the interface is opened again", PACKAGE in [args.strip() for _, args in processes().values()])
+    expect("the interface is opened again", PACKAGE in list(processes().values()))
 
     c = ui.call("connect", server="auto")
     held = ui.active()["server"]
@@ -438,25 +468,28 @@ def scenario():
     remote[held].send_signal(signal.SIGCONT)
     expect("a server went silent under traffic: the app moved to the other one by itself on the same tunnel", c["ok"] and bool(moved) and tunnel() == device,
            "s=%.1f state=%s server=%s" % (time.time() - began, ui.active()["state"], ui.active()["server"]))
-    second = linked("MOBILE")
-    shell("svc wifi disable")
-    began = time.time()
-    if second:
-        moved = until(lambda: ui.active()["state"] == "connected" and through(), 60)
-        expect("Wi-Fi is off: traffic goes on over the mobile network on the same tunnel", bool(moved) and tunnel() == device, "s=%.1f state=%s device=%s" % (time.time() - began, ui.active()["state"], tunnel()))
+    if phone["sdk"] >= 26:
+        second = linked("MOBILE")
+        shell("svc wifi disable")
+        began = time.time()
+        if second:
+            moved = until(lambda: ui.active()["state"] == "connected" and through(), 60)
+            expect("Wi-Fi is off: traffic goes on over the mobile network on the same tunnel", bool(moved) and tunnel() == device, "s=%.1f state=%s device=%s" % (time.time() - began, ui.active()["state"], tunnel()))
+        else:
+            off = until(lambda: ui.active()["state"] == "offline", 20, 0.1)
+            expect("Wi-Fi is off and there is no other network: the state says so and the tunnel stays", bool(off) and tunnel() == device, "s=%.1f state=%s" % (time.time() - began, ui.active()["state"]))
+        shell("svc wifi enable")
+        began = time.time()
+        again = until(lambda: linked("WIFI") and ui.active()["state"] == "connected" and through(), 90)
+        expect("Wi-Fi is back: connected on the same tunnel", bool(again) and tunnel() == device, "s=%.1f state=%s" % (time.time() - began, ui.active()["state"]))
     else:
-        off = until(lambda: ui.active()["state"] == "offline", 20, 0.1)
-        expect("Wi-Fi is off and there is no other network: the state says so and the tunnel stays", bool(off) and tunnel() == device, "s=%.1f state=%s" % (time.time() - began, ui.active()["state"]))
-    shell("svc wifi enable")
-    began = time.time()
-    again = until(lambda: linked("WIFI") and ui.active()["state"] == "connected" and through(), 90)
-    expect("Wi-Fi is back: connected on the same tunnel", bool(again) and tunnel() == device, "s=%.1f state=%s" % (time.time() - began, ui.active()["state"]))
-    shell("cmd connectivity airplane-mode enable")
+        print("the emulator of this Android version has only a mobile network: the steps with Wi-Fi are left out", flush=True)
+    flight(True)
     began = time.time()
     off = until(lambda: ui.active()["state"] == "offline", 40, 0.1)
     expect("no network: the state says so and the tunnel stays", bool(off) and tunnel() == device, "s=%.1f state=%s" % (time.time() - began, ui.active()["state"]))
     screen("5-offline")
-    shell("cmd connectivity airplane-mode disable")
+    flight(False)
     began = time.time()
     on = until(lambda: ui.active()["state"] == "connected" and through(), 120)
     expect("the network is back: connected again without being asked", bool(on) and tunnel() == device, "s=%.1f state=%s" % (time.time() - began, ui.active()["state"]))
@@ -464,7 +497,7 @@ def scenario():
     time.sleep(3)
     expect("nothing reached the site past the tunnel while it was up", outside() == leaked, "requests=%d past=%d" % (len(seen), outside() - leaked))
 
-    get = "printf 'GET %s HTTP/1.0\\r\\nHost: %s\\r\\n\\r\\n' \"$3\" \"$1\" | timeout 8 nc -w 8 \"$1\" \"$2\"\n"
+    get = "printf 'GET %%s HTTP/1.0\\r\\nHost: %%s\\r\\n\\r\\n' \"$3\" \"$1\" | %s\n" % piped(8, '"$1"', '"$2"')
     run("adb", "shell", "cat > /data/local/tmp/get.sh", data=get.encode())
     mine = as_shell()
     expect("a second app, with its own user, is in the tunnel as well", mine.endswith("site sees " + INSIDE), mine[-40:])
@@ -515,13 +548,13 @@ def scenario():
 
     shell("am force-stop %s" % PACKAGE)
     time.sleep(1)
-    asked = shell("am start-foreground-service -a android.net.VpnService -n %s/.CoreService" % PACKAGE)
+    begun = shell("am %s -a android.net.VpnService -n %s/.CoreService" % ("start-foreground-service" if phone["sdk"] >= 26 else "startservice", PACKAGE))
     began = time.time()
     up = until(lambda: tunnel() != "" and through(), 40, 0.2)
-    alive = [args.strip() for _, args in processes().values()]
+    alive = list(processes().values())
     service = shell("dumpsys activity services %s/.CoreService" % PACKAGE)
     expect("started by the system without the interface: the VPN comes up by itself", bool(up) and PACKAGE not in alive and "isForeground=true" in service,
-           "s=%.1f processes=%d %s" % (time.time() - began, len(alive), asked[-120:]))
+           "s=%.1f processes=%d %s" % (time.time() - began, len(alive), begun[-120:]))
     later = Channel(9099)
     d = later.call("disconnect")
     gone = until(lambda: tunnel() == "" and "isForeground=true" not in shell("dumpsys activity services %s/.CoreService" % PACKAGE), 10)
@@ -555,7 +588,7 @@ def scenario():
     shell("am start -W -a android.intent.action.VIEW -d 'spofy://add/https://%s:8443/sub/OTHERTOKEN' %s" % (GATE, PACKAGE), limit=120)
     time.sleep(8)
     screen("8-link")
-    opened = [args.strip() for _, args in processes().values()]
+    opened = list(processes().values())
     expect("a link opens the app and adds nothing by itself", PACKAGE in opened and "/sub/OTHERTOKEN" not in asked[before:], "asked=%s" % asked[before:])
 
     if RELEASE:

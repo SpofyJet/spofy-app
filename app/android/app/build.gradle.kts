@@ -37,6 +37,14 @@ android {
             signingConfig = signingConfigs.getByName("debug")
         }
     }
+
+    lint {
+        abortOnError = true
+        checkReleaseBuilds = false
+        htmlReport = false
+        xmlReport = false
+        textReport = true
+    }
 }
 
 kotlin {

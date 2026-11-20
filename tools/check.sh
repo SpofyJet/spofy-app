@@ -15,6 +15,7 @@ if [ -f testdata/private/sub.json ]; then
   cmp -s "$T/sub.json" core/testdata/sub/sub.json && cmp -s "$T/headers.json" core/testdata/sub/headers.json || { echo "FAIL: core/testdata/sub differs from tools/mkfixture.py output"; exit 1; }
   rm -rf "$T"
 fi
+git ls-files -co --exclude-standard -z '*.py' | xargs -0 python3 -B tools/pycheck.py | tail -1 | grep -q "^PYTHON OK" || { echo "FAIL: tools/pycheck.py"; exit 1; }
 if grep -rnE '^\s*//[^g]' "$ROOT/core" --include='*.go' | grep -v '//go:' | head -5 | grep .; then echo "FAIL: comments in code"; exit 1; fi
 CGO_ENABLED=1 BUILD_MEM=3g "$ROOT/tools/go.sh" sh -c 'test -z "$(gofmt -l .)" || { echo "FAIL: gofmt"; gofmt -l .; exit 1; }; go vet ./... && go test -race -count=1 ./...'
 "$ROOT/tools/build.sh" linux amd64 >/dev/null
