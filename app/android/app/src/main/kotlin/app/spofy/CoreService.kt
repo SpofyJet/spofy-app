@@ -161,12 +161,16 @@ class CoreService : VpnService() {
         if (roots.isNotEmpty()) {
             env["SSL_CERT_DIR"] = roots.joinToString(":")
         }
+        var added = resources.openRawResource(R.raw.roots).use { it.readBytes() }
         if (BuildConfig.DEBUG) {
             val extra = File(filesDir, "test-ca.pem")
             if (extra.isFile) {
-                env["SSL_CERT_FILE"] = extra.path
+                added += extra.readBytes()
             }
         }
+        val bundle = File(cacheDir, "roots.pem")
+        bundle.writeBytes(added)
+        env["SSL_CERT_FILE"] = bundle.path
         val process = launcher.start()
         core = process
         thread(name = "core-log") {

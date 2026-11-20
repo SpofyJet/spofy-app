@@ -14,6 +14,7 @@ remote = {}
 seen = []
 asked = []
 kicks = []
+seen6 = []
 phone = {"sdk": 0, "nc": "nc", "limit": "timeout %d "}
 os.makedirs(OUT, exist_ok=True)
 
@@ -123,7 +124,7 @@ class Site(http.server.BaseHTTPRequestHandler):
         if self.path == "/generate_204":
             self.reply(204)
         elif self.path == "/ip":
-            seen.append(self.client_address[0])
+            (seen6 if self.server.address_family == socket.AF_INET6 else seen).append(self.client_address[0])
             self.reply(200, b"site sees " + self.client_address[0].encode())
         elif self.path == "/sub/EMULATORTOKEN" and self.server.server_port == 8443:
             self.reply(200, BODY, [("Content-Type", "application/json"), ("Subscription-Userinfo", "upload=1; download=2; total=1000; expire=1798761600"),
@@ -390,15 +391,19 @@ def scenario():
     for site in ("valid-isrgrootx1.letsencrypt.org", "valid-isrgrootx2.letsencrypt.org", "1.1.1.1/dns-query", "8.8.8.8/dns-query", "dns.google"):
         r = ui.call("subscribe", url="https://%s" % site)
         trust[site] = "not trusted" if "x509" in r.get("error", "") else r.get("code") or "ok"
-    print("certificates of public sites as the core sees them: %s" % trust, flush=True)
+    expect("the core trusts the certificates of the subscription, the servers and the DNS it uses",
+           "not trusted" not in trust.values() and trust["valid-isrgrootx1.letsencrypt.org"] in ("sub_format", "sub_status"), str(trust))
     s = ui.call("subscribe", url="https://%s:8443/sub/EMULATORTOKEN" % GATE)
     need("subscribe", s["ok"], "ms=%d %s %s" % (s["ms"], s.get("code"), s.get("error", "")[:300]))
     m = ui.call("measure")
     servers = ([e for e in ui.events if e.get("ev") == "servers"] or [{"servers": []}])[-1]["servers"]
     expect("measure both servers", m["ok"] and len([x for x in servers if x["delayMs"] > 0]) == 2, "ms=%d delays=%s" % (m["ms"], {x["id"]: x["delayMs"] for x in servers}))
-    six = shell("printf 'GET /generate_204 HTTP/1.0\\r\\n\\r\\n' | %s%s -6 -w 3 fec0::2 8083 2>&1" % (phone["limit"] % 4 if phone["limit"] else "", phone["nc"]), limit=20)
-    print("IPv6 on the device: %s; routes: %s; the host over IPv6 answers: %s"
-          % (re.findall(r"inet6 (\S+)", shell("ip -6 -o addr show scope global")), len(shell("ip -6 route show table all").splitlines()), six[:60].replace("\r\n", " | ")), flush=True)
+    def six():
+        return shell("printf 'GET /ip HTTP/1.0\\r\\n\\r\\n' | %s%s -6 -w 3 fec0::2 8083 2>&1" % (phone["limit"] % 4 if phone["limit"] else "", phone["nc"]), limit=20)
+    six()
+    open6 = len(seen6)
+    if not open6:
+        print("this emulator gives the device no IPv6 path to the host: the check of IPv6 is left out", flush=True)
     direct = fetch(HOST, 8081, "/ip")
     expect("without the tunnel the site is reached directly", "site sees" in direct and not direct.endswith(INSIDE), direct[-40:])
 
@@ -408,6 +413,10 @@ def scenario():
     need("connect", c["ok"] and first in SERVERS and device != "", "ms=%d server=%s %s %s" % (c["ms"], first, c.get("code"), c.get("error", "")[:300]))
     body = fetch(HOST, 8081, "/ip")
     need("another app's traffic goes through the tunnel", body.endswith("site sees " + INSIDE) and accepted(first, "%s:8081" % HOST) > 0, "body=%s accepted=%d" % (body[-60:], accepted(first, "%s:8081" % HOST)))
+    if open6:
+        six()
+        expect("IPv6 from another app goes into the tunnel, not past it", len(seen6) == open6 and accepted(first, "fec0::2") > 0,
+               "direct before the tunnel=%d, direct with it=%d, through the server=%d" % (open6, len(seen6) - open6, accepted(first, "fec0::2")))
     leaked, flowing = outside(), len(seen)
     loop = "while [ -e /data/local/tmp/noise ]; do printf 'GET /ip HTTP/1.0\\r\\n\\r\\n' | %s >/dev/null 2>&1; sleep 0.2; done\n" % piped(2, HOST, 8081)
     run("adb", "shell", "cat > /data/local/tmp/noise.sh", data=loop.encode())

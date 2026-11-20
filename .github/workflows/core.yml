@@ -21,7 +21,9 @@ jobs:
           go-version-file: spofy-app/core/go.mod
           cache-dependency-path: spofy-app/core/go.sum
       - working-directory: spofy-app
-        run: git ls-files -z '*.py' | xargs -0 python3 -B tools/pycheck.py
+        run: |
+          git ls-files -z '*.py' | xargs -0 python3 -B tools/pycheck.py
+          python3 -B tools/android/roots.py app/android/app/src/main/res/raw/roots.pem /etc/ssl/certs/ca-certificates.crt
       - working-directory: spofy-app/core
         run: |
           go vet ./...
