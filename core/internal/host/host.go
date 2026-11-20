@@ -9,12 +9,18 @@ import (
 
 var ErrNoPlatform = errors.New("host: no platform is attached")
 
+type Apps struct {
+	Mode string   `json:"mode"`
+	List []string `json:"list"`
+}
+
 type Spec struct {
 	Name      string   `json:"name,omitempty"`
 	MTU       int      `json:"mtu"`
 	Addresses []string `json:"addresses"`
 	Routes    []string `json:"routes"`
 	DNS       []string `json:"dns"`
+	Apps      *Apps    `json:"apps,omitempty"`
 }
 
 type Ask struct {
@@ -115,10 +121,41 @@ func (p *Platform) Ask(op string, spec *Spec, wait time.Duration) (Answer, error
 type Tun struct {
 	Platform *Platform
 	Spec     Spec
+	Apps     func() *Apps
 	Wait     time.Duration
 
 	mu   sync.Mutex
 	file *os.File
+}
+
+func (t *Tun) ask() (*os.File, error) {
+	spec := t.Spec
+	if t.Apps != nil {
+		spec.Apps = t.Apps()
+	}
+	a, err := t.Platform.Ask("tun", &spec, t.wait())
+	if err != nil {
+		return nil, err
+	}
+	if a.File == nil {
+		return nil, errors.New("host: the platform sent no tunnel")
+	}
+	return a.File, nil
+}
+
+func (t *Tun) Renew() (bool, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.file == nil {
+		return false, nil
+	}
+	file, err := t.ask()
+	if err != nil {
+		return false, err
+	}
+	t.file.Close()
+	t.file = file
+	return true, nil
 }
 
 func (t *Tun) wait() time.Duration {
@@ -134,14 +171,11 @@ func (t *Tun) Raise() error {
 	if t.file != nil {
 		return nil
 	}
-	a, err := t.Platform.Ask("tun", &t.Spec, t.wait())
+	file, err := t.ask()
 	if err != nil {
 		return err
 	}
-	if a.File == nil {
-		return errors.New("host: the platform sent no tunnel")
-	}
-	t.file = a.File
+	t.file = file
 	return nil
 }
 

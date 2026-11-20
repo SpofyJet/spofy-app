@@ -20,8 +20,8 @@
 > {"id":8,"op":"set","key":"killSwitch","value":true}
 < {"ev":"settings","settings":{"killSwitch":true}}
 < {"re":8,"ok":true}
-> {"id":9,"op":"set","key":"apps","value":["org.example.one","org.example.two"]}
-< {"ev":"settings","settings":{"apps":["org.example.one","org.example.two"],"killSwitch":true}}
+> {"id":9,"op":"set","key":"apps","value":{"mode":"except","list":["org.example.one","org.example.two"]}}
+< {"ev":"settings","settings":{"apps":{"mode":"except","list":["org.example.one","org.example.two"]},"killSwitch":true}}
 < {"re":9,"ok":true}
 > {"id":10,"op":"check"}
 < {"ev":"connection","connection":{"state":"switching","choice":"auto","server":"de","delayMs":0,"code":"","error":""}}

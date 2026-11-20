@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 
 import '../core/client.dart';
 import '../core/protocol.dart';
+import 'apps.dart';
 
 enum Task { subscribe, refresh, unsubscribe, connect, disconnect, measure }
 
@@ -16,11 +17,11 @@ class Failure {
 }
 
 class AppModel extends ChangeNotifier {
-  AppModel(CoreClient client, {this.reopen, this.permit, this.always}) {
+  AppModel(CoreClient client, {this.reopen, this.permit, this.always, this.apps}) {
     _attach(client);
   }
 
-  AppModel.opening(Future<CoreClient> Function() open, {this.permit, this.always}) : reopen = open {
+  AppModel.opening(Future<CoreClient> Function() open, {this.permit, this.always, this.apps}) : reopen = open {
     unawaited(revive());
   }
 
@@ -31,6 +32,7 @@ class AppModel extends ChangeNotifier {
   final Future<CoreClient> Function()? reopen;
   final Future<bool> Function()? permit;
   final VoidCallback? always;
+  final AppList? apps;
 
   CoreClient? _client;
   StreamSubscription<Event>? _events;
@@ -70,6 +72,8 @@ class AppModel extends ChangeNotifier {
   Connection get connection => snapshot.connection;
 
   Subscription? get subscription => snapshot.subscription;
+
+  AppsChoice get chosenApps => AppsChoice.of(snapshot.settings[appsKey]);
 
   bool running(Task task) => _running.contains(task);
 

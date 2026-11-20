@@ -1,11 +1,13 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -34,6 +36,7 @@ const (
 const (
 	KeyKillSwitch  = "killSwitch"
 	KeyAutoConnect = "autoConnect"
+	KeyApps        = "apps"
 )
 
 const (
@@ -71,6 +74,62 @@ type Config struct {
 	Watch    time.Duration
 	Quiet    time.Duration
 	Renew    time.Duration
+	Retune   func() (bool, error)
+}
+
+type Apps struct {
+	Mode string   `json:"mode"`
+	List []string `json:"list"`
+}
+
+const (
+	AppsAll    = "all"
+	AppsExcept = "except"
+	AppsOnly   = "only"
+	appsLimit  = 512
+)
+
+func apps(value json.RawMessage) (*Apps, bool) {
+	if len(value) == 0 || string(value) == "null" {
+		return nil, true
+	}
+	var v Apps
+	dec := json.NewDecoder(bytes.NewReader(value))
+	dec.DisallowUnknownFields()
+	if dec.Decode(&v) != nil || (v.Mode != AppsAll && v.Mode != AppsExcept && v.Mode != AppsOnly) || len(v.List) > appsLimit {
+		return nil, false
+	}
+	seen := map[string]bool{}
+	list := []string{}
+	for _, name := range v.List {
+		if name == "" || len(name) > 255 || strings.Trim(name, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._") != "" {
+			return nil, false
+		}
+		if !seen[name] {
+			seen[name] = true
+			list = append(list, name)
+		}
+	}
+	slices.Sort(list)
+	if len(list) == 0 {
+		return nil, v.Mode != AppsOnly
+	}
+	return &Apps{Mode: v.Mode, List: list}, true
+}
+
+func (a *App) Apps() *Apps {
+	v, _ := apps(a.cfg.Store.Get().Settings[KeyApps])
+	if v == nil || v.Mode == AppsAll {
+		return nil
+	}
+	return v
+}
+
+func sameApps(a, b *Apps) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.Mode == b.Mode && slices.Equal(a.List, b.List)
 }
 
 type Connection struct {
@@ -435,11 +494,27 @@ func (a *App) Measure(ctx context.Context) error {
 }
 
 func (a *App) Set(key string, value json.RawMessage) error {
-	if key == "" || len(key) > 64 || len(value) > 4096 || (len(value) > 0 && !json.Valid(value)) {
+	limit := 4096
+	if key == KeyApps {
+		limit = 64 << 10
+	}
+	if key == "" || len(key) > 64 || len(value) > limit || (len(value) > 0 && !json.Valid(value)) {
 		return fail(CodeValue, "bad setting")
 	}
 	if v := string(value); (key == KeyKillSwitch || key == KeyAutoConnect) && v != "" && v != "null" && v != "true" && v != "false" {
 		return fail(CodeValue, "bad setting")
+	}
+	var applied *Apps
+	if key == KeyApps {
+		chosen, ok := apps(value)
+		if !ok {
+			return fail(CodeValue, "bad setting")
+		}
+		value = nil
+		if chosen != nil {
+			value, _ = json.Marshal(chosen)
+		}
+		applied = a.Apps()
 	}
 	err := a.save(func(s *store.State) {
 		if len(value) == 0 || string(value) == "null" {
@@ -458,6 +533,13 @@ func (a *App) Set(key string, value json.RawMessage) error {
 		a.sess.SetStrict(a.cfg.Strict || on(a.cfg.Store.Get(), KeyKillSwitch))
 	}
 	a.emit(Event{Ev: EvSettings, Settings: settings(a.cfg.Store.Get())})
+	if key == KeyApps && a.cfg.Retune != nil && a.sess.State() != session.Idle && !sameApps(applied, a.Apps()) {
+		go func() {
+			if again, err := a.cfg.Retune(); again && err == nil {
+				a.renew()
+			}
+		}()
+	}
 	return nil
 }
 

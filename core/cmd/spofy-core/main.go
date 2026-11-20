@@ -210,6 +210,8 @@ func serve(args []string) int {
 	}
 	var platform *host.Platform
 	var carried func() *os.File
+	var retune func() (bool, error)
+	var a *app.App
 	if *given {
 		if *socket == "" || opts.Mode != xcfg.ModeTun {
 			return fail(errors.New("-platform needs -listen and the tun mode"))
@@ -218,10 +220,15 @@ func serve(args []string) int {
 		t := &host.Tun{Platform: platform, Spec: host.Spec{
 			Name: opts.Tun.Name, MTU: opts.Tun.MTU, Addresses: []string{"172.19.0.1/30", "fdfe:5f0f::1/126"}, Routes: []string{"0.0.0.0/0", "::/0"}, DNS: []string{resolver},
 		}}
-		g, carried = t, t.File
+		t.Apps = func() *host.Apps {
+			if chosen := a.Apps(); chosen != nil {
+				return &host.Apps{Mode: chosen.Mode, List: chosen.List}
+			}
+			return nil
+		}
+		g, carried, retune = t, t.File, t.Renew
 		opts.Tun = xcfg.Tun{Name: opts.Tun.Name, MTU: opts.Tun.MTU, Resolver: []string{resolver}}
 	}
-	var a *app.App
 	var checks sync.WaitGroup
 	sv := supervisor.New(supervisor.Options{
 		Guard:     g,
@@ -253,6 +260,7 @@ func serve(args []string) int {
 		Watch:   *watch,
 		Quiet:   *quiet,
 		Renew:   *renew,
+		Retune:  retune,
 	})
 	checks.Add(1)
 	go func() {

@@ -147,7 +147,7 @@ func TestSessionTranscript(t *testing.T) {
 	r.tunnel.Count(2048, 1048576)
 	step("traffic", "", "")
 	step("set", `"key":"killSwitch","value":true`, "")
-	step("set", `"key":"apps","value":["org.example.one","org.example.two"]`, "")
+	step("set", `"key":"apps","value":{"mode":"except","list":["org.example.one","org.example.two"]}`, "")
 	r.tunnel.Kill("nl")
 	step("check", "", "")
 	r.tunnel.Kill("nl", "de")

@@ -311,10 +311,16 @@ void main() {
     expect(await model.subscribe('http://sub.example.test/x'), isFalse);
     expect(model.failure?.code, 'sub_bad_url');
     await model.set('killSwitch', true);
-    await model.set('apps', ['org.example.one']);
+    await model.set('apps', {
+      'mode': 'except',
+      'list': ['org.example.one'],
+    });
     expect(model.snapshot.settings, {
       'killSwitch': true,
-      'apps': ['org.example.one'],
+      'apps': {
+        'mode': 'except',
+        'list': ['org.example.one'],
+      },
     });
     await transport.close();
     expect(await transport.exitCode, 0);
@@ -324,7 +330,10 @@ void main() {
     await model.start();
     expect(model.snapshot.settings, {
       'killSwitch': true,
-      'apps': ['org.example.one'],
+      'apps': {
+        'mode': 'except',
+        'list': ['org.example.one'],
+      },
     });
     await transport.close();
     expect(await transport.exitCode, 0);

@@ -28,6 +28,7 @@ void main() {
     () async => CoreClient(await platform.open()),
     permit: platform.permit,
     always: platform.always,
+    apps: platform.apps,
   );
   platform.links(model.offer);
   runApp(SpofyApp(model: model));

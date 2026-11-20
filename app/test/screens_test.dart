@@ -6,6 +6,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:spofy/core/client.dart';
 import 'package:spofy/core/protocol.dart';
+import 'package:spofy/state/apps.dart';
 import 'package:spofy/state/model.dart';
 import 'package:spofy/ui/app.dart';
 import 'package:spofy/ui/home.dart';
@@ -359,6 +360,202 @@ void main() {
     await show(tester, home(VpnState.idle), phone);
     await open(tester, S.settings);
     expect(find.text(S.alwaysOn), findsNothing);
+  });
+
+  testWidgets('apps: every app goes through the VPN until the person says otherwise', (tester) async {
+    final scene = home(VpnState.idle, apps: FakeApps());
+    await show(tester, scene, phone);
+    await open(tester, S.settings);
+    expect(find.text(S.appsSummary(const AppsChoice())), findsOneWidget);
+    await golden(tester, 'settings_apps_360');
+    await open(tester, S.apps);
+    await golden(tester, 'apps_all_360');
+    expect(find.text(S.appsHint(AppsMode.all)), findsOneWidget);
+    expect(find.byType(EditableText), findsNothing);
+    expect(find.text('Банк'), findsNothing);
+    await tester.pump(const Duration(seconds: 1));
+    expect(scene.transport.sent, isEmpty);
+    await show(tester, home(VpnState.idle), phone);
+    await open(tester, S.settings);
+    expect(find.text(S.apps), findsNothing);
+  });
+
+  testWidgets(
+    'apps taken out of the VPN are sent once, after the last tap, and icons are asked only for rows on screen',
+    (tester) async {
+      final apps = FakeApps();
+      final scene = home(VpnState.idle, apps: apps);
+      await show(tester, scene, phone);
+      await open(tester, S.settings);
+      await open(tester, S.apps);
+      await tester.tap(find.bySemanticsLabel(S.appsExcept));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.text(S.appsHint(AppsMode.except)), findsOneWidget);
+      await tester.tap(find.bySemanticsLabel('Маркет'));
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.tap(find.bySemanticsLabel('Банк'));
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(scene.transport.sent, isEmpty);
+      await golden(tester, 'apps_except_360');
+      await tester.pump(const Duration(milliseconds: 500));
+      expect(scene.transport.sent, [
+        '{"id":1,"op":"set","key":"apps","value":{"mode":"except","list":["org.example.bank","org.example.market"]}}',
+      ]);
+      expect(apps.icons, isNotEmpty);
+      expect(apps.icons.length, lessThan(phoneApps.length));
+      expect(apps.icons.toSet().length, apps.icons.length);
+      await tester.tap(find.bySemanticsLabel('Банк'));
+      await tester.tap(find.bySemanticsLabel(S.back));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(
+        scene.transport.sent.last,
+        '{"id":2,"op":"set","key":"apps","value":{"mode":"except","list":["org.example.market"]}}',
+      );
+      expect(scene.transport.sent, hasLength(2));
+    },
+  );
+
+  testWidgets('only the chosen apps: nothing is sent until one is marked', (tester) async {
+    final scene = home(VpnState.idle, apps: FakeApps());
+    await show(tester, scene, phone);
+    await open(tester, S.settings);
+    await open(tester, S.apps);
+    await tester.tap(find.bySemanticsLabel(S.appsOnly));
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
+    expect(find.text(S.appsOnlyEmpty), findsOneWidget);
+    expect(scene.transport.sent, isEmpty);
+    await golden(tester, 'apps_only_empty_360');
+    await tester.tap(find.bySemanticsLabel('Браузер'));
+    await tester.pump();
+    expect(find.text(S.appsOnlyEmpty), findsNothing);
+    await tester.pump(const Duration(seconds: 1));
+    expect(
+      scene.transport.sent.single,
+      '{"id":1,"op":"set","key":"apps","value":{"mode":"only","list":["org.example.browser"]}}',
+    );
+  });
+
+  testWidgets('a saved choice opens with its apps first; one that is gone leaves the list only with a change', (
+    tester,
+  ) async {
+    final saved = {
+      appsKey: {
+        'mode': 'except',
+        'list': ['org.example.gone', 'org.example.taxi'],
+      },
+    };
+    final scene = home(VpnState.idle, settings: saved, apps: FakeApps());
+    await show(tester, scene, phone);
+    await open(tester, S.settings);
+    expect(find.text(S.appsSummary(AppsChoice.of(saved[appsKey]))), findsOneWidget);
+    await open(tester, S.apps);
+    final rows = tester.widgetList<Tile>(find.byType(Tile)).toList();
+    expect(rows.first.title, 'Такси');
+    expect(rows.first.selected, isTrue);
+    expect(rows[1].title, 'Calculator');
+    expect(rows.where((row) => row.selected), hasLength(1));
+    await tester.tap(find.bySemanticsLabel(S.back));
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
+    expect(scene.transport.sent, isEmpty);
+    await open(tester, S.apps);
+    await tester.tap(find.bySemanticsLabel(S.appsAll));
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
+    expect(
+      scene.transport.sent.single,
+      '{"id":1,"op":"set","key":"apps","value":{"mode":"all","list":["org.example.taxi"]}}',
+    );
+    expect(find.byType(Tile), findsNothing);
+  });
+
+  testWidgets('search narrows the list by name and says when nothing matches', (tester) async {
+    final scene = home(
+      VpnState.idle,
+      settings: {
+        appsKey: {
+          'mode': 'only',
+          'list': ['org.example.mail'],
+        },
+      },
+      apps: FakeApps(),
+    );
+    await show(tester, scene, phone);
+    await open(tester, S.settings);
+    await open(tester, S.apps);
+    await tester.enterText(find.byType(EditableText), ' бАн ');
+    await tester.pump();
+    expect(tester.widgetList<Tile>(find.byType(Tile)).map((row) => row.title), ['Банк']);
+    await tester.enterText(find.byType(EditableText), 'example.ma');
+    await tester.pump();
+    expect(tester.widgetList<Tile>(find.byType(Tile)).map((row) => row.title), ['Почта', 'Карты', 'Маркет']);
+    await tester.enterText(find.byType(EditableText), 'нет такого');
+    await tester.pump();
+    expect(find.byType(Tile), findsNothing);
+    expect(find.text(S.appsNone), findsOneWidget);
+    await tester.tap(find.bySemanticsLabel(S.appsClear));
+    await tester.pump();
+    expect(tester.widgetList<Tile>(find.byType(Tile)).first.title, 'Почта');
+    expect(scene.transport.sent, isEmpty);
+  });
+
+  testWidgets('when the system gives no list the screen says so and the mode can still be changed', (tester) async {
+    final scene = home(
+      VpnState.idle,
+      settings: {
+        appsKey: {
+          'mode': 'except',
+          'list': ['org.example.bank'],
+        },
+      },
+      apps: FakeApps(broken: true),
+    );
+    await show(tester, scene, phone);
+    await open(tester, S.settings);
+    await open(tester, S.apps);
+    expect(find.text(S.appsFailed), findsOneWidget);
+    expect(find.byType(Tile), findsNothing);
+    await tester.tap(find.bySemanticsLabel(S.appsAll));
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
+    expect(
+      scene.transport.sent.single,
+      '{"id":1,"op":"set","key":"apps","value":{"mode":"all","list":["org.example.bank"]}}',
+    );
+  });
+
+  testWidgets('the apps screen fits a 320 px phone with 130 % text', (tester) async {
+    final scene = home(
+      VpnState.idle,
+      settings: {
+        appsKey: {
+          'mode': 'only',
+          'list': ['org.example.game'],
+        },
+      },
+      apps: FakeApps(),
+    );
+    await show(tester, scene, const Size(320, 568), textScale: 1.3);
+    await open(tester, S.settings);
+    expect(tester.takeException(), isNull);
+    await open(tester, S.apps);
+    expect(tester.takeException(), isNull);
+    for (final mode in [S.appsAll, S.appsExcept, S.appsOnly]) {
+      await tester.tap(find.bySemanticsLabel(mode));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(tester.takeException(), isNull, reason: mode);
+    }
+    final hint = tester.renderObject<RenderParagraph>(find.text(S.appsHint(AppsMode.only)));
+    expect(hint.didExceedMaxLines, isFalse);
+    for (final segment in tester.widgetList<Pressable>(
+      find.descendant(of: find.byType(Segments<AppsMode>), matching: find.byType(Pressable)),
+    )) {
+      expect(tester.getSize(find.byWidget(segment)).height, greaterThanOrEqualTo(44));
+    }
   });
 
   testWidgets('the power control sends connect, then disconnect', (tester) async {

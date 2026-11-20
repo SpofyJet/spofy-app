@@ -61,6 +61,49 @@ func TestTunAsksThePlatformOnceAndGivesTheDescriptorToTheEngine(t *testing.T) {
 	}
 }
 
+func TestRenewedTunnelCarriesTheChosenAppsAndReplacesTheOldOne(t *testing.T) {
+	p := &Platform{}
+	chosen := &Apps{Mode: "except", List: []string{"org.example.one"}}
+	tun := &Tun{Platform: p, Spec: Spec{MTU: 1500}, Apps: func() *Apps { return chosen }, Wait: time.Second}
+	first, second := pipe(t), pipe(t)
+	files := []*os.File{first, second}
+	var asked []Ask
+	p.Attach(func(a Ask) {
+		asked = append(asked, a)
+		if a.Op != "tun" {
+			go p.Answer(a.N, Answer{OK: true})
+			return
+		}
+		file := files[0]
+		files = files[1:]
+		go p.Answer(a.N, Answer{OK: true, File: file})
+	})
+	if again, err := tun.Renew(); again || err != nil || len(asked) != 0 {
+		t.Fatalf("a tunnel that is not up was renewed: %v %v, asked %d", again, err, len(asked))
+	}
+	if err := tun.Raise(); err != nil {
+		t.Fatal(err)
+	}
+	if got := asked[0].Tun.Apps; got == nil || got.Mode != "except" || len(got.List) != 1 {
+		t.Fatalf("the request does not carry the apps: %+v", asked[0].Tun)
+	}
+	chosen = &Apps{Mode: "only", List: []string{"org.example.two"}}
+	if again, err := tun.Renew(); !again || err != nil {
+		t.Fatalf("renew: %v %v", again, err)
+	}
+	if len(asked) != 2 || asked[1].Op != "tun" || asked[1].Tun.Apps.Mode != "only" || tun.File() != second || !closed(first) || closed(second) {
+		t.Fatalf("asked %d, file is the new one %v, old closed %v", len(asked), tun.File() == second, closed(first))
+	}
+	if tun.Spec.Apps != nil {
+		t.Fatal("the shared description was changed by a request")
+	}
+	chosen = nil
+	p.Attach(func(a Ask) { go p.Answer(a.N, Answer{Error: "no"}) })
+	if again, err := tun.Renew(); again || err == nil || tun.File() != second || closed(second) {
+		t.Fatalf("a refused renewal dropped the working tunnel: %v %v", again, err)
+	}
+}
+
 func TestPlatformRefusalSilenceAndLoss(t *testing.T) {
 	p := &Platform{}
 	tun := &Tun{Platform: p, Wait: 50 * time.Millisecond}

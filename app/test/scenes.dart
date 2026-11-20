@@ -6,6 +6,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:spofy/core/client.dart';
 import 'package:spofy/core/protocol.dart';
+import 'package:spofy/state/apps.dart';
 import 'package:spofy/state/model.dart';
 import 'package:spofy/ui/app.dart';
 
@@ -24,6 +25,45 @@ class SilentTransport implements Transport {
 }
 
 final clock = DateTime.utc(2026, 11, 19, 12);
+
+final phoneApps = [
+  InstalledApp('org.example.calculator', 'Calculator'),
+  InstalledApp('org.example.files', 'Files'),
+  InstalledApp('org.example.bank', 'Банк'),
+  InstalledApp('org.example.browser', 'Браузер'),
+  InstalledApp('org.example.game', 'Игра с очень длинным названием для проверки строки'),
+  InstalledApp('org.example.camera', 'Камера'),
+  InstalledApp('org.example.maps', 'Карты'),
+  InstalledApp('org.example.market', 'Маркет'),
+  InstalledApp('org.example.music', 'Музыка'),
+  InstalledApp('org.example.mail', 'Почта'),
+  InstalledApp('org.example.taxi', 'Такси'),
+  InstalledApp('org.example.phone', 'Телефон'),
+  InstalledApp('org.example.clock', 'Часы'),
+  for (var i = 1; i <= 20; i++) InstalledApp('org.example.extra$i', 'Яблоко $i'),
+];
+
+class FakeApps implements AppList {
+  FakeApps({List<InstalledApp>? list, this.broken = false}) : list = list ?? phoneApps;
+
+  final List<InstalledApp> list;
+  final bool broken;
+  final icons = <String>[];
+
+  @override
+  Future<List<InstalledApp>> installed() async {
+    if (broken) {
+      throw PlatformException(code: 'unavailable');
+    }
+    return list;
+  }
+
+  @override
+  Future<Uint8List?> icon(String id) async {
+    icons.add(id);
+    return null;
+  }
+}
 
 const _names = [
   ('nl', 'Нидерланды', 'NL', 38, 0),
@@ -77,8 +117,9 @@ class Scene {
     String fault = '',
     Failure? failure,
     VoidCallback? always,
+    AppList? apps,
   }) : transport = SilentTransport() {
-    model = AppModel(CoreClient(transport), always: always)
+    model = AppModel(CoreClient(transport), always: always, apps: apps)
       ..snapshot = Snapshot(
         version: '0.1.0',
         connection: connection,
@@ -106,8 +147,10 @@ Scene home(
   String code = '',
   Map<String, Object?> settings = const {},
   VoidCallback? always,
+  AppList? apps,
 }) => Scene(
   always: always,
+  apps: apps,
   connection: Connection(state: state, choice: choice, server: server, delayMs: delay, code: code),
   subscription: subscription(),
   servers: servers(),

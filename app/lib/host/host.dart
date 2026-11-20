@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import '../core/client.dart';
 import '../core/process_transport.dart';
 import '../core/socket_transport.dart';
+import '../state/apps.dart';
 
 abstract interface class Host {
   Future<Transport> open();
@@ -15,6 +16,8 @@ abstract interface class Host {
   Future<bool> permit();
 
   void Function()? get always;
+
+  AppList? get apps;
 
   void links(void Function(String link) hear);
 }
@@ -42,6 +45,9 @@ class AndroidHost implements Host {
       () => unawaited(_channel.invokeMethod<void>('always'));
 
   @override
+  AppList? get apps => const _AndroidApps();
+
+  @override
   void links(void Function(String link) hear) {
     _channel.setMethodCallHandler((call) async {
       final link = call.arguments;
@@ -64,6 +70,26 @@ class AndroidHost implements Host {
       return;
     }
   }
+}
+
+class _AndroidApps implements AppList {
+  const _AndroidApps();
+
+  @override
+  Future<List<InstalledApp>> installed() async {
+    final found = await AndroidHost._channel.invokeListMethod<Map<Object?, Object?>>('apps') ?? const [];
+    return [
+      for (final app in found)
+        if (app['id'] case final String id)
+          InstalledApp(id, switch (app['name']) {
+            final String name when name.isNotEmpty => name,
+            _ => id,
+          }),
+    ];
+  }
+
+  @override
+  Future<Uint8List?> icon(String id) => AndroidHost._channel.invokeMethod<Uint8List>('icon', id);
 }
 
 class DesktopHost implements Host {
@@ -111,6 +137,9 @@ class DesktopHost implements Host {
 
   @override
   void Function()? get always => null;
+
+  @override
+  AppList? get apps => null;
 
   @override
   void links(void Function(String link) hear) {}

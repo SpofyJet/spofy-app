@@ -224,7 +224,7 @@ class Tile extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text(title, style: Ink.strong, maxLines: 1, overflow: TextOverflow.ellipsis),
+                  Text(title, style: Ink.strong, maxLines: wrap ? 2 : 1, overflow: TextOverflow.ellipsis),
                   if (subtitle.isNotEmpty)
                     Padding(
                       padding: const EdgeInsets.only(top: 2),
@@ -275,6 +275,56 @@ class Tile extends StatelessWidget {
       label: semantic ?? [title, subtitle, trailing].where((p) => p.isNotEmpty).join(', '),
       onTap: onTap,
       child: row,
+    );
+  }
+}
+
+class Segments<T> extends StatelessWidget {
+  const Segments({super.key, required this.options, required this.value, required this.onChanged});
+
+  final List<(T, String)> options;
+  final T value;
+  final ValueChanged<T> onChanged;
+
+  static const _radius = BorderRadius.all(Radius.circular(16));
+
+  @override
+  Widget build(BuildContext context) {
+    return Panel(
+      padding: const EdgeInsets.all(4),
+      child: Row(
+        children: [
+          for (final (id, label) in options)
+            Expanded(
+              child: Semantics(
+                selected: id == value,
+                child: Pressable(
+                  label: label,
+                  radius: _radius,
+                  onTap: () => onChanged(id),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 140),
+                    constraints: const BoxConstraints(minHeight: 44),
+                    alignment: Alignment.center,
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: id == value ? Ink.raised : const Color(0x001A2740),
+                      borderRadius: _radius,
+                    ),
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Text(
+                        label,
+                        style: id == value ? Ink.strong : Ink.strong.copyWith(color: Ink.muted),
+                        maxLines: 1,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
     );
   }
 }

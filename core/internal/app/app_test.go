@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -685,19 +686,138 @@ func TestSettings(t *testing.T) {
 	if err := b.app.Set("killSwitch", json.RawMessage(`true`)); err != nil {
 		t.Fatal(err)
 	}
-	if err := b.app.Set("apps", json.RawMessage(`["a.b","c.d"]`)); err != nil {
+	if err := b.app.Set("theme", json.RawMessage(`["a.b","c.d"]`)); err != nil {
 		t.Fatal(err)
 	}
 	same(t, b.seen(), []string{EvSettings, EvSettings})
 	b.open(nil)
-	if s := b.app.Snapshot().Settings; string(s["killSwitch"]) != "true" || string(s["apps"]) != `["a.b","c.d"]` {
+	if s := b.app.Snapshot().Settings; string(s["killSwitch"]) != "true" || string(s["theme"]) != `["a.b","c.d"]` {
 		t.Fatalf("settings = %v", s)
 	}
-	if err := b.app.Set("apps", json.RawMessage(`null`)); err != nil {
+	if err := b.app.Set("theme", json.RawMessage(`null`)); err != nil {
 		t.Fatal(err)
 	}
 	if s := b.app.Snapshot().Settings; len(s) != 1 {
 		t.Fatalf("settings = %v", s)
+	}
+}
+
+func TestChosenAppsAreCheckedAndKeptInOneForm(t *testing.T) {
+	b := newBench(t, nil)
+	many := make([]string, 513)
+	for i := range many {
+		many[i] = "org.example.app" + strings.Repeat("x", i%7) + string(rune('a'+i%26)) + string(rune('a'+i/26%26))
+	}
+	long, _ := json.Marshal(Apps{Mode: AppsExcept, List: many})
+	for _, bad := range []string{
+		`["org.example.one"]`,
+		`"except"`,
+		`{"mode":"some","list":["org.example.one"]}`,
+		`{"mode":"only","list":[]}`,
+		`{"mode":"only"}`,
+		`{"mode":"except","list":["org.example.one"],"extra":1}`,
+		`{"mode":"except","list":["org example"]}`,
+		`{"mode":"except","list":[""]}`,
+		`{"mode":"except","list":["org.example/../x"]}`,
+		`{"mode":"except","list":["` + strings.Repeat("a", 256) + `"]}`,
+		string(long),
+	} {
+		if err := b.app.Set(KeyApps, json.RawMessage(bad)); code(err) != CodeValue {
+			t.Fatalf("%.60s: err = %v", bad, err)
+		}
+	}
+	if b.app.Apps() != nil || len(b.app.Snapshot().Settings) != 0 {
+		t.Fatalf("a refused value was kept: %v", b.app.Snapshot().Settings)
+	}
+	if err := b.app.Set(KeyApps, json.RawMessage(`{"list":["org.b","org.a","org.b","com.c_d.E2"],"mode":"only"}`)); err != nil {
+		t.Fatal(err)
+	}
+	b.open(nil)
+	if got := string(b.app.Snapshot().Settings[KeyApps]); got != `{"mode":"only","list":["com.c_d.E2","org.a","org.b"]}` {
+		t.Fatalf("kept as %s", got)
+	}
+	if v := b.app.Apps(); v == nil || v.Mode != AppsOnly || len(v.List) != 3 {
+		t.Fatalf("apps = %+v", v)
+	}
+	if err := b.app.Set(KeyApps, json.RawMessage(`{"mode":"all","list":["org.b","org.a"]}`)); err != nil {
+		t.Fatal(err)
+	}
+	if got := string(b.app.Snapshot().Settings[KeyApps]); got != `{"mode":"all","list":["org.a","org.b"]}` || b.app.Apps() != nil {
+		t.Fatalf("the list is kept for later and is not in force: %s, in force %+v", got, b.app.Apps())
+	}
+	for _, empty := range []string{`{"mode":"except","list":[]}`, `{"mode":"all","list":[]}`} {
+		if err := b.app.Set(KeyApps, json.RawMessage(`{"mode":"except","list":["org.a"]}`)); err != nil {
+			t.Fatal(err)
+		}
+		if err := b.app.Set(KeyApps, json.RawMessage(empty)); err != nil {
+			t.Fatal(err)
+		}
+		if b.app.Apps() != nil || len(b.app.Snapshot().Settings) != 0 {
+			t.Fatalf("%s is not the same as no setting: %v", empty, b.app.Snapshot().Settings)
+		}
+	}
+}
+
+func TestNewAppsChoiceIsAppliedToARunningTunnelAndOnlyToIt(t *testing.T) {
+	var asked atomic.Int32
+	var given atomic.Bool
+	b := newBench(t, func(c *Config) {
+		c.Retune = func() (bool, error) {
+			asked.Add(1)
+			return given.Load(), nil
+		}
+	}).subscribed()
+	one := json.RawMessage(`{"mode":"except","list":["org.example.one"]}`)
+	if err := b.app.Set(KeyApps, one); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(30 * time.Millisecond)
+	if asked.Load() != 0 || len(b.tunnel.Starts()) != 0 {
+		t.Fatalf("a choice made while disconnected touched the tunnel: asked %d, starts %v", asked.Load(), b.tunnel.Starts())
+	}
+	if err := b.app.Connect("nl"); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.app.Set(KeyApps, json.RawMessage(`{"mode":"except","list":["org.example.two"]}`)); err != nil {
+		t.Fatal(err)
+	}
+	b.until("the platform is asked for a new tunnel", func() bool { return asked.Load() == 1 })
+	time.Sleep(30 * time.Millisecond)
+	if got := b.tunnel.Starts(); !reflect.DeepEqual(got, []string{"nl"}) {
+		t.Fatalf("no new tunnel came, yet the engine was restarted: %v", got)
+	}
+	given.Store(true)
+	if err := b.app.Set(KeyApps, one); err != nil {
+		t.Fatal(err)
+	}
+	b.until("the engine is started again on the new tunnel", func() bool {
+		return asked.Load() == 2 && reflect.DeepEqual(b.tunnel.Starts(), []string{"nl", "nl"}) && b.app.Snapshot().Connection.State == session.Connected
+	})
+	for _, same := range []string{`"dark"`, `{"list":["org.example.one"],"mode":"except"}`} {
+		key := "theme"
+		if strings.HasPrefix(same, "{") {
+			key = KeyApps
+		}
+		if err := b.app.Set(key, json.RawMessage(same)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	time.Sleep(30 * time.Millisecond)
+	if asked.Load() != 2 {
+		t.Fatal("another setting, or the same choice again, asked for a new tunnel")
+	}
+	if err := b.app.Set(KeyApps, json.RawMessage(`{"mode":"all","list":["org.example.one"]}`)); err != nil {
+		t.Fatal(err)
+	}
+	b.until("every app is back in the tunnel by a new one", func() bool {
+		return asked.Load() == 3 && reflect.DeepEqual(b.tunnel.Starts(), []string{"nl", "nl", "nl"}) && b.app.Snapshot().Connection.State == session.Connected
+	})
+	if err := b.app.Set(KeyApps, json.RawMessage(`{"mode":"all","list":["org.example.two"]}`)); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(30 * time.Millisecond)
+	if asked.Load() != 3 {
+		t.Fatal("a list that is not in force asked for a new tunnel")
 	}
 }
 

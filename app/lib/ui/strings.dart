@@ -1,4 +1,5 @@
 import '../core/protocol.dart';
+import '../state/apps.dart';
 import '../state/model.dart';
 
 abstract final class S {
@@ -16,6 +17,27 @@ abstract final class S {
   static const killSwitchHint = 'Если серверы не отвечают, интернет останавливается, а не идёт напрямую';
 
   static String version(String number) => 'Версия $number';
+  static const apps = 'Приложения';
+  static const appsAll = 'Все';
+  static const appsExcept = 'Все, кроме';
+  static const appsOnly = 'Только';
+  static const appsSearch = 'Поиск';
+  static const appsClear = 'Очистить поиск';
+  static const appsNone = 'Ничего не найдено';
+  static const appsFailed = 'Не удалось получить список приложений';
+  static const appsOnlyEmpty = 'Отметьте хотя бы одно приложение. Пока действует прежний выбор';
+
+  static String appsHint(AppsMode mode) => switch (mode) {
+    AppsMode.all => 'Все приложения работают через VPN',
+    AppsMode.except => 'Отмеченные приложения работают без VPN',
+    AppsMode.only => 'Через VPN работают только отмеченные приложения',
+  };
+
+  static String appsSummary(AppsChoice choice) => switch (choice.mode) {
+    AppsMode.except when choice.list.isNotEmpty => 'Без VPN: ${choice.list.length}',
+    AppsMode.only when choice.list.isNotEmpty => 'Только через VPN: ${choice.list.length}',
+    _ => 'Все через VPN',
+  };
   static const subscription = 'Подписка';
   static const addSubscription = 'Добавить подписку';
   static const noSubscriptionTitle = 'Подписки пока нет';

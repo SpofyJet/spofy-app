@@ -13,6 +13,7 @@ started = []
 remote = {}
 seen = []
 asked = []
+kicks = []
 os.makedirs(OUT, exist_ok=True)
 
 
@@ -141,6 +142,13 @@ def host_side():
     secure.socket = context.wrap_socket(secure.socket, server_side=True)
     for s in (plain, secure):
         threading.Thread(target=s.serve_forever, daemon=True).start()
+    counted = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    counted.bind(("0.0.0.0", 8082))
+
+    def count():
+        while True:
+            kicks.append(counted.recvfrom(64)[1])
+    threading.Thread(target=count, daemon=True).start()
     for name, port in SERVERS.items():
         config = {
             "log": {"loglevel": "info"},
@@ -190,9 +198,23 @@ def tunnel():
     return m.group(1) if m else ""
 
 
+def speed():
+    took = []
+    for _ in range(3):
+        began = time.time()
+        shell("i=0; while [ $i -lt 200000 ]; do i=$((i+1)); done", limit=120)
+        took.append(int((time.time() - began) * 1000))
+    return min(took)
+
+
+def installed():
+    base = shell("pm path %s" % PACKAGE).splitlines()[0].split(":", 1)[-1].rsplit("/", 1)[0]
+    return int(shell("du -sk %s" % base).split()[0]) / 1024
+
+
 def started_in():
     times = []
-    for _ in range(3):
+    for _ in range(5):
         shell("am force-stop %s" % PACKAGE)
         time.sleep(1)
         m = re.search(r"TotalTime: (\d+)", shell("am start -W -n %s/.MainActivity" % PACKAGE, limit=120))
@@ -230,6 +252,25 @@ class Channel:
 def fetch(target, port, path, host=None):
     request = "GET %s HTTP/1.0\\r\\nHost: %s\\r\\n\\r\\n" % (path, host or target)
     return shell("printf '%s' | timeout 8 nc -w 8 %s %d" % (request, target, port), limit=30)
+
+
+def as_shell(path="/ip"):
+    return shell("su 2000,2000,3003 sh /data/local/tmp/get.sh %s 8081 %s" % (HOST, path), limit=30)
+
+
+def tap(*labels):
+    for _ in range(6):
+        shell("uiautomator dump /sdcard/ui.xml", limit=60)
+        page = shell("cat /sdcard/ui.xml", limit=30)
+        for label in labels:
+            m = re.search(r'content-desc="%s[^"]*"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"' % re.escape(label), page)
+            if m:
+                left, top, right, bottom = map(int, m.groups())
+                shell("input tap %d %d" % ((left + right) // 2, (top + bottom) // 2))
+                time.sleep(1.5)
+                return label
+        time.sleep(1)
+    return ""
 
 
 def linked(kind):
@@ -336,16 +377,29 @@ def scenario():
     screen("3-notification")
     shell("cmd statusbar collapse")
     print("memory while connected, MB: %s" % memory(), flush=True)
-    rounds, outside_ms = [], []
-    for _ in range(8):
-        ui.call("check")
-        rounds.append(ui.active()["delayMs"])
-        time.sleep(0.13)
+    def probed():
+        out = []
+        for _ in range(8):
+            ui.call("check")
+            out.append(ui.active()["delayMs"])
+            time.sleep(0.13)
+        return out
+    rounds, outside_ms = probed(), []
+    owner = shell("stat -c %%u %s" % DATA).strip()
+    kick = "while [ -e /data/local/tmp/kick ]; do echo x | nc -u -q 0 %s 8082 2>/dev/null; done\n" % GATE
+    run("adb", "shell", "cat > /data/local/tmp/kick.sh", data=kick.encode())
+    sent, began = len(kicks), time.time()
+    shell("touch /data/local/tmp/kick; nohup su %s,%s,3003 sh /data/local/tmp/kick.sh >/dev/null 2>&1 &" % (owner, owner))
+    time.sleep(1)
+    kicked = probed()
+    rate = (len(kicks) - sent) / (time.time() - began)
+    shell("rm -f /data/local/tmp/kick")
+    print("delay through the tunnel, ms: %s; the same while %d packets a second leave the device past the tunnel: %s" % (rounds, rate, kicked), flush=True)
     for _ in range(3):
         ui.call("measure")
         servers = ([e for e in ui.events if e.get("ev") == "servers"] or [{"servers": []}])[-1]["servers"]
         outside_ms.append(sorted(x["delayMs"] for x in servers))
-    print("delay through the tunnel, ms: %s; outside the tunnel while it is up: %s; device clock %s at host %s" % (rounds, outside_ms, shell("date +%H:%M:%S.%N")[:12], stamp()), flush=True)
+    print("delay outside the tunnel while it is up, ms: %s; device clock %s at host %s" % (outside_ms, shell("date +%H:%M:%S.%N")[:12], stamp()), flush=True)
 
     other = [n for n in SERVERS if n != first][0]
     c = ui.call("connect", server=other)
@@ -404,6 +458,30 @@ def scenario():
     time.sleep(3)
     expect("nothing reached the site past the tunnel while it was up", outside() == leaked, "requests=%d past=%d" % (len(seen), outside() - leaked))
 
+    get = "printf 'GET %s HTTP/1.0\\r\\nHost: %s\\r\\n\\r\\n' \"$3\" \"$1\" | timeout 8 nc -w 8 \"$1\" \"$2\"\n"
+    run("adb", "shell", "cat > /data/local/tmp/get.sh", data=get.encode())
+    mine = as_shell()
+    expect("a second app, with its own user, is in the tunnel as well", mine.endswith("site sees " + INSIDE), mine[-40:])
+
+    def chosen(value):
+        before = tunnel()
+        began = time.time()
+        r = ui.call("set", key="apps", value=value)
+        new = until(lambda: tunnel() not in ("", before) and ui.active()["state"] == "connected", 30, 0.1)
+        return r["ok"] and bool(new), time.time() - began
+
+    ok, took = chosen({"mode": "except", "list": ["com.android.shell"]})
+    mine, rest = as_shell(), fetch(HOST, 8081, "/ip")
+    expect("an app taken out of the VPN goes past the tunnel and the rest stay inside", ok and "site sees" in mine and not mine.endswith(INSIDE) and rest.endswith("site sees " + INSIDE),
+           "s=%.1f app=%s rest=%s device=%s" % (took, mine[-24:], rest[-24:], tunnel()))
+    ok, took = chosen({"mode": "only", "list": ["com.android.shell"]})
+    mine, rest = as_shell(), fetch(HOST, 8081, "/ip")
+    expect("only the chosen app is in the VPN: it goes through the tunnel and the rest go past it", ok and mine.endswith("site sees " + INSIDE) and "site sees" in rest and not rest.endswith(INSIDE),
+           "s=%.1f app=%s rest=%s device=%s" % (took, mine[-24:], rest[-24:], tunnel()))
+    ok, took = chosen(None)
+    mine = as_shell()
+    expect("the choice is cleared: every app is in the VPN again", ok and mine.endswith("site sees " + INSIDE) and through(), "s=%.1f app=%s device=%s" % (took, mine[-24:], tunnel()))
+
     d = ui.call("disconnect")
     gone = until(lambda: tunnel() == "", 10)
     service = shell("dumpsys activity services %s/.CoreService" % PACKAGE)
@@ -411,6 +489,18 @@ def scenario():
     time.sleep(1)
     screen("6-disconnected")
     print("memory when idle, MB: %s" % memory(), flush=True)
+    opened = tap("Настройки") and tap("Приложения") and tap("Все, кроме")
+    marked = tap("Chrome", "Camera", "Calendar", "Clock", "Settings") if opened else ""
+    time.sleep(2)
+    screen("10-apps")
+    saved = ui.call("hello")["snapshot"]["settings"].get("apps") or {}
+    expect("the apps screen lists the installed apps and a tap on one reaches the core", bool(marked) and saved.get("mode") == "except" and len(saved.get("list", [])) == 1,
+           "tapped=%s saved=%s" % (marked, saved))
+    ui.call("set", key="apps", value=None)
+    shell("input keyevent KEYCODE_BACK")
+    time.sleep(1)
+    shell("input keyevent KEYCODE_BACK")
+    time.sleep(1)
     state = shell("cat %s/files/state/state | head -c 4000" % DATA)
     expect("saved state has nothing in the clear", "EMULATORTOKEN" not in state and "outbounds" not in state and len(state) > 40, "bytes=%d" % len(state))
     key = shell("cat %s/files/key | wc -c" % DATA)
@@ -470,8 +560,9 @@ def scenario():
         time.sleep(3)
         screen("9-release")
         usage = memory()
-        expect("the release build starts and its core listens", len(times) == 3 and "core.sock" in shell("ls %s/files" % DATA), "ms=%s" % times)
-        print("release build: apk %.1f MB, cold start %s ms, memory %s MB" % (os.path.getsize(RELEASE) / 1e6, times, usage), flush=True)
+        expect("the release build starts and its core listens", len(times) == 5 and "core.sock" in shell("ls %s/files" % DATA), "ms=%s" % times)
+        print("release build: apk %.1f MB, installed %.1f MB, cold start %s ms with the device doing a fixed loop in %d ms, memory %s MB"
+              % (os.path.getsize(RELEASE) / 1e6, installed(), times, speed(), usage), flush=True)
 
 
 began = time.time()

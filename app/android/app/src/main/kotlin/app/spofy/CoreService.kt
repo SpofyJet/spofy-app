@@ -9,6 +9,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
 import android.net.LocalSocket
@@ -279,7 +280,29 @@ class CoreService : VpnService() {
             for (i in 0 until (dns?.length() ?: 0)) {
                 builder.addDnsServer(dns!!.getString(i))
             }
-            builder.addDisallowedApplication(packageName)
+            val apps = spec.optJSONObject("apps")
+            val mode = apps?.optString("mode")
+            val chosen = apps?.optJSONArray("list")
+            val names = (0 until (chosen?.length() ?: 0)).map { chosen!!.getString(it) }.filter { it != packageName }
+            var only = 0
+            if (mode == "only") {
+                for (name in names) {
+                    try {
+                        builder.addAllowedApplication(name)
+                        only++
+                    } catch (e: PackageManager.NameNotFoundException) {
+                    }
+                }
+            }
+            if (only == 0) {
+                builder.addDisallowedApplication(packageName)
+                for (name in if (mode == "except") names else emptyList()) {
+                    try {
+                        builder.addDisallowedApplication(name)
+                    } catch (e: PackageManager.NameNotFoundException) {
+                    }
+                }
+            }
             if (Build.VERSION.SDK_INT >= 29) {
                 builder.setMetered(false)
             }

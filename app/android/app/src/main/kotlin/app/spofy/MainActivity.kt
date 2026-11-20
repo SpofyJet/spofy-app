@@ -7,6 +7,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
@@ -15,6 +17,9 @@ import android.provider.Settings
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import java.io.ByteArrayOutputStream
+import java.text.Collator
+import java.util.concurrent.Executors
 
 class MainActivity : FlutterActivity() {
     private val starting = mutableListOf<MethodChannel.Result>()
@@ -23,6 +28,7 @@ class MainActivity : FlutterActivity() {
     private var offered: String? = null
     private var binding = false
     private var bound = false
+    private val worker = Executors.newSingleThreadExecutor()
 
     private val link = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName, binder: IBinder) {
@@ -69,6 +75,8 @@ class MainActivity : FlutterActivity() {
                     result.success(offered)
                     offered = null
                 }
+                "apps" -> apps(result)
+                "icon" -> icon(call.arguments as? String, result)
                 "always" -> {
                     try {
                         startActivity(Intent(Settings.ACTION_VPN_SETTINGS))
@@ -93,6 +101,46 @@ class MainActivity : FlutterActivity() {
                 starting.forEach { it.error("no_service", "the core service did not start", null) }
                 starting.clear()
             }
+        }
+    }
+
+    private fun apps(result: MethodChannel.Result) {
+        worker.execute {
+            val found = ArrayList<Map<String, String>>()
+            try {
+                val seen = HashSet<String>()
+                val launch = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+                for (info in packageManager.queryIntentActivities(launch, 0)) {
+                    val name = info.activityInfo.packageName
+                    if (name != packageName && seen.add(name)) {
+                        found.add(mapOf("id" to name, "name" to info.activityInfo.applicationInfo.loadLabel(packageManager).toString()))
+                    }
+                }
+                val order = Collator.getInstance()
+                found.sortWith { a, b -> order.compare(a["name"] ?: "", b["name"] ?: "") }
+            } catch (e: Exception) {
+                found.clear()
+            }
+            runOnUiThread { result.success(found) }
+        }
+    }
+
+    private fun icon(name: String?, result: MethodChannel.Result) {
+        worker.execute {
+            val bytes = try {
+                val drawable = packageManager.getApplicationIcon(name!!)
+                val side = (40 * resources.displayMetrics.density).toInt().coerceIn(48, 144)
+                val bitmap = Bitmap.createBitmap(side, side, Bitmap.Config.ARGB_8888)
+                drawable.setBounds(0, 0, side, side)
+                drawable.draw(Canvas(bitmap))
+                val out = ByteArrayOutputStream()
+                bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
+                bitmap.recycle()
+                out.toByteArray()
+            } catch (e: Exception) {
+                null
+            }
+            runOnUiThread { result.success(bytes) }
         }
     }
 
@@ -128,6 +176,7 @@ class MainActivity : FlutterActivity() {
 
     override fun onDestroy() {
         channel = null
+        worker.shutdown()
         if (binding) {
             unbindService(link)
             binding = false

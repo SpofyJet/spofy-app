@@ -561,6 +561,42 @@ def platform():
     expect("platform: nothing left the client directly while the tunnel was up", counter("foreign_direct") == 0 and not foreign,
            "packets=%d dns=%d" % (counter("foreign_direct"), len(foreign)))
 
+    guest = "2001"
+    drop_guest = "import os,sys; os.setgroups([]); os.setgid(%s); os.setuid(%s); os.execvp(sys.argv[1], sys.argv[1:])" % (guest, guest)
+
+    def as_guest(url):
+        return inside("client", sys.executable, "-c", drop_guest, "curl", "-s", "-m", "3", url, check=False)
+
+    def chosen(value, tunnels):
+        r = ui.call("set", key="apps", value=value)
+        done = until(lambda: len(asked("tun")) == tunnels and ui.active()["state"] == "connected" and fetch("http://local.test/ip", 2)[0] == "200", 15, 0.2)
+        return r["ok"] and bool(done)
+    held = ui.active()["server"]
+    began = time.time()
+    applied = chosen({"mode": "except", "list": [guest]}, 2)
+    took = time.time() - began
+    device = asked("tun")[-1]["device"]
+    spec = asked("tun")[-1]["spec"].get("apps")
+    past = counter("foreign_direct")
+    code, body = fetch("http://foreign.test/ip")
+    alone = as_guest("http://foreign.test/ip")
+    expect("platform: an app is taken out of the VPN: the platform makes a new tunnel, that app goes past it and the rest stay inside",
+           applied and spec == {"mode": "except", "list": [guest]} and body == SERVERS.get(ui.active()["server"]) and alone == "" and counter("foreign_direct") > past and device in links(),
+           "s=%.1f inside=%s outside=%r past=%d" % (took, body, alone, counter("foreign_direct") - past))
+    applied = chosen({"mode": "only", "list": [guest]}, 3)
+    device = asked("tun")[-1]["device"]
+    past = counter("foreign_direct")
+    code, body = fetch("http://foreign.test/ip", 3)
+    alone = as_guest("http://foreign.test/ip")
+    expect("platform: only the chosen app is in the VPN: it goes through the tunnel and the rest go past it",
+           applied and alone == SERVERS.get(ui.active()["server"]) and code != "200" and counter("foreign_direct") > past, "inside=%r outside=%s" % (alone, code))
+    applied = chosen(None, 4)
+    device = asked("tun")[-1]["device"]
+    code, body = fetch("http://foreign.test/ip")
+    alone = as_guest("http://foreign.test/ip")
+    expect("platform: the choice is cleared: every app is in the VPN again", applied and "apps" not in asked("tun")[-1]["spec"] and body == alone == SERVERS.get(ui.active()["server"]),
+           "seen=%s and %s" % (body, alone))
+    inside("hub", "nft", "reset", "counter", "inet", "hub", "foreign_direct")
     d = ui.call("disconnect")
     rules = inside("client", "ip", "rule", "show")
     gone = until(lambda: device not in links(), 5, 0.1)

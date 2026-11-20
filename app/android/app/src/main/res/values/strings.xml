@@ -3,11 +3,14 @@
     <string name="app">Spofy</string>
     <string name="channel">Состояние VPN</string>
     <string name="state_connected">VPN работает</string>
+    <string name="tile_on">Включён</string>
+    <string name="tile_off">Выключен</string>
+    <string name="tile_starting">Запуск…</string>
+    <string name="tile_trouble">Нет связи</string>
     <string name="state_connecting">Подключаемся</string>
     <string name="state_switching">Меняем сервер</string>
     <string name="state_stalled">Сервер не отвечает</string>
     <string name="state_offline">Нет интернета</string>
-    <string name="state_off">VPN выключен</string>
     <string name="state_failed">Серверы не отвечают</string>
     <string name="failed_hint">Попробуем снова при смене сети</string>
     <string name="stalled_hint">Трафик не идёт мимо VPN</string>
