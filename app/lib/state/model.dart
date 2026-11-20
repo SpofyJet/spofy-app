@@ -199,6 +199,13 @@ class AppModel extends ChangeNotifier {
     }
   }
 
+  Future<void> close() async {
+    _disposed = true;
+    await _events?.cancel();
+    await _faults?.cancel();
+    await _client?.close();
+  }
+
   @override
   void dispose() {
     _disposed = true;

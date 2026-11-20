@@ -271,6 +271,12 @@ func (t *Tunnel) Running() string {
 	return t.running
 }
 
+func (t *Tunnel) Stops() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.stops
+}
+
 func (t *Tunnel) Starts() []string {
 	t.mu.Lock()
 	defer t.mu.Unlock()

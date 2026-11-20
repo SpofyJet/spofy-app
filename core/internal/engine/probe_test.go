@@ -281,3 +281,13 @@ func TestServeProbeAndMeasure(t *testing.T) {
 		t.Fatal("serve did not exit after input closed")
 	}
 }
+
+func TestWatchSeesASubMillisecondPause(t *testing.T) {
+	w := started()
+	end := time.Now().Add(200 * time.Microsecond)
+	for time.Now().Before(end) {
+	}
+	if took := w.elapsed(); took < 100*time.Microsecond || took > time.Second {
+		t.Fatalf("took %v", took)
+	}
+}

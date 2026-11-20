@@ -9,6 +9,7 @@ import '../core/client.dart';
 import '../core/process_transport.dart';
 import '../core/socket_transport.dart';
 import '../state/apps.dart';
+import 'windows.dart';
 
 abstract interface class Host {
   Future<Transport> open();
@@ -24,7 +25,8 @@ abstract interface class Host {
   void links(void Function(String link) hear);
 }
 
-Host host() => Platform.isAndroid ? const AndroidHost() : const DesktopHost();
+Host host() =>
+    Platform.isAndroid ? const AndroidHost() : (Platform.isWindows ? const WindowsHost() : const DesktopHost());
 
 class AndroidHost implements Host {
   const AndroidHost();
@@ -119,17 +121,13 @@ class DesktopHost implements Host {
     final key = base64Encode(List<int>.generate(32, (_) => random.nextInt(256)));
     file.parent.createSync(recursive: true);
     file.writeAsStringSync(key, flush: true);
-    if (!Platform.isWindows) {
-      Process.runSync('chmod', ['600', file.path]);
-    }
+    Process.runSync('chmod', ['600', file.path]);
     return key;
   }
 
   @override
   Future<Transport> open() {
-    final core =
-        Platform.environment['SPOFY_CORE'] ??
-        '${File(Platform.resolvedExecutable).parent.path}/spofy-core${Platform.isWindows ? '.exe' : ''}';
+    final core = Platform.environment['SPOFY_CORE'] ?? '${File(Platform.resolvedExecutable).parent.path}/spofy-core';
     final state =
         Platform.environment['SPOFY_STATE'] ??
         '${Platform.environment['XDG_DATA_HOME'] ?? '${_home()}/.local/share'}/spofy';
@@ -155,11 +153,8 @@ class DesktopHost implements Host {
       (address) => unawaited(_browse(address));
 
   static Future<void> _browse(String address) async {
-    final (tool, arguments) = Platform.isWindows
-        ? ('rundll32', ['url.dll,FileProtocolHandler', address])
-        : (Platform.isMacOS ? 'open' : 'xdg-open', [address]);
     try {
-      await Process.start(tool, arguments, mode: ProcessStartMode.detached);
+      await Process.start(Platform.isMacOS ? 'open' : 'xdg-open', [address], mode: ProcessStartMode.detached);
     } on ProcessException {
       return;
     }

@@ -185,6 +185,7 @@ type served struct {
 	renew    time.Duration
 	resample time.Duration
 	settle   time.Duration
+	kept     bool
 	logs     io.Writer
 }
 
@@ -239,6 +240,12 @@ func serve(args []string) int {
 	return 0
 }
 
+type keeper interface {
+	Keep(on bool) error
+	Held() bool
+	Leave()
+}
+
 func (o served) run(ctx context.Context, out io.Writer) error {
 	st, err := store.Open(o.folder, o.key)
 	if err != nil {
@@ -277,6 +284,16 @@ func (o served) run(ctx context.Context, out io.Writer) error {
 		g, carried, retune = t, t.File, t.Renew
 		opts.Tun = xcfg.Tun{Name: opts.Tun.Name, MTU: opts.Tun.MTU, Resolver: []string{resolver}}
 	}
+	var keep func(bool)
+	held, leave := false, func() {}
+	if k, ok := g.(keeper); ok && o.kept {
+		held, leave = k.Held(), k.Leave
+		keep = func(on bool) {
+			if err := k.Keep(on); err != nil {
+				fmt.Fprintln(o.logs, "the block cannot outlive the service:", err)
+			}
+		}
+	}
 	var checks sync.WaitGroup
 	sv := supervisor.New(supervisor.Options{
 		Guard:     g,
@@ -311,6 +328,8 @@ func (o served) run(ctx context.Context, out io.Writer) error {
 		Resample: o.resample,
 		Settle:   o.settle,
 		Retune:   retune,
+		Keep:     keep,
+		Held:     held,
 	})
 	checks.Add(1)
 	go func() {
@@ -322,6 +341,7 @@ func (o served) run(ctx context.Context, out io.Writer) error {
 	} else {
 		err = ipc.Serve(ctx, os.Stdin, out, a, nil)
 	}
+	leave()
 	a.Close()
 	checks.Wait()
 	return err

@@ -75,7 +75,7 @@ func (i *Instance) probe(ctx context.Context, target, tag string) (time.Duration
 	}
 	defer tr.CloseIdleConnections()
 	client := &http.Client{Transport: tr, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	began := time.Now()
+	began := started()
 	resp, err := client.Do(req)
 	if err != nil {
 		return 0, &Error{Code: CodeProbe, Err: err}
@@ -84,7 +84,7 @@ func (i *Instance) probe(ctx context.Context, target, tag string) (time.Duration
 	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
 		return 0, &Error{Code: CodeProbe, Err: errors.New("unexpected status " + strconv.Itoa(resp.StatusCode))}
 	}
-	return time.Since(began), nil
+	return began.elapsed(), nil
 }
 
 var measuring sync.Mutex

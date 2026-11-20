@@ -77,6 +77,8 @@ type Config struct {
 	Resample time.Duration
 	Settle   time.Duration
 	Retune   func() (bool, error)
+	Keep     func(on bool)
+	Held     bool
 }
 
 type Apps struct {
@@ -675,7 +677,11 @@ func (a *App) Set(key string, value json.RawMessage) error {
 		return err
 	}
 	if key == KeyKillSwitch {
-		a.sess.SetStrict(a.cfg.Strict || on(a.cfg.Store.Get(), KeyKillSwitch))
+		strict := a.cfg.Strict || on(a.cfg.Store.Get(), KeyKillSwitch)
+		a.sess.SetStrict(strict)
+		if a.cfg.Keep != nil {
+			a.cfg.Keep(strict)
+		}
 	}
 	a.emit(Event{Ev: EvSettings, Settings: settings(a.cfg.Store.Get())})
 	if key == KeyApps && a.cfg.Retune != nil && a.sess.State() != session.Idle && !sameApps(applied, a.Apps()) {
@@ -690,10 +696,20 @@ func (a *App) Set(key string, value json.RawMessage) error {
 
 func (a *App) Resume() error {
 	st := a.cfg.Store.Get()
-	if st.Profile == nil || !on(st, KeyAutoConnect) {
+	if a.cfg.Keep != nil {
+		a.cfg.Keep(a.cfg.Strict || on(st, KeyKillSwitch))
+	}
+	if st.Profile == nil || !(on(st, KeyAutoConnect) || a.cfg.Held) {
+		if a.cfg.Held {
+			a.cfg.Tunnel.Stop()
+		}
 		return nil
 	}
-	return a.Connect("")
+	err := a.Connect("")
+	if err != nil && a.cfg.Held && a.sess.State() == session.Idle {
+		a.cfg.Tunnel.Stop()
+	}
+	return err
 }
 
 func on(st store.State, key string) bool {

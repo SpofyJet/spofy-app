@@ -14,6 +14,7 @@ import (
 	"golang.org/x/sys/windows/svc/mgr"
 
 	"github.com/SpofyJet/spofy-app/core/internal/desk"
+	"github.com/SpofyJet/spofy-app/core/internal/guard"
 	"github.com/SpofyJet/spofy-app/core/internal/store"
 	"github.com/SpofyJet/spofy-app/core/internal/sub"
 )
@@ -72,7 +73,7 @@ func prepare() (served, func(), error) {
 	}
 	hwid, release, model := desk.Identity()
 	return served{
-		folder: folder, key: key, mode: "tun", level: "warning", guarded: true,
+		folder: folder, key: key, mode: "tun", level: "warning", guarded: true, kept: true,
 		device: sub.Device{HWID: hwid, OS: "Windows", OSVersion: release, Model: model, AppVersion: version},
 		socket: pipe,
 		watch:  time.Second, quiet: 5 * time.Second, renew: 15 * time.Minute, resample: time.Hour, settle: 10 * time.Second,
@@ -162,8 +163,8 @@ func install() error {
 	defer s.Close()
 	err = s.SetRecoveryActions([]mgr.RecoveryAction{
 		{Type: mgr.ServiceRestart, Delay: time.Second},
+		{Type: mgr.ServiceRestart, Delay: 2 * time.Second},
 		{Type: mgr.ServiceRestart, Delay: 5 * time.Second},
-		{Type: mgr.ServiceRestart, Delay: 30 * time.Second},
 	}, 24*60*60)
 	if err != nil {
 		return err
@@ -190,9 +191,9 @@ func uninstall() error {
 	defer m.Disconnect()
 	s, err := m.OpenService(serviceName)
 	if err != nil {
-		return nil
+		return guard.Release()
 	}
 	defer s.Close()
 	stop(s)
-	return s.Delete()
+	return errors.Join(s.Delete(), guard.Release())
 }

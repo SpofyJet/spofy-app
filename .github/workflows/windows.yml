@@ -31,13 +31,44 @@ jobs:
         timeout-minutes: 25
         run: |
           go vet ./...
-          CGO_ENABLED=1 go test -race -count=1 ./...
+          CGO_ENABLED=1 go test -race -count=1 $(go list ./... | grep -v /internal/guard)
+          CGO_ENABLED=1 go test -race -gcflags=github.com/tailscale/wf=-d=checkptr=0 -count=1 -v ./internal/guard/
       - working-directory: spofy-app/core
         run: |
           mkdir -p ../dist
           CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -checklinkname=0" -o ../dist/spofy-core.exe ./cmd/spofy-core
+      - name: flutter
+        run: |
+          read -r version sum < spofy-app/tools/windows/flutter.sha256
+          [ "$version" = "$(sed -n 's/^ARG FLUTTER_VERSION=//p' spofy-app/tools/flutter/Dockerfile)" ] || { echo "tools/windows/flutter.sha256 is for another Flutter"; exit 1; }
+          curl -fsSL -o "$RUNNER_TEMP/flutter.zip" "https://storage.googleapis.com/flutter_infra_release/releases/stable/windows/flutter_windows_${version}-stable.zip"
+          echo "$sum  $RUNNER_TEMP/flutter.zip" | sha256sum -c -
+          7z x -y -bd -o"$RUNNER_TEMP" "$RUNNER_TEMP/flutter.zip" > /dev/null
+          rm "$RUNNER_TEMP/flutter.zip"
+          echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
+      - working-directory: spofy-app/app
+        timeout-minutes: 25
+        run: |
+          flutter config --no-analytics --no-cli-animations
+          flutter pub get --enforce-lockfile
+          SPOFY_CORE="$GITHUB_WORKSPACE/spofy-app/dist/spofy-core.exe" flutter test --reporter expanded test/pipe_transport_test.dart
+          flutter build windows --release
+          bundle=build/windows/x64/runner/Release
+          python ../tools/windows/wintun.py amd64 "$bundle"
+          cp ../dist/spofy-core.exe "$bundle/"
+          ls -l "$bundle"
+          du -sh "$bundle"
       - working-directory: spofy-app
         timeout-minutes: 15
         run: |
           python tools/windows/wintun.py amd64 dist
-          SPOFY_KILLS=${{ inputs.kills }} python tools/windows/stand.py dist/spofy-core.exe
+          mkdir -p dist/shots
+          SPOFY_KILLS=${{ inputs.kills }} python tools/windows/stand.py dist/spofy-core.exe app/build/windows/x64/runner/Release/spofy.exe dist/shots
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows
+          path: |
+            spofy-app/dist/shots
+            spofy-app/app/build/windows/x64/runner/Release
+          retention-days: 7

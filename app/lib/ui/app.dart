@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui' show AppExitResponse;
 
 import 'package:flutter/widgets.dart';
 
@@ -52,6 +53,12 @@ class _SpofyAppState extends State<SpofyApp> with WidgetsBindingObserver {
     widget.model.removeListener(_schedule);
     _poll?.cancel();
     super.dispose();
+  }
+
+  @override
+  Future<AppExitResponse> didRequestAppExit() async {
+    await widget.model.close();
+    return AppExitResponse.exit;
   }
 
   @override

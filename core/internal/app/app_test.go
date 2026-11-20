@@ -801,6 +801,39 @@ func TestResume(t *testing.T) {
 	}
 }
 
+func TestBlockLeftByAnEarlierRunResumesTheConnection(t *testing.T) {
+	var kept []bool
+	held := func(c *Config) {
+		c.Held = true
+		c.Keep = func(on bool) { kept = append(kept, on) }
+	}
+	b := newBench(t, held)
+	if err := b.app.Resume(); err != nil || len(b.tunnel.Starts()) != 0 || b.tunnel.Stops() != 1 {
+		t.Fatalf("no subscription: err %v, starts %v, stops %d", err, b.tunnel.Starts(), b.tunnel.Stops())
+	}
+	b.subscribed()
+	if err := b.app.Set(KeyKillSwitch, json.RawMessage(`true`)); err != nil {
+		t.Fatal(err)
+	}
+	b.open(held)
+	if err := b.app.Resume(); err != nil || b.tunnel.Running() != "обход1" || b.app.Snapshot().Connection.State != session.Connected {
+		t.Fatalf("held without auto connect: err %v, running %q", err, b.tunnel.Running())
+	}
+	if err := b.app.Set(KeyKillSwitch, json.RawMessage(`false`)); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(kept, []bool{false, true, true, false}) {
+		t.Fatalf("kept %v", kept)
+	}
+	if err := b.app.Disconnect(); err != nil {
+		t.Fatal(err)
+	}
+	b.open(nil)
+	if err := b.app.Resume(); err != nil || b.tunnel.Running() != "" {
+		t.Fatalf("not held: err %v, running %q", err, b.tunnel.Running())
+	}
+}
+
 func TestSettings(t *testing.T) {
 	b := newBench(t, nil)
 	for _, bad := range []struct {

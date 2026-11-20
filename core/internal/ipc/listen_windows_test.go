@@ -52,9 +52,13 @@ func TestPipeLetsInOnlyTheSystemAdministratorsAndPeopleAtTheComputer(t *testing.
 	}
 	defer c.Close()
 	h := windows.Handle(c.(interface{ Fd() uintptr }).Fd())
-	sd, err := windows.GetSecurityInfo(h, windows.SE_KERNEL_OBJECT, windows.DACL_SECURITY_INFORMATION)
+	sd, err := windows.GetSecurityInfo(h, windows.SE_KERNEL_OBJECT, windows.DACL_SECURITY_INFORMATION|windows.OWNER_SECURITY_INFORMATION)
 	if err != nil {
 		t.Fatal(err)
+	}
+	owner, _, err := sd.Owner()
+	if err != nil || owner.IsWellKnown(windows.WinLocalSystemSid) != system() {
+		t.Fatalf("owner %v, the process runs as the system: %v", owner, system())
 	}
 	control, _, err := sd.Control()
 	if err != nil || control&windows.SE_DACL_PROTECTED == 0 {

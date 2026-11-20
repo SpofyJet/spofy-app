@@ -15,6 +15,8 @@ import threading
 import time
 
 CORE = os.path.abspath(sys.argv[1])
+APP = os.path.abspath(sys.argv[2]) if len(sys.argv) > 2 else ""
+SHOTS = os.path.abspath(sys.argv[3]) if len(sys.argv) > 3 else ""
 WORK = tempfile.mkdtemp(prefix="spofy-stand-")
 USER = "00000000-0000-4000-8000-000000000001"
 SITE = "http://cp.cloudflare.com/generate_204"
@@ -261,6 +263,15 @@ class Pipe:
 PIPE = r"\\.\pipe\spofy"
 
 
+def system_owned(handle):
+    owner, sd = ctypes.c_void_p(), ctypes.c_void_p()
+    if ctypes.windll.advapi32.GetSecurityInfo(ctypes.c_void_p(handle), 6, 1, ctypes.byref(owner), None, None, None, ctypes.byref(sd)) != 0:
+        return False
+    ok = bool(ctypes.windll.advapi32.IsWellKnownSid(owner, 22))
+    ctypes.windll.kernel32.LocalFree(sd)
+    return ok
+
+
 def pipe_open():
     return "spofy" in os.listdir("\\\\.\\pipe\\")
 
@@ -273,7 +284,64 @@ def service_pid():
     return 0
 
 
+def window():
+    return ctypes.windll.user32.FindWindowW("SPOFY_WINDOW", None)
+
+
+def shot(hwnd, name):
+    box = ctypes.wintypes.RECT()
+    ctypes.windll.user32.SetForegroundWindow(hwnd)
+    time.sleep(1)
+    ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(box))
+    path = os.path.join(SHOTS, name)
+    ps("Add-Type -AssemblyName System.Drawing; $b = New-Object System.Drawing.Bitmap %d, %d; [System.Drawing.Graphics]::FromImage($b).CopyFromScreen(%d, %d, 0, 0, $b.Size); $b.Save('%s')"
+       % (box.right - box.left, box.bottom - box.top, box.left, box.top, path))
+    return os.path.exists(path), "%dx%d" % (box.right - box.left, box.bottom - box.top)
+
+
+def window_scenario(source):
+    app = subprocess.Popen([APP])
+    hwnd = until(window, 30, 0.2)
+    time.sleep(8)
+    alive = app.poll() is None
+    taken, size = shot(hwnd, "windows-home.png") if hwnd else (False, "")
+    expect("the window opens and stays up next to the service", bool(hwnd) and alive and taken, "size=%s code=%s" % (size, app.poll()))
+    if not hwnd:
+        return
+    again = subprocess.run([APP], timeout=30)
+    expect("a second start brings the open window forward and exits", again.returncode == 0 and app.poll() is None and window() == hwnd, "code=%s" % again.returncode)
+    ctypes.windll.user32.PostMessageW(hwnd, 0x10, 0, 0)
+    closed = until(lambda: app.poll() is not None, 15, 0.2)
+    expect("the window is closed: the VPN stays with the service", bool(closed) and fetch() == "204" and not past(source), "closed=%s" % bool(closed))
+    if app.poll() is None:
+        app.kill()
+
+
+def kill_service():
+    leaks, watching = [], threading.Event()
+    watching.set()
+
+    def watch():
+        while watching.is_set():
+            if past(source_address[0], 2):
+                leaks.append(time.time())
+    watcher = threading.Thread(target=watch, daemon=True)
+    watcher.start()
+    old = service_pid()
+    at = time.time()
+    subprocess.run(["taskkill", "/F", "/PID", str(old)], capture_output=True)
+    back = until(lambda: service_pid() not in (0, old) and pipe_open() and adapter() == "Up" and fetch(4) == "204", 90, 0.3)
+    took = time.time() - at
+    watching.clear()
+    watcher.join(10)
+    return (took if back else None), len(leaks)
+
+
+source_address = [""]
+
+
 def service_scenario(source, remote, sub):
+    source_address[0] = source
     tls()
     srv, address = page(open(sub, "rb").read())
     r = subprocess.run([CORE, "install"], capture_output=True, text=True)
@@ -282,6 +350,7 @@ def service_scenario(source, remote, sub):
     if not up:
         return
     ui = Pipe(PIPE)
+    expect("the service's channel belongs to the system: a program of the person cannot pose as it", system_owned(ui.h))
     hello = ui.ask("hello")
     expect("the interface talks to the service with the rights of a person at the computer", bool(hello) and hello.get("ok") and "snapshot" in hello, str(hello)[:200])
     added = ui.ask("subscribe", 60, url=address)
@@ -297,33 +366,48 @@ def service_scenario(source, remote, sub):
     expect("connect from the interface: the tunnel is up and another program goes through it", bool(asked) and bool(connected) and code == "204" and through > 0,
            "s=%.1f code=%s seen=%d %s" % (took, code, through, "" if connected else str(asked)[:200]))
     expect("connected through the service, a request from the uplink address does not leave", not past(source))
+    if APP:
+        window_scenario(source)
     ui.close()
 
-    leaks, watching = [], threading.Event()
-    watching.set()
+    took, leaked = kill_service()
+    expect("the service is killed: the system starts it again and it reconnects by itself", took is not None, "s=%.1f leaked=%d" % (took or -1, leaked))
 
-    def watch():
-        while watching.is_set():
-            if past(source, 2):
-                leaks.append(time.time())
-    watcher = threading.Thread(target=watch, daemon=True)
-    watcher.start()
-    old = service_pid()
-    at = time.time()
-    subprocess.run(["taskkill", "/F", "/PID", str(old)], capture_output=True)
-    back = until(lambda: service_pid() not in (0, old) and pipe_open() and adapter() == "Up" and fetch(4) == "204", 90, 0.3)
-    took = time.time() - at
-    watching.clear()
-    watcher.join(10)
-    expect("the service is killed: the system starts it again and it reconnects by itself", bool(back), "s=%.1f leaked_for=%.1f s" % (took, (leaks[-1] - leaks[0]) if leaks else 0.0))
-
-    r = subprocess.run(["sc", "stop", "Spofy"], capture_output=True, text=True)
+    subprocess.run(["sc", "stop", "Spofy"], capture_output=True, text=True)
     stopped = until(lambda: "STOPPED" in subprocess.run(["sc", "query", "Spofy"], capture_output=True, text=True).stdout, 40, 0.5)
     expect("the service stops on request: the adapter and the block are gone", bool(stopped) and until(lambda: adapter() == "", 20, 0.5) and fetch() == "204" and past(source),
            "adapter=%s" % adapter())
+    subprocess.run(["sc", "start", "Spofy"], capture_output=True, text=True)
+    expect("started again it connects by itself", bool(until(lambda: pipe_open() and adapter() == "Up" and fetch(4) == "204", 60, 0.5)))
+
+    ui = Pipe(PIPE)
+    ui.ask("set", key="killSwitch", value=True)
+    ui.close()
+    took, leaked = kill_service()
+    expect("with the kill switch the service is killed: not one request leaves past the tunnel", took is not None and leaked == 0, "s=%.1f leaked=%d" % (took or -1, leaked))
+    ui = Pipe(PIPE)
+    ui.ask("set", key="autoConnect", value=False)
+    ui.close()
+    took, leaked = kill_service()
+    expect("with the kill switch and no auto connect the killed service comes back connected", took is not None and leaked == 0, "s=%.1f leaked=%d" % (took or -1, leaked))
+
+    subprocess.run(["sc", "stop", "Spofy"], capture_output=True, text=True)
+    stopped = until(lambda: "STOPPED" in subprocess.run(["sc", "query", "Spofy"], capture_output=True, text=True).stdout, 40, 0.5)
+    closed = bool(stopped) and until(lambda: adapter() == "", 20, 0.5) is not None and not past(source) and fetch(4) != "204"
+    expect("the service is stopped with the kill switch: the internet stays closed", closed, "adapter=%s" % adapter())
+    subprocess.run(["sc", "start", "Spofy"], capture_output=True, text=True)
+    expect("started again with the block left it connects by itself", bool(until(lambda: pipe_open() and adapter() == "Up" and fetch(4) == "204", 60, 0.5)))
+
+    ui = Pipe(PIPE)
+    off = ui.ask("disconnect", 30)
+    expect("a disconnect with the kill switch opens the internet", bool(off) and off.get("ok") and bool(until(lambda: past(source, 3) and fetch(6) == "204", 20, 0.5)), str(off)[:200])
+    on = ui.ask("connect", 60)
+    ui.close()
+    expect("connected again with the kill switch", bool(on) and on.get("ok") and not past(source), str(on)[:200])
     r = subprocess.run([CORE, "uninstall"], capture_output=True, text=True)
     gone = r.returncode == 0 and until(lambda: subprocess.run(["sc", "query", "Spofy"], capture_output=True).returncode != 0 and not pipe_open(), 30, 0.5)
     expect("the service is removed with its channel", bool(gone), r.stderr.strip()[-300:])
+    expect("removed while the kill switch held the block: the internet works directly", bool(until(lambda: past(source, 3) and fetch(6) == "204", 20, 0.5)), "adapter=%s" % adapter())
     srv.shutdown()
     subprocess.run(["certutil", "-delstore", "Root", "Spofy Stand CA"], capture_output=True)
 
