@@ -19,8 +19,7 @@ func pipe(t *testing.T) *os.File {
 }
 
 func closed(f *os.File) bool {
-	_, err := f.Stat()
-	return errors.Is(err, os.ErrClosed)
+	return f.Fd() == ^uintptr(0)
 }
 
 func TestTunAsksThePlatformOnceAndGivesTheDescriptorToTheEngine(t *testing.T) {
