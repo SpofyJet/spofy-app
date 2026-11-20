@@ -328,7 +328,8 @@ class CoreService : VpnService() {
             if (Build.VERSION.SDK_INT >= 29) {
                 builder.setMetered(false)
             }
-            builder.establish()
+            val before = tunnels()
+            builder.establish()?.also { settle(before) }
         } catch (e: Exception) {
             if (BuildConfig.DEBUG) {
                 Log.e(TAG, "no tunnel", e)
@@ -342,6 +343,39 @@ class CoreService : VpnService() {
         raise()
         send(answer.put("ok", true).put("file", true), tunnel.fileDescriptor)
         tunnel.close()
+    }
+
+    private fun tunnels(): Set<String> {
+        if (Build.VERSION.SDK_INT >= 29) {
+            return emptySet()
+        }
+        val connectivity = getSystemService(ConnectivityManager::class.java)
+        return connectivity.allNetworks.filter {
+            connectivity.getNetworkCapabilities(it)?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
+        }.mapNotNull { connectivity.getLinkProperties(it)?.interfaceName }.toSet()
+    }
+
+    private fun settle(before: Set<String>) {
+        if (Build.VERSION.SDK_INT >= 29) {
+            return
+        }
+        val connectivity = getSystemService(ConnectivityManager::class.java)
+        val began = System.nanoTime()
+        val until = began + TimeUnit.MILLISECONDS.toNanos(SETTLE)
+        while (System.nanoTime() < until) {
+            val ready = connectivity.allNetworks.any {
+                val caps = connectivity.getNetworkCapabilities(it)
+                caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) &&
+                    caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) &&
+                    connectivity.getLinkProperties(it)?.interfaceName?.let { name -> name !in before } == true
+            }
+            if (ready) {
+                note("the system took the tunnel in ${TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - began)} ms")
+                return
+            }
+            Thread.sleep(20)
+        }
+        note("the system did not take the tunnel in $SETTLE ms")
     }
 
     private fun each(spec: JSONObject, key: String, add: (String, Int) -> Unit) {
@@ -544,6 +578,7 @@ class CoreService : VpnService() {
         private const val REFUSED = 2
         private const val RESTARTS = 5
         private const val PENDING = 8
+        private const val SETTLE = 1500L
         private val ROOTS = listOf("/apex/com.android.conscrypt/cacerts", "/system/etc/security/cacerts")
 
         @Volatile
