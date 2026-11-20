@@ -115,14 +115,53 @@ func (s *Session) State() State {
 }
 
 func (s *Session) Measure(ctx context.Context, cands []Candidate) []supervisor.Measurement {
-	return s.measure(ctx, cands, s.opts.Parallel)
+	return s.measure(ctx, cands, s.opts.Parallel, nil, nil)
 }
 
 func (s *Session) MeasureQuietly(ctx context.Context, cands []Candidate) []supervisor.Measurement {
-	return s.measure(ctx, cands, 1)
+	return s.measure(ctx, cands, 1, nil, nil)
 }
 
-func (s *Session) measure(ctx context.Context, cands []Candidate, parallel int) []supervisor.Measurement {
+func (s *Session) MeasureLive(ctx context.Context, cands []Candidate, every time.Duration, seen func([]supervisor.Measurement)) []supervisor.Measurement {
+	var mu sync.Mutex
+	part := make([]supervisor.Measurement, len(cands))
+	for i := range part {
+		part[i].Code = supervisor.CodeCanceled
+	}
+	fresh := false
+	quit, idle := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(idle)
+		tick := time.NewTicker(every)
+		defer tick.Stop()
+		for {
+			select {
+			case <-quit:
+				return
+			case <-tick.C:
+			}
+			mu.Lock()
+			var now []supervisor.Measurement
+			if fresh {
+				now, fresh = append(now, part...), false
+			}
+			mu.Unlock()
+			if now != nil {
+				seen(now)
+			}
+		}
+	}()
+	out := s.measure(ctx, cands, s.opts.Parallel, nil, func(i int, m supervisor.Measurement) {
+		mu.Lock()
+		part[i], fresh = m, true
+		mu.Unlock()
+	})
+	close(quit)
+	<-idle
+	return out
+}
+
+func (s *Session) measure(ctx context.Context, cands []Candidate, parallel int, began func(int), each func(int, supervisor.Measurement)) []supervisor.Measurement {
 	targets := make([]supervisor.Target, len(cands))
 	for i, c := range cands {
 		targets[i] = supervisor.Target{Config: c.Probe, Tag: c.Tag}
@@ -132,10 +171,13 @@ func (s *Session) measure(ctx context.Context, cands []Candidate, parallel int) 
 		out[i].Code = supervisor.CodeCanceled
 	}
 	var mu sync.Mutex
-	s.opts.Tunnel.Measure(ctx, targets, supervisor.MeasureOptions{URL: s.opts.URL, Timeout: s.opts.Timeout, Parallel: parallel}, func(i int, m supervisor.Measurement) {
+	s.opts.Tunnel.Measure(ctx, targets, supervisor.MeasureOptions{URL: s.opts.URL, Timeout: s.opts.Timeout, Parallel: parallel, Began: began}, func(i int, m supervisor.Measurement) {
 		mu.Lock()
 		out[i] = m
 		mu.Unlock()
+		if each != nil {
+			each(i, m)
+		}
 	})
 	return out
 }
@@ -248,7 +290,7 @@ func (s *Session) rank(ctx context.Context, cands []Candidate, tried int) ([]int
 		s.mu.Unlock()
 	}
 	s.set(Event{State: Measuring})
-	measured := s.Measure(ctx, cands)
+	measured := s.race(ctx, cands)
 	if ctx.Err() != nil {
 		return nil, false, ctx.Err()
 	}
@@ -374,7 +416,7 @@ func (s *Session) move(ctx context.Context, cands []Candidate, others []int, ser
 		for i, c := range part {
 			asked[i] = cands[c]
 		}
-		measured := s.Measure(ctx, asked)
+		measured := s.race(ctx, asked)
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}

@@ -126,7 +126,7 @@ def config(name, addr):
     }
 
 
-def publish(names, touched=(), every="1", ended=False):
+def publish(names, touched=(), every="1", ended=False, ghost=False):
     listed = [{"remarks": "\u23f0 Подписка закончилась", "outbounds": [
         {"tag": "proxy", "protocol": "vless", "settings": {"vnext": [{"address": "0.0.0.0", "port": 1, "users": [{"id": USER, "encryption": "none"}]}]}},
         {"tag": "direct", "protocol": "freedom"}]}] if ended else []
@@ -137,6 +137,8 @@ def publish(names, touched=(), every="1", ended=False):
         if name in touched:
             c["routing"]["rules"].append({"type": "field", "domain": ["domain:never.test"], "outboundTag": "direct"})
         listed.append(c)
+    if ghost:
+        listed.append(config("ghost", "10.77.1.99"))
     open(WORK + "/interval.new", "w").write(every)
     os.replace(WORK + "/interval.new", WORK + "/interval")
     json.dump(listed, open(WORK + "/sub.json.new", "w"), ensure_ascii=False)
@@ -194,9 +196,9 @@ def children(pid):
 
 
 class Core:
-    def __init__(self):
+    def __init__(self, state="/state"):
         env = dict(os.environ, SPOFY_STATE_KEY=KEY, SSL_CERT_FILE=WORK + "/cert.pem")
-        self.p = spawn("client", [CORE, "serve", "-state", WORK + "/state", "-guard"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        self.p = spawn("client", [CORE, "serve", "-state", WORK + state, "-guard"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                        stderr=open(WORK + "/core.err", "a"), text=True, bufsize=1, env=env)
         self.n = 0
         self.events = []
@@ -213,6 +215,7 @@ class Core:
             if m.get("re") == self.n:
                 m["ms"] = int((time.time() - began) * 1000)
                 return m
+            m["at"] = time.time()
             self.events.append(m)
 
     def states(self):
@@ -245,6 +248,29 @@ def until(what, limit=30.0, step=0.2):
             return v
         time.sleep(step)
     return None
+
+
+def silent_entry():
+    publish(SERVERS, ghost=True)
+    core = Core("/silent")
+    core.call("hello")
+    s = core.call("subscribe", url="https://sub.local.test/sub/HERMETICTOKEN")
+    c = core.call("connect")
+    code, body = fetch("http://foreign.test/ip")
+    expect("an entry of the list that never answers does not hold the first connection", s["ok"] and c["ok"] and c["ms"] < 1500 and body in SERVERS.values(),
+           "ms=%d seen=%s %s" % (c["ms"], body, c.get("error", "")))
+    core.call("disconnect")
+    core.events = []
+    began = time.time()
+    m = core.call("measure")
+    shown = [e for e in core.events if e.get("ev") == "servers"]
+    first = shown[0] if shown else {"at": began + 99, "servers": []}
+    expect("delays are shown as they arrive: the entry that never answers holds only its own line",
+           m["ok"] and len(shown) >= 2 and first["at"] - began < 1.5 and len([x for x in first["servers"] if x["delayMs"] > 0]) == 2 and m["ms"] > 2000,
+           "first=%.1f s all=%.1f s events=%d" % (first["at"] - began, m["ms"] / 1000, len(shown)))
+    core.p.stdin.close()
+    core.p.wait(timeout=15)
+    publish(SERVERS)
 
 
 def scenario():
@@ -719,6 +745,7 @@ try:
     if DRIVER:
         driven()
     elif os.environ.get("HERMETIC_ONLY") != "platform":
+        silent_entry()
         scenario()
     if not DRIVER and not failed:
         platform()

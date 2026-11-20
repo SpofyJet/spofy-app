@@ -28,6 +28,7 @@ type MeasureOptions struct {
 	URL      string
 	Timeout  time.Duration
 	Parallel int
+	Began    func(int)
 }
 
 func (s *Supervisor) Probe(ctx context.Context, tag, url string, timeout time.Duration) (time.Duration, error) {
@@ -67,6 +68,9 @@ func (s *Supervisor) Measure(ctx context.Context, targets []Target, o MeasureOpt
 				}
 			}()
 			for i := range jobs {
+				if o.Began != nil {
+					o.Began(i)
+				}
 				var m Measurement
 				p, m = s.measure(ctx, p, targets[i], o)
 				each(i, m)

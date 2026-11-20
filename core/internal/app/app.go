@@ -630,7 +630,7 @@ func (a *App) Measure(ctx context.Context) error {
 		hush()
 	}
 	cands := a.candidates(st)
-	measured := a.sess.Measure(ctx, cands)
+	measured := a.sess.MeasureLive(ctx, cands, 150*time.Millisecond, func(part []supervisor.Measurement) { a.onMeasure(cands, part) })
 	if ctx.Err() != nil {
 		return fail(supervisor.CodeCanceled, "canceled")
 	}
