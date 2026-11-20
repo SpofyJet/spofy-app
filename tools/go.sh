@@ -8,4 +8,4 @@ exec docker run --rm --memory=${BUILD_MEM:-2500m} --cpus=${BUILD_CPUS:-2} ${DOCK
   -e CGO_ENABLED=${CGO_ENABLED:-0} -e GOOS=${GOOS:-linux} -e GOARCH=${GOARCH:-amd64} -e GOFLAGS=-mod=mod -e GOTOOLCHAIN=local \
   -v "$ROOT:/src/spofy-app" -v "$XRAY:/src/spofy-xray-core:ro" \
   -v "$CACHE/gomod:/go/pkg/mod" -v "$CACHE/gocache:/root/.cache" \
-  -w /src/spofy-app/core ${GO_IMAGE:-golang:1.27.3} nice "$@"
+  -w /src/spofy-app/core ${GO_IMAGE:-golang:1.27.4} nice "$@"
