@@ -16,6 +16,6 @@ for abi in ${ANDROID_ABIS:-arm64-v8a armeabi-v7a x86_64}; do
   out=$ROOT/app/android/app/src/main/jniLibs/$abi/libspofycore.so
   mkdir -p "$(dirname "$out")"
   (cd "$ROOT/core" && CGO_ENABLED=1 GOOS=android GOARCH=$arch GOARM=7 CC=$BIN/$cc go build -o "$out" -trimpath -buildvcs=false \
-    -ldflags="-X main.version=0.0.1+xray-$REV -X github.com/xtls/xray-core/core.build=spofy-$REV -s -w -buildid= -checklinkname=0 -extldflags=-Wl,-z,max-page-size=16384" ./cmd/spofy-core)
+    -ldflags="-X main.version=0.0.1+xray-$REV -X github.com/xtls/xray-core/core.build=spofy-$REV -s -w -buildid= -checklinkname=0 -extldflags=-Wl,-z,max-page-size=16384,--pack-dyn-relocs=android" ./cmd/spofy-core)
   ls -l "$out" | awk '{print $5, $9}'
 done

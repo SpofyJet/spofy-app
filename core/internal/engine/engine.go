@@ -1,7 +1,6 @@
 package engine
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"os"
@@ -17,8 +16,7 @@ import (
 	"github.com/xtls/xray-core/common/platform"
 	"github.com/xtls/xray-core/core"
 	"github.com/xtls/xray-core/features/stats"
-	"github.com/xtls/xray-core/infra/conf/serial"
-	_ "github.com/xtls/xray-core/main/distro/all"
+	"github.com/xtls/xray-core/infra/conf"
 )
 
 type Code string
@@ -79,9 +77,17 @@ func init() {
 	clog.RegisterHandler(handler{})
 }
 
+func load(cfg []byte) (*core.Config, error) {
+	c := &conf.Config{}
+	if err := json.Unmarshal(cfg, c); err != nil {
+		return nil, err
+	}
+	return c.Build()
+}
+
 func Validate(cfg []byte) error {
 	clog.RegisterHandler(handler{})
-	c, err := serial.LoadJSONConfig(bytes.NewReader(cfg))
+	c, err := load(cfg)
 	if err != nil {
 		return &Error{Code: CodeConfig, Err: err}
 	}
@@ -120,7 +126,7 @@ func StartOn(cfg []byte, tun int) (*Instance, error) {
 
 func start(cfg []byte) (*Instance, error) {
 	clog.RegisterHandler(handler{})
-	c, err := serial.LoadJSONConfig(bytes.NewReader(cfg))
+	c, err := load(cfg)
 	if err != nil {
 		return nil, &Error{Code: CodeConfig, Err: err}
 	}
