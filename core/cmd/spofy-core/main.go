@@ -49,7 +49,11 @@ func main() {
 	case "version":
 		fmt.Println(version)
 	default:
-		os.Exit(2)
+		code, ok := system(os.Args[1], os.Args[2:])
+		if !ok {
+			code = 2
+		}
+		os.Exit(code)
 	}
 }
 
@@ -163,6 +167,27 @@ func tunnel(mode string, port int, level string) (xcfg.Options, error) {
 	return opts, nil
 }
 
+type served struct {
+	folder   string
+	key      []byte
+	mode     string
+	level    string
+	port     int
+	guarded  bool
+	strict   bool
+	marked   bool
+	device   sub.Device
+	socket   string
+	given    bool
+	bypass   bool
+	watch    time.Duration
+	quiet    time.Duration
+	renew    time.Duration
+	resample time.Duration
+	settle   time.Duration
+	logs     io.Writer
+}
+
 func serve(args []string) int {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	folder := fs.String("state", "", "folder for saved state, the key comes from SPOFY_STATE_KEY")
@@ -176,7 +201,7 @@ func serve(args []string) int {
 	system := fs.String("os", "Linux", "system name sent to the subscription server")
 	release := fs.String("os-version", "lab", "system version sent to the subscription server")
 	model := fs.String("model", "lab", "device model sent to the subscription server")
-	socket := fs.String("listen", "", "serve the channel on this unix socket, the core stops when its input closes")
+	socket := fs.String("listen", "", "serve the channel on this unix socket or windows pipe, the core stops when its input closes")
 	given := fs.Bool("platform", false, "take the tunnel from the platform, needs -listen")
 	bypass := fs.Bool("bypass", false, "the core's own connections go outside the tunnel: servers are measured while it is up")
 	watch := fs.Duration("watch", time.Second, "how often the traffic counters are read while connected, 0 turns the watch off")
@@ -187,37 +212,57 @@ func serve(args []string) int {
 	fs.Parse(args)
 
 	out := controlChannel()
-	fail := func(err error) int {
+	key, err := base64.StdEncoding.DecodeString(os.Getenv("SPOFY_STATE_KEY"))
+	if err != nil || *folder == "" {
+		fmt.Fprintln(os.Stderr, "serve needs -state and SPOFY_STATE_KEY")
+		return 1
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if *socket != "" {
+		go func() {
+			io.Copy(io.Discard, os.Stdin)
+			cancel()
+		}()
+	}
+	o := served{
+		folder: *folder, key: key, mode: *mode, level: *level, port: *port, guarded: *guarded, strict: *strict, marked: *marked,
+		device: sub.Device{HWID: *hwid, OS: *system, OSVersion: *release, Model: *model, AppVersion: version},
+		socket: *socket, given: *given, bypass: *bypass,
+		watch: *watch, quiet: *quiet, renew: *renew, resample: *resample, settle: *settle,
+		logs: os.Stderr,
+	}
+	if err := o.run(ctx, out); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	key, err := base64.StdEncoding.DecodeString(os.Getenv("SPOFY_STATE_KEY"))
-	if err != nil || *folder == "" {
-		return fail(errors.New("serve needs -state and SPOFY_STATE_KEY"))
-	}
-	st, err := store.Open(*folder, key)
+	return 0
+}
+
+func (o served) run(ctx context.Context, out io.Writer) error {
+	st, err := store.Open(o.folder, o.key)
 	if err != nil {
-		return fail(err)
+		return err
 	}
-	opts, err := tunnel(*mode, *port, *level)
+	opts, err := tunnel(o.mode, o.port, o.level)
 	if err != nil {
-		return fail(err)
+		return err
 	}
-	cmd, err := command(*marked || *guarded)
+	cmd, err := command(o.marked || o.guarded)
 	if err != nil {
-		return fail(err)
+		return err
 	}
 	var g supervisor.Guard
-	if *guarded && opts.Mode == xcfg.ModeTun {
+	if o.guarded && opts.Mode == xcfg.ModeTun {
 		g = labGuard(opts.Tun.Name)
 	}
 	var platform *host.Platform
 	var carried func() *os.File
 	var retune func() (bool, error)
 	var a *app.App
-	if *given {
-		if *socket == "" || opts.Mode != xcfg.ModeTun {
-			return fail(errors.New("-platform needs -listen and the tun mode"))
+	if o.given {
+		if o.socket == "" || opts.Mode != xcfg.ModeTun {
+			return errors.New("-platform needs -listen and the tun mode")
 		}
 		platform = &host.Platform{}
 		t := &host.Tun{Platform: platform, Spec: host.Spec{
@@ -241,7 +286,7 @@ func serve(args []string) int {
 		OnEvent: func(e supervisor.Event) {
 			switch e.Kind {
 			case supervisor.KindLog:
-				fmt.Fprintln(os.Stderr, e.Line)
+				fmt.Fprintln(o.logs, e.Line)
 			case supervisor.KindRestored, supervisor.KindFailed:
 				checks.Add(1)
 				go func() {
@@ -255,16 +300,16 @@ func serve(args []string) int {
 	a = app.New(app.Config{
 		Store:    st,
 		Tunnel:   sv,
-		Device:   sub.Device{HWID: *hwid, OS: *system, OSVersion: *release, Model: *model, AppVersion: version},
+		Device:   o.device,
 		Run:      opts,
 		Version:  version,
-		Strict:   *strict,
-		Bypass:   *bypass,
-		Watch:    *watch,
-		Quiet:    *quiet,
-		Renew:    *renew,
-		Resample: *resample,
-		Settle:   *settle,
+		Strict:   o.strict,
+		Bypass:   o.bypass,
+		Watch:    o.watch,
+		Quiet:    o.quiet,
+		Renew:    o.renew,
+		Resample: o.resample,
+		Settle:   o.settle,
 		Retune:   retune,
 	})
 	checks.Add(1)
@@ -272,23 +317,14 @@ func serve(args []string) int {
 		defer checks.Done()
 		a.Resume()
 	}()
-	if *socket != "" {
-		ctx, cancel := context.WithCancel(context.Background())
-		go func() {
-			io.Copy(io.Discard, os.Stdin)
-			cancel()
-		}()
-		err = listen(ctx, *socket, a, platform, func() { fmt.Fprintln(out, `{"ev":"listening"}`) })
-		cancel()
+	if o.socket != "" {
+		err = listen(ctx, o.socket, a, platform, func() { fmt.Fprintln(out, `{"ev":"listening"}`) })
 	} else {
-		err = ipc.Serve(context.Background(), os.Stdin, out, a, nil)
+		err = ipc.Serve(ctx, os.Stdin, out, a, nil)
 	}
 	a.Close()
 	checks.Wait()
-	if err != nil {
-		return fail(err)
-	}
-	return 0
+	return err
 }
 
 func measure(args []string) int {

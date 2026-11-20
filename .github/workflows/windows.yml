@@ -27,8 +27,7 @@ jobs:
         with:
           go-version-file: spofy-app/core/go.mod
           cache-dependency-path: spofy-app/core/go.sum
-      - if: ${{ !startsWith(github.ref, 'refs/heads/wip/') }}
-        working-directory: spofy-app/core
+      - working-directory: spofy-app/core
         timeout-minutes: 25
         run: |
           go vet ./...

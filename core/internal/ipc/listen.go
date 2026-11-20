@@ -1,5 +1,3 @@
-//go:build unix
-
 package ipc
 
 import (
@@ -50,11 +48,11 @@ func (q *queue) pump(c net.Conn) {
 	}
 }
 
-func Listen(ctx context.Context, l *net.UnixListener, a *app.App, p *host.Platform) error {
+func Listen(ctx context.Context, l net.Listener, a *app.App, p *host.Platform) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var mu sync.Mutex
-	open := map[*net.UnixConn]struct{}{}
+	open := map[net.Conn]struct{}{}
 	var clients sync.WaitGroup
 	go func() {
 		<-ctx.Done()
@@ -67,7 +65,7 @@ func Listen(ctx context.Context, l *net.UnixListener, a *app.App, p *host.Platfo
 	}()
 	var failure error
 	for {
-		c, err := l.AcceptUnix()
+		c, err := l.Accept()
 		if err != nil {
 			if ctx.Err() == nil {
 				failure = err
@@ -80,8 +78,10 @@ func Listen(ctx context.Context, l *net.UnixListener, a *app.App, p *host.Platfo
 		clients.Add(1)
 		go func() {
 			defer clients.Done()
-			c.SetWriteBuffer(sendBuffer)
-			in := host.NewInbox(c)
+			if b, ok := c.(interface{ SetWriteBuffer(int) error }); ok {
+				b.SetWriteBuffer(sendBuffer)
+			}
+			in, drop := inbox(c)
 			out := &queue{lines: make(chan []byte, backlog), drop: func() { c.Close() }}
 			pumped := make(chan struct{})
 			go func() {
@@ -91,7 +91,7 @@ func Listen(ctx context.Context, l *net.UnixListener, a *app.App, p *host.Platfo
 			Serve(ctx, in, out, a, p)
 			close(out.lines)
 			<-pumped
-			in.Drop()
+			drop()
 			c.Close()
 			mu.Lock()
 			delete(open, c)

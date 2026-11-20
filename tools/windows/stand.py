@@ -1,9 +1,13 @@
+import _winapi
 import ctypes
 import ctypes.wintypes
+import http.server
 import json
 import os
+import shutil
 import signal
 import socket
+import ssl
 import subprocess
 import sys
 import tempfile
@@ -167,6 +171,163 @@ def count(core, kind):
     return len([line for line in core.lines() if line.startswith("{") and json.loads(line).get("event") == kind])
 
 
+def tls():
+    openssl = shutil.which("openssl") or r"C:\Program Files\OpenSSL\bin\openssl.exe"
+    conf = {
+        "ca.cnf": "[req]\ndistinguished_name = dn\nprompt = no\nx509_extensions = ext\n[dn]\nCN = Spofy Stand CA\n[ext]\nbasicConstraints = critical,CA:TRUE\nkeyUsage = critical,keyCertSign,cRLSign\n",
+        "srv.cnf": "[req]\ndistinguished_name = dn\nprompt = no\n[dn]\nCN = 127.0.0.1\n[ext]\nsubjectAltName = IP:127.0.0.1\nextendedKeyUsage = serverAuth\nbasicConstraints = CA:FALSE\nkeyUsage = critical,digitalSignature,keyEncipherment\n",
+    }
+    for name, text in conf.items():
+        with open(os.path.join(WORK, name), "w") as f:
+            f.write(text)
+    for args in (["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", "ca.key", "-out", "ca.pem", "-days", "2", "-config", "ca.cnf"],
+                 ["req", "-new", "-newkey", "rsa:2048", "-nodes", "-keyout", "srv.key", "-out", "srv.csr", "-config", "srv.cnf"],
+                 ["x509", "-req", "-in", "srv.csr", "-CA", "ca.pem", "-CAkey", "ca.key", "-CAcreateserial", "-out", "srv.pem", "-days", "2", "-extfile", "srv.cnf", "-extensions", "ext"]):
+        r = subprocess.run([openssl, *args], cwd=WORK, capture_output=True, text=True)
+        if r.returncode != 0:
+            raise SystemExit("openssl %s: %s" % (args[0], r.stderr[-400:]))
+    r = subprocess.run(["certutil", "-addstore", "-f", "Root", os.path.join(WORK, "ca.pem")], capture_output=True, text=True)
+    if r.returncode != 0:
+        raise SystemExit("certutil: %s" % r.stdout[-400:])
+
+
+def page(body):
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Profile-Title", "Spofy Stand")
+            self.send_header("Subscription-Userinfo", "upload=0; download=0; total=0; expire=0")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.load_cert_chain(os.path.join(WORK, "srv.pem"), os.path.join(WORK, "srv.key"))
+    srv.socket = ctx.wrap_socket(srv.socket, server_side=True)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv, "https://127.0.0.1:%d/sub/stand" % srv.server_address[1]
+
+
+class Pipe:
+    def __init__(self, path):
+        self.h = _winapi.CreateFile(path, 0x120089 | 0x2, 0, _winapi.NULL, _winapi.OPEN_EXISTING, _winapi.FILE_FLAG_OVERLAPPED, _winapi.NULL)
+        self.seen, self.lock, self.n = [], threading.Lock(), 0
+        threading.Thread(target=self.read, daemon=True).start()
+
+    def read(self):
+        rest = b""
+        while True:
+            try:
+                ov, _ = _winapi.ReadFile(self.h, 65536, overlapped=True)
+                ov.GetOverlappedResult(True)
+            except OSError:
+                return
+            data = ov.getbuffer()
+            if not data:
+                return
+            rest += bytes(data)
+            *whole, rest = rest.split(b"\n")
+            with self.lock:
+                self.seen.extend(json.loads(line) for line in whole if line.strip())
+
+    def ask(self, op, limit=30, **fields):
+        self.n += 1
+        n = self.n
+        ov, _ = _winapi.WriteFile(self.h, (json.dumps({"id": n, "op": op, **fields}) + "\n").encode(), overlapped=True)
+        ov.GetOverlappedResult(True)
+        return self.wait(lambda m: m.get("re") == n, limit)
+
+    def wait(self, want, limit):
+        def find():
+            with self.lock:
+                return next((m for m in self.seen if want(m)), None)
+        return until(find, limit, 0.05)
+
+    def state(self):
+        with self.lock:
+            for m in reversed(self.seen):
+                if m.get("ev") == "connection":
+                    return m["connection"].get("state")
+        return None
+
+    def close(self):
+        _winapi.CloseHandle(self.h)
+
+
+PIPE = r"\\.\pipe\spofy"
+
+
+def pipe_open():
+    return "spofy" in os.listdir("\\\\.\\pipe\\")
+
+
+def service_pid():
+    out = subprocess.run(["sc", "queryex", "Spofy"], capture_output=True, text=True).stdout
+    for line in out.splitlines():
+        if line.strip().startswith("PID"):
+            return int(line.split(":")[1])
+    return 0
+
+
+def service_scenario(source, remote, sub):
+    tls()
+    srv, address = page(open(sub, "rb").read())
+    r = subprocess.run([CORE, "install"], capture_output=True, text=True)
+    up = r.returncode == 0 and until(pipe_open, 30, 0.2)
+    expect("the service is installed and opens its channel", bool(up), "pid=%d %s" % (service_pid(), r.stderr.strip()[-300:]))
+    if not up:
+        return
+    ui = Pipe(PIPE)
+    hello = ui.ask("hello")
+    expect("the interface talks to the service with the rights of a person at the computer", bool(hello) and hello.get("ok") and "snapshot" in hello, str(hello)[:200])
+    added = ui.ask("subscribe", 60, url=address)
+    expect("a subscription over https is added inside the service", bool(added) and added.get("ok"), str(added)[:300])
+    ui.ask("set", key="autoConnect", value=True)
+    at = time.time()
+    asked = ui.ask("connect", 60)
+    connected = ui.wait(lambda m: m.get("ev") == "connection" and m["connection"].get("state") == "connected", 60)
+    took = time.time() - at
+    seen = len([line for line in remote.lines() if "cp.cloudflare.com" in line])
+    code = fetch()
+    through = len([line for line in remote.lines() if "cp.cloudflare.com" in line]) - seen
+    expect("connect from the interface: the tunnel is up and another program goes through it", bool(asked) and bool(connected) and code == "204" and through > 0,
+           "s=%.1f code=%s seen=%d %s" % (took, code, through, "" if connected else str(asked)[:200]))
+    expect("connected through the service, a request from the uplink address does not leave", not past(source))
+    ui.close()
+
+    leaks, watching = [], threading.Event()
+    watching.set()
+
+    def watch():
+        while watching.is_set():
+            if past(source, 2):
+                leaks.append(time.time())
+    watcher = threading.Thread(target=watch, daemon=True)
+    watcher.start()
+    old = service_pid()
+    at = time.time()
+    subprocess.run(["taskkill", "/F", "/PID", str(old)], capture_output=True)
+    back = until(lambda: service_pid() not in (0, old) and pipe_open() and adapter() == "Up" and fetch(4) == "204", 90, 0.3)
+    took = time.time() - at
+    watching.clear()
+    watcher.join(10)
+    expect("the service is killed: the system starts it again and it reconnects by itself", bool(back), "s=%.1f leaked_for=%.1f s" % (took, (leaks[-1] - leaks[0]) if leaks else 0.0))
+
+    r = subprocess.run(["sc", "stop", "Spofy"], capture_output=True, text=True)
+    stopped = until(lambda: "STOPPED" in subprocess.run(["sc", "query", "Spofy"], capture_output=True, text=True).stdout, 40, 0.5)
+    expect("the service stops on request: the adapter and the block are gone", bool(stopped) and until(lambda: adapter() == "", 20, 0.5) and fetch() == "204" and past(source),
+           "adapter=%s" % adapter())
+    r = subprocess.run([CORE, "uninstall"], capture_output=True, text=True)
+    gone = r.returncode == 0 and until(lambda: subprocess.run(["sc", "query", "Spofy"], capture_output=True).returncode != 0 and not pipe_open(), 30, 0.5)
+    expect("the service is removed with its channel", bool(gone), r.stderr.strip()[-300:])
+    srv.shutdown()
+    subprocess.run(["certutil", "-delstore", "Root", "Spofy Stand CA"], capture_output=True)
+
+
 def scenario():
     uplink = ps("(Get-NetRoute -DestinationPrefix 0.0.0.0/0 | Sort-Object -Property RouteMetric, ifMetric | Select-Object -First 1 | Get-NetAdapter).Name")
     source = ps("(Get-NetIPAddress -InterfaceAlias '%s' -AddressFamily IPv4 | Select-Object -First 1).IPAddress" % uplink)
@@ -232,7 +393,15 @@ def scenario():
     expect("the supervisor is killed: the block and the adapter are gone with it and the internet works", held and bool(free) and bool(left),
            "held=%s free=%s adapter=%s" % (held, bool(free), adapter()))
 
+    try:
+        service_scenario(source, remote, sub)
+    finally:
+        if subprocess.run(["sc", "query", "Spofy"], capture_output=True).returncode == 0:
+            subprocess.run([CORE, "uninstall"], capture_output=True)
     if failed:
+        log = os.path.join(os.environ.get("ProgramData", "C:\\ProgramData"), "Spofy", "service.log")
+        if os.path.exists(log):
+            print("--- service\n" + open(log, encoding="utf-8", errors="replace").read()[-2000:])
         print("--- run\n%s\n--- server\n%s" % (core.tail(), remote.tail()))
         print(ps("Get-NetAdapter | Format-Table -AutoSize Name, InterfaceDescription, Status; Get-NetRoute -AddressFamily IPv4 | Sort-Object RouteMetric | Select-Object -First 12 | Format-Table -AutoSize DestinationPrefix, NextHop, InterfaceAlias, RouteMetric"))
     for p in (core.p, remote.p):
