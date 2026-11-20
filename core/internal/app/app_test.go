@@ -290,7 +290,12 @@ func TestSubscriptionIsFetchedAgainByThePanelIntervalAndNotMoreOften(t *testing.
 	step(time.Hour, 4, "no network")
 	b.app.SetOnline(true)
 	b.until("a fetch when the network is back", func() bool { return b.panel.Hits() == 5 })
-	b.until("the fetch is over", func() bool { return b.app.Snapshot().Subscription.FetchedAt == b.clock.Now().Unix() })
+	b.until("the fetch is over", func() bool {
+		b.app.mu.Lock()
+		busy := b.app.renews
+		b.app.mu.Unlock()
+		return !busy && b.app.Snapshot().Subscription.FetchedAt == b.clock.Now().Unix()
+	})
 	b.panel.Set(func(_ *[]byte, h http.Header) {
 		h.Del("Profile-Update-Interval")
 		h.Set("Etag", `W/"fixture-2"`)
@@ -334,10 +339,20 @@ func TestEventsThatStartAFetch(t *testing.T) {
 		t.Fatal(err)
 	}
 	b.until("a fetch after the connection is up", func() bool { return b.panel.Hits() == 2 })
-	b.until("the fetch is over", func() bool { return b.app.Snapshot().Subscription.FetchedAt == b.clock.Now().Unix() })
+	b.until("the fetch is over", func() bool {
+		b.app.mu.Lock()
+		busy := b.app.renews
+		b.app.mu.Unlock()
+		return !busy && b.app.Snapshot().Subscription.FetchedAt == b.clock.Now().Unix()
+	})
 	b.clock.Advance(time.Hour)
 	b.until("a fetch while connected, with nobody asking", func() bool { return b.panel.Hits() == 3 })
-	b.until("the fetch is over", func() bool { return b.app.Snapshot().Subscription.FetchedAt == b.clock.Now().Unix() })
+	b.until("the fetch is over", func() bool {
+		b.app.mu.Lock()
+		busy := b.app.renews
+		b.app.mu.Unlock()
+		return !busy && b.app.Snapshot().Subscription.FetchedAt == b.clock.Now().Unix()
+	})
 	if err := b.app.Disconnect(); err != nil {
 		t.Fatal(err)
 	}
