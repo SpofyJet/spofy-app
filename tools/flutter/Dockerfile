@@ -1,6 +1,6 @@
 FROM debian:trixie-slim
-ARG FLUTTER_VERSION=3.50.0
-ARG FLUTTER_SHA256=6ea2d806fd57269ae783e6788e2a81fc26eaad782f1e0d0ff38623bb765ff9f5
+ARG FLUTTER_VERSION=3.50.1
+ARG FLUTTER_SHA256=4ad17fc8462fbcef2ba19ff4a78c0a16b7147fde1add8578e267ea62cdb92678
 RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends ca-certificates curl git unzip xz-utils >/dev/null && rm -rf /var/lib/apt/lists/*
 RUN curl -fsSL -o /tmp/flutter.tar.xz "https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_${FLUTTER_VERSION}-stable.tar.xz" \
  && echo "${FLUTTER_SHA256}  /tmp/flutter.tar.xz" | sha256sum -c - \

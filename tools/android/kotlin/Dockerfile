@@ -1,6 +1,6 @@
 FROM eclipse-temurin:21-jdk
-ARG KOTLIN_VERSION=2.4.20
-ARG KOTLIN_SHA256=59e9ca74c7904ef2c122b12114937673ccce68de820a663f0ed66ccf8799e0b7
+ARG KOTLIN_VERSION=2.4.21
+ARG KOTLIN_SHA256=7cc140e76daf416a0424a5557f99afd7ca89ebd463ea1101261e3e01c33e75cd
 ARG PLATFORM=36
 RUN apt-get update && apt-get install -y --no-install-recommends unzip python3 ca-certificates curl && rm -rf /var/lib/apt/lists/*
 RUN curl -fsSL -o /tmp/kotlin.zip "https://github.com/JetBrains/kotlin/releases/download/v${KOTLIN_VERSION}/kotlin-compiler-${KOTLIN_VERSION}.zip" \
