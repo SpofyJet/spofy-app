@@ -52,7 +52,7 @@ func newRig(t *testing.T) *rig {
 		Tunnel:  r.tunnel,
 		Device:  sub.Device{HWID: "hw-1", OS: "Android", OSVersion: "15", Model: "Pixel 8", AppVersion: "0.1.0"},
 		HTTP:    r.panel.Client(),
-		Run:     xcfg.Options{Mode: xcfg.ModeProxy, Proxy: xcfg.Proxy{Port: 2080, User: "u", Pass: "p"}},
+		Run:     xcfg.Options{Mode: xcfg.ModeProbe},
 		Now:     r.clock.Now,
 		Version: "0.1.0",
 		Retries: []time.Duration{0},

@@ -10,14 +10,10 @@ type Mode int
 
 const (
 	ModeTun Mode = iota
-	ModeProxy
 	ModeProbe
 )
 
-const (
-	TagTun   = "tun"
-	TagProxy = "socks"
-)
+const TagTun = "tun"
 
 type Tun struct {
 	Name     string
@@ -30,17 +26,9 @@ type Tun struct {
 	Resolver []string
 }
 
-type Proxy struct {
-	Listen string
-	Port   int
-	User   string
-	Pass   string
-}
-
 type Options struct {
 	Mode     Mode
 	Tun      Tun
-	Proxy    Proxy
 	LogLevel string
 }
 
@@ -161,21 +149,6 @@ func inboundFor(o Options, sniffing json.RawMessage) (map[string]any, string, er
 			settings["autoOutboundsInterface"] = t.OutIface
 		}
 		return map[string]any{"tag": TagTun, "protocol": "tun", "port": 0, "settings": settings, "sniffing": sniffing}, TagTun, nil
-	case ModeProxy:
-		p := o.Proxy
-		if p.Port <= 0 || p.Port > 65535 || p.User == "" || p.Pass == "" {
-			return nil, "", ErrConfig
-		}
-		listen := p.Listen
-		if listen == "" {
-			listen = "127.0.0.1"
-		}
-		settings := map[string]any{
-			"auth":     "password",
-			"accounts": []map[string]string{{"user": p.User, "pass": p.Pass}},
-			"udp":      true,
-		}
-		return map[string]any{"tag": TagProxy, "protocol": "socks", "listen": listen, "port": p.Port, "settings": settings, "sniffing": sniffing}, TagProxy, nil
 	}
 	return nil, "", ErrConfig
 }

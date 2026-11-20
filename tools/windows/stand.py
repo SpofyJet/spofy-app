@@ -275,6 +275,70 @@ class Pipe:
 PIPE = r"\\.\pipe\spofy"
 
 
+OUTSIDER = r"""
+import _winapi, sys, time
+for _ in range(100):
+    try:
+        h = _winapi.CreateFile(sys.argv[1], 0x120089 | 0x2, 0, _winapi.NULL, _winapi.OPEN_EXISTING, 0, _winapi.NULL)
+        break
+    except OSError as e:
+        if e.winerror == 5:
+            sys.exit(4)
+        if e.winerror != 231:
+            sys.exit(5)
+        time.sleep(0.05)
+else:
+    sys.exit(5)
+try:
+    _winapi.WriteFile(h, b'{"id":1,"op":"hello"}\n')
+    sys.exit(0 if _winapi.ReadFile(h, 65536)[0] else 3)
+except OSError:
+    sys.exit(3)
+"""
+
+
+class StartupInfo(ctypes.Structure):
+    _fields_ = [("cb", ctypes.c_uint32), ("reserved", ctypes.c_wchar_p), ("desktop", ctypes.c_wchar_p), ("title", ctypes.c_wchar_p)] + \
+               [(n, ctypes.c_uint32) for n in ("x", "y", "width", "height", "columns", "rows", "fill", "flags")] + \
+               [("show", ctypes.c_uint16), ("extra", ctypes.c_uint16), ("more", ctypes.c_void_p), ("stdin", ctypes.c_void_p), ("stdout", ctypes.c_void_p), ("stderr", ctypes.c_void_p)]
+
+
+class ProcessInfo(ctypes.Structure):
+    _fields_ = [("process", ctypes.c_void_p), ("thread", ctypes.c_void_p), ("pid", ctypes.c_uint32), ("tid", ctypes.c_uint32)]
+
+
+class SidAttributes(ctypes.Structure):
+    _fields_ = [("sid", ctypes.c_void_p), ("attributes", ctypes.c_uint32)]
+
+
+def as_person(argv, limit):
+    k, a = ctypes.WinDLL("kernel32", use_last_error=True), ctypes.WinDLL("advapi32", use_last_error=True)
+    k.GetCurrentProcess.restype = ctypes.c_void_p
+    own, person = ctypes.c_void_p(), ctypes.c_void_p()
+    if not a.OpenProcessToken(ctypes.c_void_p(k.GetCurrentProcess()), 0x2 | 0x8 | 0x1, ctypes.byref(own)):
+        raise OSError(ctypes.get_last_error())
+    sid, size = ctypes.create_string_buffer(68), ctypes.c_uint32(68)
+    a.CreateWellKnownSid(26, None, sid, ctypes.byref(size))
+    drop = SidAttributes(ctypes.cast(sid, ctypes.c_void_p), 0)
+    if not a.CreateRestrictedToken(own, 1, 1, ctypes.byref(drop), 0, None, 0, None, ctypes.byref(person)):
+        raise OSError(ctypes.get_last_error())
+    info, started = StartupInfo(), ProcessInfo()
+    info.cb = ctypes.sizeof(info)
+    line = ctypes.create_unicode_buffer(subprocess.list2cmdline(argv))
+    try:
+        if not a.CreateProcessAsUserW(person, None, line, None, None, False, 0x08000000, None, None, ctypes.byref(info), ctypes.byref(started)):
+            raise OSError(ctypes.get_last_error())
+        k.WaitForSingleObject(ctypes.c_void_p(started.process), int(limit * 1000))
+        code = ctypes.c_uint32()
+        k.GetExitCodeProcess(ctypes.c_void_p(started.process), ctypes.byref(code))
+        k.CloseHandle(ctypes.c_void_p(started.process))
+        k.CloseHandle(ctypes.c_void_p(started.thread))
+        return code.value
+    finally:
+        k.CloseHandle(person)
+        k.CloseHandle(own)
+
+
 def system_owned(handle):
     owner, sd = ctypes.c_void_p(), ctypes.c_void_p()
     if ctypes.windll.advapi32.GetSecurityInfo(ctypes.c_void_p(handle), 6, 1, ctypes.byref(owner), None, None, None, ctypes.byref(sd)) != 0:
@@ -602,6 +666,12 @@ def service_scenario(source, servers, sub):
     expect("the service's channel belongs to the system: a program of the person cannot pose as it", system_owned(ui.h))
     hello = ui.ask("hello")
     expect("the interface talks to the service with the rights of a person at the computer", bool(hello) and hello.get("ok") and "snapshot" in hello, str(hello)[:200])
+    plain = subprocess.run([sys.executable, "-c", OUTSIDER, PIPE], timeout=30).returncode
+    outsider = as_person([sys.executable, "-c", OUTSIDER, PIPE], 30)
+    if outsider == 4:
+        print("     the session of this machine has no person at the computer: an outside program of a person is not checked")
+    else:
+        expect("the service does not answer another program of a person, only Spofy's own", plain == 0 and outsider == 3, "administrator=%d person=%d" % (plain, outsider))
     added = ui.ask("subscribe", 60, url=address)
     expect("a subscription over https is added inside the service", bool(added) and added.get("ok"), str(added)[:300])
     ui.ask("set", key="autoConnect", value=True)

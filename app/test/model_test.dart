@@ -260,7 +260,7 @@ void main() {
     final socket = '${folder.path}/core.sock';
     final core = await Process.start(
       path,
-      ['serve', '-state', '${folder.path}/state', '-mode', 'proxy', '-listen', socket],
+      ['serve', '-state', '${folder.path}/state', '-mode', 'none', '-listen', socket],
       environment: {'SPOFY_STATE_KEY': base64Encode(List<int>.generate(32, (i) => i * 5 % 251))},
     );
     unawaited(core.stderr.drain<void>());
@@ -294,7 +294,7 @@ void main() {
     final key = base64Encode(List<int>.generate(32, (i) => i * 7 % 251));
     Future<ProcessTransport> launch() => ProcessTransport.start(
       path,
-      ['serve', '-state', folder.path, '-mode', 'proxy'],
+      ['serve', '-state', folder.path, '-mode', 'none'],
       environment: {'SPOFY_STATE_KEY': key},
     );
 

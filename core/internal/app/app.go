@@ -729,11 +729,7 @@ func (a *App) Traffic() engine.Traffic {
 }
 
 func (a *App) flow() engine.Traffic {
-	tag := xcfg.TagTun
-	if a.cfg.Run.Mode == xcfg.ModeProxy {
-		tag = xcfg.TagProxy
-	}
-	t, _ := a.cfg.Tunnel.Traffic(tag)
+	t, _ := a.cfg.Tunnel.Traffic(xcfg.TagTun)
 	return t
 }
 

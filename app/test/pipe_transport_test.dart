@@ -27,7 +27,7 @@ void main() {
     final pipe = name();
     final process = await Process.start(
       path,
-      ['serve', '-state', '${folder.path}\\state', '-mode', 'proxy', '-listen', pipe],
+      ['serve', '-state', '${folder.path}\\state', '-mode', 'none', '-listen', pipe],
       environment: {'SPOFY_STATE_KEY': base64Encode(List<int>.generate(32, (i) => i * 3 % 251))},
     );
     addTearDown(() async {

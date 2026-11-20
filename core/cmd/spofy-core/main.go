@@ -151,18 +151,17 @@ func remember(st *store.Store) func([]session.Candidate, []supervisor.Measuremen
 
 const resolver = "172.19.0.2"
 
-func tunnel(mode string, port int, level string) (xcfg.Options, error) {
+func tunnel(mode string, level string) (xcfg.Options, error) {
 	opts := xcfg.Options{Mode: xcfg.ModeTun, LogLevel: level, Tun: xcfg.Tun{
 		Name: "spofy0", MTU: 1500, Gateway: []string{"172.19.0.1/30"}, Routes: []string{"0.0.0.0/1", "128.0.0.0/1"},
 	}}
 	desktop(&opts.Tun)
 	switch mode {
 	case "tun":
-	case "proxy":
-		opts.Mode = xcfg.ModeProxy
-		opts.Proxy = xcfg.Proxy{Port: port, User: "spofy", Pass: "spofy"}
+	case "none":
+		opts.Mode = xcfg.ModeProbe
 	default:
-		return opts, errors.New("mode must be tun or proxy")
+		return opts, errors.New("mode must be tun or none")
 	}
 	return opts, nil
 }
@@ -172,7 +171,6 @@ type served struct {
 	key      []byte
 	mode     string
 	level    string
-	port     int
 	guarded  bool
 	strict   bool
 	marked   bool
@@ -192,9 +190,8 @@ type served struct {
 func serve(args []string) int {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	folder := fs.String("state", "", "folder for saved state, the key comes from SPOFY_STATE_KEY")
-	mode := fs.String("mode", "tun", "tun or proxy")
+	mode := fs.String("mode", "tun", "tun, or none for an engine without a way in")
 	level := fs.String("log", "warning", "core log level")
-	port := fs.Int("port", 2080, "proxy mode port")
 	guarded := fs.Bool("guard", false, "block traffic outside the tunnel while connected")
 	strict := fs.Bool("strict", false, "keep the block when the first connection fails")
 	marked := fs.Bool("lab-identity", false, "run the engine under the lab group id")
@@ -227,7 +224,7 @@ func serve(args []string) int {
 		}()
 	}
 	o := served{
-		folder: *folder, key: key, mode: *mode, level: *level, port: *port, guarded: *guarded, strict: *strict, marked: *marked,
+		folder: *folder, key: key, mode: *mode, level: *level, guarded: *guarded, strict: *strict, marked: *marked,
 		device: sub.Device{HWID: *hwid, OS: *system, OSVersion: *release, Model: *model, AppVersion: version},
 		socket: *socket, given: *given, bypass: *bypass,
 		watch: *watch, quiet: *quiet, renew: *renew, resample: *resample, settle: *settle,
@@ -267,7 +264,7 @@ func (o served) run(ctx context.Context, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	opts, err := tunnel(o.mode, o.port, o.level)
+	opts, err := tunnel(o.mode, o.level)
 	if err != nil {
 		return err
 	}
@@ -414,9 +411,8 @@ func run(args []string) int {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	file := fs.String("sub", "", "subscription json file")
 	pick := fs.String("server", "auto", "auto, server id or part of its name")
-	mode := fs.String("mode", "tun", "tun or proxy")
+	mode := fs.String("mode", "tun", "tun, or none for an engine without a way in")
 	level := fs.String("log", "warning", "core log level")
-	port := fs.Int("port", 2080, "proxy mode port")
 	guarded := fs.Bool("guard", false, "block traffic outside the tunnel while connected")
 	strict := fs.Bool("strict", false, "keep the block when the first connection fails")
 	marked := fs.Bool("lab-identity", false, "run the engine under the lab group id")
@@ -445,15 +441,12 @@ func run(args []string) int {
 			return 1
 		}
 	}
-	opts, err := tunnel(*mode, *port, *level)
+	opts, err := tunnel(*mode, *level)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
 	tag := xcfg.TagTun
-	if opts.Mode == xcfg.ModeProxy {
-		tag = xcfg.TagProxy
-	}
 	cands, err := candidates(profile, opts)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)

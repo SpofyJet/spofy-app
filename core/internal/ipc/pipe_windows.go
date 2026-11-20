@@ -10,15 +10,24 @@ import (
 const PipeAccess = "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;0x12008b;;;IU)"
 
 func ListenPipe(path string) (net.Listener, error) {
-	access := PipeAccess
-	if system() {
+	access, served := PipeAccess, system()
+	if served {
 		access = "O:SY" + access
 	}
 	sd, err := windows.SecurityDescriptorFromString(access)
 	if err != nil {
 		return nil, err
 	}
-	return (&namedpipe.ListenConfig{SecurityDescriptor: sd, InputBufferSize: 64 << 10, OutputBufferSize: sendBuffer}).Listen(path)
+	l, err := (&namedpipe.ListenConfig{SecurityDescriptor: sd, InputBufferSize: 64 << 10, OutputBufferSize: sendBuffer}).Listen(path)
+	if err != nil || !served {
+		return l, err
+	}
+	programs, err := ours()
+	if err != nil {
+		l.Close()
+		return nil, err
+	}
+	return gate{Listener: l, heard: heard(programs)}, nil
 }
 
 func system() bool {

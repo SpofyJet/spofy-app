@@ -126,6 +126,45 @@ func TestBuildTunGivesTheResolverAddressToTheNameHandlerAndRefusesTheRest(t *tes
 	}
 }
 
+func TestNoServerOpensAWayIn(t *testing.T) {
+	body, err := os.ReadFile("../../testdata/sub/sub.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var servers []json.RawMessage
+	if err := json.Unmarshal(body, &servers); err != nil || len(servers) == 0 {
+		t.Fatal("no servers in the sample", err)
+	}
+	for i, server := range servers {
+		for _, o := range []Options{tunOptions, {Mode: ModeProbe}} {
+			built, err := Build(server, o)
+			if err != nil {
+				t.Fatalf("#%d: %v", i, err)
+			}
+			var out struct {
+				API      json.RawMessage `json:"api"`
+				Metrics  json.RawMessage `json:"metrics"`
+				Inbounds []struct {
+					Protocol string          `json:"protocol"`
+					Listen   json.RawMessage `json:"listen"`
+					Port     json.RawMessage `json:"port"`
+				} `json:"inbounds"`
+			}
+			if err := json.Unmarshal(built, &out); err != nil {
+				t.Fatal(err)
+			}
+			if out.API != nil || out.Metrics != nil {
+				t.Fatalf("#%d mode %d: a control port is kept: %s", i, o.Mode, built)
+			}
+			for _, in := range out.Inbounds {
+				if in.Protocol != "tun" || in.Listen != nil || (in.Port != nil && string(in.Port) != "0") {
+					t.Fatalf("#%d mode %d: a way in that other programs can reach: %s", i, o.Mode, built)
+				}
+			}
+		}
+	}
+}
+
 func TestBuildDropsDangerousSections(t *testing.T) {
 	raw := json.RawMessage(`{
 		"api":{"tag":"api","listen":"0.0.0.0:10813"},
@@ -186,30 +225,6 @@ func TestBuildEnablesStatsAndKeepsPolicy(t *testing.T) {
 		if !out.Policy.System[k] {
 			t.Fatalf("%s is off", k)
 		}
-	}
-}
-
-func TestBuildProxyRequiresAuth(t *testing.T) {
-	raw := json.RawMessage(`{"outbounds":[{"protocol":"freedom"}]}`)
-	if _, err := Build(raw, Options{Mode: ModeProxy, Proxy: Proxy{Port: 2080}}); !errors.Is(err, ErrConfig) {
-		t.Fatalf("err = %v", err)
-	}
-	built, err := Build(raw, Options{Mode: ModeProxy, Proxy: Proxy{Port: 2080, User: "u", Pass: "p"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var out struct {
-		Inbounds []struct {
-			Listen   string `json:"listen"`
-			Port     int    `json:"port"`
-			Settings struct {
-				Auth string `json:"auth"`
-			} `json:"settings"`
-		} `json:"inbounds"`
-	}
-	json.Unmarshal(built, &out)
-	if len(out.Inbounds) != 1 || out.Inbounds[0].Listen != "127.0.0.1" || out.Inbounds[0].Port != 2080 || out.Inbounds[0].Settings.Auth != "password" {
-		t.Fatalf("inbounds = %s", built)
 	}
 }
 

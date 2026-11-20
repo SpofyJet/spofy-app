@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/SpofyJet/spofy-app/core/internal/xcfg"
+	"github.com/SpofyJet/spofy-app/core/internal/xcfg/xcfgtest"
 )
 
 func freePort(t *testing.T) int {
@@ -28,7 +29,7 @@ func freePort(t *testing.T) int {
 
 func proxyConfig(t *testing.T, raw json.RawMessage) []byte {
 	t.Helper()
-	cfg, err := xcfg.Build(raw, xcfg.Options{Mode: xcfg.ModeProxy, Proxy: xcfg.Proxy{Port: freePort(t), User: "u", Pass: "p"}})
+	cfg, err := xcfgtest.Socks(raw, freePort(t), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +69,7 @@ func TestEveryFixtureServerLoads(t *testing.T) {
 func TestStartStopProxyMode(t *testing.T) {
 	raw := fixtureServers(t, "../../testdata/sub/sub.json")[0]
 	port := freePort(t)
-	cfg, err := xcfg.Build(raw, xcfg.Options{Mode: xcfg.ModeProxy, Proxy: xcfg.Proxy{Port: port, User: "u", Pass: "p"}})
+	cfg, err := xcfgtest.Socks(raw, port, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +83,7 @@ func TestStartStopProxyMode(t *testing.T) {
 			t.Fatalf("round %d: inbound is not listening: %v", round, err)
 		}
 		c.Close()
-		if got := inst.Traffic(xcfg.TagProxy); got.Up != 0 || got.Down != 0 {
+		if got := inst.Traffic(xcfg.TagTun); got.Up != 0 || got.Down != 0 {
 			t.Fatalf("round %d: traffic = %+v", round, got)
 		}
 		if err := inst.Close(); err != nil {
@@ -176,7 +177,7 @@ func TestServeProtocol(t *testing.T) {
 	if m := next(); m.Re != 1 || !m.OK {
 		t.Fatalf("start reply = %+v", m)
 	}
-	send(Request{ID: 2, Op: "traffic", Tag: xcfg.TagProxy})
+	send(Request{ID: 2, Op: "traffic", Tag: xcfg.TagTun})
 	if m := next(); m.Re != 2 || !m.OK || m.Traffic == nil {
 		t.Fatalf("traffic reply = %+v", m)
 	}
@@ -209,7 +210,7 @@ func TestServeProtocol(t *testing.T) {
 
 func TestLogsGoToSinkNotStdout(t *testing.T) {
 	raw := fixtureServers(t, "../../testdata/sub/sub.json")[0]
-	cfg, err := xcfg.Build(raw, xcfg.Options{Mode: xcfg.ModeProxy, LogLevel: "info", Proxy: xcfg.Proxy{Port: freePort(t), User: "u", Pass: "p"}})
+	cfg, err := xcfgtest.Socks(raw, freePort(t), "info")
 	if err != nil {
 		t.Fatal(err)
 	}

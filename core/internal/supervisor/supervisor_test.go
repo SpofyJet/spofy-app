@@ -19,6 +19,7 @@ import (
 
 	"github.com/SpofyJet/spofy-app/core/internal/engine"
 	"github.com/SpofyJet/spofy-app/core/internal/xcfg"
+	"github.com/SpofyJet/spofy-app/core/internal/xcfg/xcfgtest"
 )
 
 const modeEnv = "SPOFY_TEST_ENGINE"
@@ -96,7 +97,7 @@ func config(t *testing.T) ([]byte, int) {
 	}
 	port := l.Addr().(*net.TCPAddr).Port
 	l.Close()
-	cfg, err := xcfg.Build(raws[0], xcfg.Options{Mode: xcfg.ModeProxy, Proxy: xcfg.Proxy{Port: port, User: "u", Pass: "p"}})
+	cfg, err := xcfgtest.Socks(raws[0], port, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +168,7 @@ func TestStartTrafficStop(t *testing.T) {
 	if !listening(port) {
 		t.Fatal("inbound is not listening after start")
 	}
-	if _, err := s.Traffic(xcfg.TagProxy); err != nil {
+	if _, err := s.Traffic(xcfg.TagTun); err != nil {
 		t.Fatal(err)
 	}
 	warm, err := s.Start(cfg)
