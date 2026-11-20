@@ -1,5 +1,3 @@
-//go:build !windows
-
 package supervisor
 
 import (
@@ -15,12 +13,10 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"testing"
 	"time"
 
 	"github.com/SpofyJet/spofy-app/core/internal/engine"
-	"github.com/SpofyJet/spofy-app/core/internal/host"
 	"github.com/SpofyJet/spofy-app/core/internal/xcfg"
 )
 
@@ -115,10 +111,6 @@ func listening(port int) bool {
 	return true
 }
 
-func gone(pid int) bool {
-	return errors.Is(syscall.Kill(pid, 0), syscall.ESRCH)
-}
-
 type events struct {
 	mu   sync.Mutex
 	list []Event
@@ -203,7 +195,7 @@ func TestRecoversFromCrash(t *testing.T) {
 	}
 	for round := 0; round < 3; round++ {
 		pid := s.Pid()
-		syscall.Kill(pid, syscall.SIGKILL)
+		kill(pid)
 		ev.wait(t, KindCrashed, 3*time.Second)
 		restored := ev.wait(t, KindRestored, 5*time.Second)
 		t.Logf("round %d: downtime %v", round, restored.Downtime)
@@ -334,7 +326,7 @@ func TestEngineDiesWithParent(t *testing.T) {
 	deadline := time.Now().Add(3 * time.Second)
 	for !gone(pid) {
 		if time.Now().After(deadline) {
-			syscall.Kill(pid, syscall.SIGKILL)
+			kill(pid)
 			t.Fatalf("engine %d outlived its parent", pid)
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -416,7 +408,7 @@ func TestGuardStaysUpWhileEngineRestarts(t *testing.T) {
 		t.Fatal(err)
 	}
 	for round := 0; round < 3; round++ {
-		syscall.Kill(s.Pid(), syscall.SIGKILL)
+		kill(s.Pid())
 		ev.wait(t, KindRestored, 5*time.Second)
 		if up, lowered := g.state(); !up || lowered != 0 {
 			t.Fatalf("round %d: up=%v lowered=%d", round, up, lowered)
@@ -512,102 +504,5 @@ func TestGuardHeldAfterCrashLoopInStrictMode(t *testing.T) {
 	}
 	if up, _ := g.state(); up {
 		t.Fatal("guard is still up after the user stopped")
-	}
-}
-
-func tunnelEngine() {
-	in := host.Stdin()
-	say := func(r engine.Reply) {
-		b, _ := json.Marshal(r)
-		os.Stdout.Write(append(b, '\n'))
-	}
-	say(engine.Reply{Ev: "ready"})
-	sc := bufio.NewScanner(in)
-	for sc.Scan() {
-		var req engine.Request
-		json.Unmarshal(sc.Bytes(), &req)
-		if req.Op != "start" {
-			say(engine.Reply{Re: req.ID, OK: true})
-			continue
-		}
-		box, _ := in.(*host.Inbox)
-		var tun *os.File
-		if req.Tun && box != nil {
-			tun = box.TakeFile("tun")
-		}
-		switch {
-		case tun == nil:
-			say(engine.Reply{Re: req.ID, Code: engine.CodeStart, Error: "no tunnel"})
-		case bytes.Contains(req.Config, []byte("refuse")):
-			say(engine.Reply{Re: req.ID, Code: engine.CodeConfig, Error: "refused"})
-		default:
-			fmt.Fprintf(tun, "%d %s\n", os.Getpid(), req.Config)
-			tun.Close()
-			say(engine.Reply{Re: req.ID, OK: true})
-		}
-	}
-}
-
-func TestTunnelDescriptorGoesWithEveryStart(t *testing.T) {
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer r.Close()
-	defer w.Close()
-	lines := bufio.NewReader(r)
-	got := func() (int, string) {
-		t.Helper()
-		r.SetReadDeadline(time.Now().Add(5 * time.Second))
-		line, err := lines.ReadString('\n')
-		if err != nil {
-			t.Fatalf("the engine wrote nothing to the tunnel: %v", err)
-		}
-		pid, cfg, _ := strings.Cut(strings.TrimSpace(line), " ")
-		n, _ := strconv.Atoi(pid)
-		return n, cfg
-	}
-	tun := w
-	ev := newEvents()
-	s := New(Options{Command: child("tunnel"), Tunnel: func() *os.File { return tun }, OnEvent: ev.on})
-	defer s.Close()
-	if err := s.Warm(); err != nil {
-		t.Fatal(err)
-	}
-	warm := s.Pid()
-	if _, err := s.Start([]byte(`"one"`)); err != nil {
-		t.Fatal(err)
-	}
-	if pid, cfg := got(); pid != warm || cfg != `"one"` {
-		t.Fatalf("first start: pid %d (warm %d), config %s", pid, warm, cfg)
-	}
-	if _, err := s.Start([]byte(`"two"`)); err != nil {
-		t.Fatal(err)
-	}
-	if pid, cfg := got(); pid != warm || cfg != `"two"` {
-		t.Fatalf("switch: pid %d (warm %d), config %s", pid, warm, cfg)
-	}
-	syscall.Kill(warm, syscall.SIGKILL)
-	ev.wait(t, KindRestored, 10*time.Second)
-	if pid, cfg := got(); pid == warm || pid != s.Pid() || cfg != `"two"` {
-		t.Fatalf("after a crash: pid %d (was %d, now %d), config %s", pid, warm, s.Pid(), cfg)
-	}
-	second := s.Pid()
-	var e *engine.Error
-	if _, err := s.Start([]byte(`"refuse"`)); !errors.As(err, &e) || e.Code != engine.CodeConfig {
-		t.Fatalf("refused start: %v", err)
-	}
-	if !gone(second) {
-		t.Fatal("the engine that refused a start with a descriptor is still running")
-	}
-	if _, err := s.Start([]byte(`"three"`)); err != nil {
-		t.Fatal(err)
-	}
-	if pid, cfg := got(); pid == second || cfg != `"three"` {
-		t.Fatalf("after a refusal: pid %d (was %d), config %s", pid, second, cfg)
-	}
-	tun = nil
-	if _, err := s.Start([]byte(`"four"`)); !errors.As(err, &e) || e.Code != CodeGuard {
-		t.Fatalf("start without a tunnel: %v", err)
 	}
 }
