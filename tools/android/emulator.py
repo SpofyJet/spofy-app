@@ -142,12 +142,16 @@ def host_side():
     secure.socket = context.wrap_socket(secure.socket, server_side=True)
     for s in (plain, secure):
         threading.Thread(target=s.serve_forever, daemon=True).start()
-    counted = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    counted = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    counted.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     counted.bind(("0.0.0.0", 8082))
+    counted.listen(64)
 
     def count():
         while True:
-            kicks.append(counted.recvfrom(64)[1])
+            peer, _ = counted.accept()
+            kicks.append(1)
+            peer.close()
     threading.Thread(target=count, daemon=True).start()
     for name, port in SERVERS.items():
         config = {
@@ -386,15 +390,17 @@ def scenario():
         return out
     rounds, outside_ms = probed(), []
     owner = shell("stat -c %%u %s" % DATA).strip()
-    kick = "while [ -e /data/local/tmp/kick ]; do echo x | nc -u -q 0 %s 8082 2>/dev/null; done\n" % GATE
+    kick = "while [ -e /data/local/tmp/kick ]; do timeout 1 nc -w 1 %s 8082 </dev/null >/dev/null 2>&1; done\n" % GATE
     run("adb", "shell", "cat > /data/local/tmp/kick.sh", data=kick.encode())
+    alone = shell("su %s,%s,3003 sh -c 'timeout 2 nc -w 2 %s 8082 </dev/null; echo rc=$?' 2>&1" % (owner, owner, GATE), limit=20).strip()
     sent, began = len(kicks), time.time()
     shell("touch /data/local/tmp/kick; nohup su %s,%s,3003 sh /data/local/tmp/kick.sh >/dev/null 2>&1 &" % (owner, owner))
     time.sleep(1)
     kicked = probed()
     rate = (len(kicks) - sent) / (time.time() - began)
     shell("rm -f /data/local/tmp/kick")
-    print("delay through the tunnel, ms: %s; the same while %d packets a second leave the device past the tunnel: %s" % (rounds, rate, kicked), flush=True)
+    print("delay through the tunnel, ms: %s; the same while %d connections a second leave the device past the tunnel: %s; one such connection: %s"
+          % (rounds, rate, kicked, alone[-60:]), flush=True)
     for _ in range(3):
         ui.call("measure")
         servers = ([e for e in ui.events if e.get("ev") == "servers"] or [{"servers": []}])[-1]["servers"]

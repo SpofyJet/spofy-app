@@ -47,15 +47,16 @@ func (b *bench) open(tune func(*Config)) {
 		b.t.Fatal(err)
 	}
 	cfg := Config{
-		Store:   st,
-		Tunnel:  b.tunnel,
-		Device:  sub.Device{HWID: "hw-1", OS: "Android", OSVersion: "15", Model: "Pixel 8", AppVersion: "0.1.0"},
-		HTTP:    b.panel.Client(),
-		Run:     xcfg.Options{Mode: xcfg.ModeProxy, Proxy: xcfg.Proxy{Port: 2080, User: "u", Pass: "p"}},
-		Now:     b.clock.Now,
-		Version: "0.1.0",
-		Retries: []time.Duration{0},
-		Renew:   -1,
+		Store:    st,
+		Tunnel:   b.tunnel,
+		Device:   sub.Device{HWID: "hw-1", OS: "Android", OSVersion: "15", Model: "Pixel 8", AppVersion: "0.1.0"},
+		HTTP:     b.panel.Client(),
+		Run:      xcfg.Options{Mode: xcfg.ModeProxy, Proxy: xcfg.Proxy{Port: 2080, User: "u", Pass: "p"}},
+		Now:      b.clock.Now,
+		Version:  "0.1.0",
+		Retries:  []time.Duration{0},
+		Renew:    -1,
+		Resample: -1,
 	}
 	if tune != nil {
 		tune(&cfg)
@@ -613,6 +614,117 @@ func TestMeasure(t *testing.T) {
 	}
 }
 
+func TestOldMeasurementIsRenewedBehindARunningTunnelAndTheReserveOrderFollowsIt(t *testing.T) {
+	b := newBench(t, func(c *Config) { c.Bypass, c.Resample, c.Settle = true, time.Hour, ms(1) })
+	b.tunnel.Answer(map[string]time.Duration{"nl": ms(40), "de": ms(80), "us": ms(120), "fl": ms(150), "pl": ms(160)})
+	b.subscribed()
+	if err := b.app.Connect(Auto); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(ms(60))
+	if n := b.tunnel.Measured(); n != 1 {
+		t.Fatalf("a measurement taken a moment ago was repeated: %d", n)
+	}
+	b.app.Disconnect()
+	b.clock.Advance(2 * time.Hour)
+	b.tunnel.Answer(map[string]time.Duration{"nl": ms(45), "de": ms(80), "us": ms(120), "fl": ms(150), "pl": ms(20)})
+	b.seen()
+	if err := b.app.Connect(Auto); err != nil {
+		t.Fatal(err)
+	}
+	b.until("the new delay is saved", func() bool { return find(b.app.Snapshot().Servers, "pl").DelayMs == 20 })
+	if got, w := b.tunnel.Running(), b.tunnel.Workers(); got != "nl" || len(w) != 2 || w[1] != 1 {
+		t.Fatalf("running %q, workers %v", got, w)
+	}
+	same(t, b.seen(), []string{"connecting:nl", "connected:nl", EvServers})
+	if pl := find(b.app.Snapshot().Servers, "pl"); pl.MeasuredAt != b.clock.Now().Unix() {
+		t.Fatalf("server = %+v", pl)
+	}
+	b.tunnel.Kill("nl")
+	if err := b.app.Check(); err != nil {
+		t.Fatal(err)
+	}
+	if got := b.tunnel.Running(); got != "pl" {
+		t.Fatalf("the reserve order did not follow the fresh measurement: running %q", got)
+	}
+	time.Sleep(ms(60))
+	n := b.tunnel.Measured()
+	b.app.Check()
+	time.Sleep(ms(60))
+	if b.tunnel.Measured() != n {
+		t.Fatalf("measured again within the hour: %d, was %d", b.tunnel.Measured(), n)
+	}
+	b.clock.Advance(2 * time.Hour)
+	b.app.Check()
+	b.until("measured again after the hour", func() bool { return b.tunnel.Measured() == n+1 })
+	if w := b.tunnel.Workers(); w[len(w)-1] != 1 {
+		t.Fatalf("workers %v", w)
+	}
+}
+
+func TestBackgroundMeasuringKeepsOutOfTheWay(t *testing.T) {
+	for name, tune := range map[string]func(*Config){
+		"the tunnel cannot be passed by": func(c *Config) { c.Resample, c.Settle = time.Hour, ms(1) },
+		"switched off":                   func(c *Config) { c.Bypass, c.Resample, c.Settle = true, -1, ms(1) },
+	} {
+		b := newBench(t, tune).subscribed()
+		if err := b.app.Connect(Auto); err != nil {
+			t.Fatal(err)
+		}
+		b.app.Disconnect()
+		b.clock.Advance(2 * time.Hour)
+		if err := b.app.Connect(Auto); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(ms(60))
+		if n := b.tunnel.Measured(); n != 1 {
+			t.Fatalf("%s: measured %d times", name, n)
+		}
+	}
+	b := newBench(t, func(c *Config) { c.Bypass, c.Resample, c.Settle = true, time.Hour, ms(1) }).subscribed()
+	if err := b.app.Connect(Auto); err != nil {
+		t.Fatal(err)
+	}
+	b.app.Disconnect()
+	b.clock.Advance(2 * time.Hour)
+	if err := b.app.Connect("nl"); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(ms(60))
+	if n := b.tunnel.Measured(); n != 1 {
+		t.Fatalf("a server chosen by hand: measured %d times", n)
+	}
+	b.app.Disconnect()
+	b.tunnel.Answer(map[string]time.Duration{"de": ms(80), "nl": ms(400), "us": ms(120), "обход1": ms(10)})
+	release := b.tunnel.HoldMeasure()
+	if err := b.app.Connect(Auto); err != nil {
+		t.Fatal(err)
+	}
+	b.until("the background measuring starts", func() bool { return b.tunnel.Measured() == 2 })
+	b.app.Disconnect()
+	release()
+	time.Sleep(ms(60))
+	if nl := find(b.app.Snapshot().Servers, "nl"); nl.DelayMs != 40 {
+		t.Fatalf("a measurement stopped by a disconnect was saved: %+v", nl)
+	}
+	b.clock.Advance(10 * time.Minute)
+	release = b.tunnel.HoldMeasure()
+	if err := b.app.Connect(Auto); err != nil {
+		t.Fatal(err)
+	}
+	b.until("the background measuring starts again", func() bool { return b.tunnel.Measured() == 3 })
+	done := make(chan error, 1)
+	go func() { done <- b.app.Measure(context.Background()) }()
+	b.until("the measuring asked by a person starts", func() bool { return b.tunnel.Measured() == 4 })
+	release()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if nl, w := find(b.app.Snapshot().Servers, "nl"), b.tunnel.Workers(); nl.DelayMs != 400 || len(w) != 4 || w[1] != 1 || w[2] != 1 || w[3] == 1 {
+		t.Fatalf("server %+v, workers %v", nl, w)
+	}
+}
+
 func TestKillSwitchSetting(t *testing.T) {
 	b := newBench(t, nil).subscribed()
 	b.tunnel.Answer(nil)
@@ -819,6 +931,42 @@ func TestNewAppsChoiceIsAppliedToARunningTunnelAndOnlyToIt(t *testing.T) {
 	if asked.Load() != 3 {
 		t.Fatal("a list that is not in force asked for a new tunnel")
 	}
+}
+
+func TestCloseWaitsForWhatRunsInTheBackground(t *testing.T) {
+	entered, leave := make(chan struct{}), make(chan struct{})
+	b := newBench(t, func(c *Config) {
+		c.Retune = func() (bool, error) {
+			close(entered)
+			<-leave
+			return false, nil
+		}
+	}).subscribed()
+	if err := b.app.Connect("nl"); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.app.Set(KeyApps, json.RawMessage(`{"mode":"except","list":["org.a"]}`)); err != nil {
+		t.Fatal(err)
+	}
+	<-entered
+	closed := make(chan struct{})
+	go func() {
+		b.app.Close()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+		t.Fatal("closed while a background task was still running")
+	case <-time.After(ms(80)):
+	}
+	close(leave)
+	select {
+	case <-closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("did not close after the background task ended")
+	}
+	b.app.Check()
+	time.Sleep(ms(30))
 }
 
 func TestUnsubscribe(t *testing.T) {

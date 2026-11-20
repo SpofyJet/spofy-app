@@ -189,8 +189,10 @@ type Tunnel struct {
 	starts   []string
 	stops    int
 	measured int
+	workers  []int
 	traffic  engine.Traffic
 	gate     chan struct{}
+	slow     chan struct{}
 }
 
 func NewTunnel(t testing.TB) *Tunnel {
@@ -262,6 +264,25 @@ func (t *Tunnel) Measured() int {
 	return t.measured
 }
 
+func (t *Tunnel) Workers() []int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return append([]int{}, t.workers...)
+}
+
+func (t *Tunnel) HoldMeasure() (release func()) {
+	slow := make(chan struct{})
+	t.mu.Lock()
+	t.slow = slow
+	t.mu.Unlock()
+	return func() {
+		t.mu.Lock()
+		t.slow = nil
+		t.mu.Unlock()
+		close(slow)
+	}
+}
+
 func (t *Tunnel) Start(cfg []byte) (time.Duration, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -319,10 +340,18 @@ func (t *Tunnel) Probe(ctx context.Context, _, _ string, _ time.Duration) (time.
 	return t.delays[t.running], nil
 }
 
-func (t *Tunnel) Measure(ctx context.Context, targets []supervisor.Target, _ supervisor.MeasureOptions, each func(int, supervisor.Measurement)) {
+func (t *Tunnel) Measure(ctx context.Context, targets []supervisor.Target, o supervisor.MeasureOptions, each func(int, supervisor.Measurement)) {
 	t.mu.Lock()
 	t.measured++
+	t.workers = append(t.workers, o.Parallel)
+	slow := t.slow
 	t.mu.Unlock()
+	if slow != nil {
+		select {
+		case <-slow:
+		case <-ctx.Done():
+		}
+	}
 	for i, target := range targets {
 		if ctx.Err() != nil {
 			return

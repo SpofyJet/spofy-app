@@ -181,6 +181,8 @@ func serve(args []string) int {
 	watch := fs.Duration("watch", time.Second, "how often the traffic counters are read while connected, 0 turns the watch off")
 	quiet := fs.Duration("quiet", 5*time.Second, "check the connection when traffic goes out for this long and nothing comes back")
 	renew := fs.Duration("renew", 15*time.Minute, "the subscription is fetched again no more often than this")
+	resample := fs.Duration("resample", time.Hour, "with -bypass, servers are measured again behind a running tunnel when the saved measurement is older than this")
+	settle := fs.Duration("settle", 10*time.Second, "how long after connecting that measuring may start")
 	fs.Parse(args)
 
 	out := controlChannel()
@@ -250,17 +252,19 @@ func serve(args []string) int {
 	})
 	defer sv.Close()
 	a = app.New(app.Config{
-		Store:   st,
-		Tunnel:  sv,
-		Device:  sub.Device{HWID: *hwid, OS: *system, OSVersion: *release, Model: *model, AppVersion: version},
-		Run:     opts,
-		Version: version,
-		Strict:  *strict,
-		Bypass:  *bypass,
-		Watch:   *watch,
-		Quiet:   *quiet,
-		Renew:   *renew,
-		Retune:  retune,
+		Store:    st,
+		Tunnel:   sv,
+		Device:   sub.Device{HWID: *hwid, OS: *system, OSVersion: *release, Model: *model, AppVersion: version},
+		Run:      opts,
+		Version:  version,
+		Strict:   *strict,
+		Bypass:   *bypass,
+		Watch:    *watch,
+		Quiet:    *quiet,
+		Renew:    *renew,
+		Resample: *resample,
+		Settle:   *settle,
+		Retune:   retune,
 	})
 	checks.Add(1)
 	go func() {

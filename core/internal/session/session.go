@@ -115,6 +115,14 @@ func (s *Session) State() State {
 }
 
 func (s *Session) Measure(ctx context.Context, cands []Candidate) []supervisor.Measurement {
+	return s.measure(ctx, cands, s.opts.Parallel)
+}
+
+func (s *Session) MeasureQuietly(ctx context.Context, cands []Candidate) []supervisor.Measurement {
+	return s.measure(ctx, cands, 1)
+}
+
+func (s *Session) measure(ctx context.Context, cands []Candidate, parallel int) []supervisor.Measurement {
 	targets := make([]supervisor.Target, len(cands))
 	for i, c := range cands {
 		targets[i] = supervisor.Target{Config: c.Probe, Tag: c.Tag}
@@ -124,7 +132,7 @@ func (s *Session) Measure(ctx context.Context, cands []Candidate) []supervisor.M
 		out[i].Code = supervisor.CodeCanceled
 	}
 	var mu sync.Mutex
-	s.opts.Tunnel.Measure(ctx, targets, supervisor.MeasureOptions{URL: s.opts.URL, Timeout: s.opts.Timeout, Parallel: s.opts.Parallel}, func(i int, m supervisor.Measurement) {
+	s.opts.Tunnel.Measure(ctx, targets, supervisor.MeasureOptions{URL: s.opts.URL, Timeout: s.opts.Timeout, Parallel: parallel}, func(i int, m supervisor.Measurement) {
 		mu.Lock()
 		out[i] = m
 		mu.Unlock()
@@ -420,6 +428,33 @@ func (s *Session) Rebase(cands []Candidate) bool {
 	}
 	s.cands, s.order, s.active = cands, order, active
 	return false
+}
+
+func (s *Session) Reorder(cands []Candidate, measured []supervisor.Measurement) bool {
+	if !s.op.TryLock() {
+		return false
+	}
+	defer s.op.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.up || s.pinned || s.active < 0 || len(cands) != len(s.cands) || len(measured) != len(cands) {
+		return false
+	}
+	results := make([]Result, len(cands))
+	for i, m := range measured {
+		if cands[i].ID != s.cands[i].ID {
+			return false
+		}
+		results[i] = Result{Tier: cands[i].Tier, Delay: m.Delay, OK: m.OK()}
+	}
+	order := []int{s.active}
+	for _, i := range Order(results, -1) {
+		if i != s.active {
+			order = append(order, i)
+		}
+	}
+	s.order = order
+	return true
 }
 
 func whole(order []int, n int) []int {

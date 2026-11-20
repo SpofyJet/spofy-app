@@ -74,6 +74,8 @@ type Config struct {
 	Watch    time.Duration
 	Quiet    time.Duration
 	Renew    time.Duration
+	Resample time.Duration
+	Settle   time.Duration
 	Retune   func() (bool, error)
 }
 
@@ -216,6 +218,10 @@ type App struct {
 	conn    Connection
 	hearers map[int]func(Event)
 	next    int
+	hush    context.CancelFunc
+	sampled time.Time
+	closed  bool
+	tasks   sync.WaitGroup
 	renews  bool
 	tried   time.Time
 }
@@ -236,6 +242,12 @@ func New(cfg Config) *App {
 	if cfg.Renew == 0 {
 		cfg.Renew = 15 * time.Minute
 	}
+	if cfg.Resample == 0 {
+		cfg.Resample = time.Hour
+	}
+	if cfg.Settle == 0 {
+		cfg.Settle = 10 * time.Second
+	}
 	a := &App{cfg: cfg, hearers: map[int]func(Event){}}
 	a.ctx, a.cancel = context.WithCancel(context.Background())
 	a.online.Store(true)
@@ -254,9 +266,23 @@ func New(cfg Config) *App {
 		Parallel:  cfg.Parallel,
 	})
 	if cfg.Watch > 0 {
-		go a.watch()
+		a.spawn(a.watch)
 	}
 	return a
+}
+
+func (a *App) spawn(work func()) {
+	a.mu.Lock()
+	if a.closed {
+		a.mu.Unlock()
+		return
+	}
+	a.tasks.Add(1)
+	a.mu.Unlock()
+	go func() {
+		defer a.tasks.Done()
+		work()
+	}()
 }
 
 func (a *App) watch() {
@@ -280,7 +306,7 @@ func (a *App) watch() {
 			continue
 		}
 		if at := a.due.Load(); at != 0 && a.cfg.Now().UnixNano() >= at {
-			go a.freshen(false)
+			a.spawn(func() { a.freshen(false) })
 		}
 		if w.step(a.flow(), a.cfg.Quiet, time.Now()) {
 			a.sess.Suspect(a.ctx)
@@ -463,8 +489,51 @@ func (a *App) Disconnect() error {
 }
 
 func (a *App) Check() error {
-	go a.freshen(false)
+	a.spawn(func() { a.freshen(false) })
+	a.spawn(a.resample)
 	return outcome(a.sess.Check(a.ctx))
+}
+
+func (a *App) resample() {
+	if !a.cfg.Bypass || a.cfg.Resample < 0 || !a.online.Load() || a.sess.State() != session.Connected {
+		return
+	}
+	st := a.cfg.Store.Get()
+	if st.Profile == nil || has(st.Profile, st.Server) {
+		return
+	}
+	var oldest time.Time
+	for _, s := range st.Profile.Servers {
+		if d, ok := st.Delays[s.ID]; ok && (oldest.IsZero() || d.At.Before(oldest)) {
+			oldest = d.At
+		}
+	}
+	if oldest.IsZero() || a.cfg.Now().Sub(oldest) < a.cfg.Resample {
+		return
+	}
+	ctx, cancel := context.WithTimeout(a.ctx, 2*time.Minute)
+	defer cancel()
+	now := a.cfg.Now()
+	a.mu.Lock()
+	busy := a.hush != nil || (!a.sampled.IsZero() && now.Sub(a.sampled) < min(a.cfg.Resample, 5*time.Minute))
+	if !busy {
+		a.hush, a.sampled = cancel, now
+	}
+	a.mu.Unlock()
+	if busy {
+		return
+	}
+	cands := a.candidates(st)
+	measured := a.sess.MeasureQuietly(ctx, cands)
+	stopped := ctx.Err() != nil
+	a.mu.Lock()
+	a.hush = nil
+	a.mu.Unlock()
+	if stopped {
+		return
+	}
+	a.onMeasure(cands, measured)
+	a.sess.Reorder(cands, measured)
 }
 
 func (a *App) SetOnline(online bool) error {
@@ -483,6 +552,12 @@ func (a *App) Measure(ctx context.Context) error {
 	}
 	if !a.cfg.Bypass && a.sess.State() != session.Idle && a.sess.State() != session.Failed {
 		return fail(CodeConnected, "servers cannot be measured while the tunnel is up")
+	}
+	a.mu.Lock()
+	hush := a.hush
+	a.mu.Unlock()
+	if hush != nil {
+		hush()
 	}
 	cands := a.candidates(st)
 	measured := a.sess.Measure(ctx, cands)
@@ -534,11 +609,11 @@ func (a *App) Set(key string, value json.RawMessage) error {
 	}
 	a.emit(Event{Ev: EvSettings, Settings: settings(a.cfg.Store.Get())})
 	if key == KeyApps && a.cfg.Retune != nil && a.sess.State() != session.Idle && !sameApps(applied, a.Apps()) {
-		go func() {
+		a.spawn(func() {
 			if again, err := a.cfg.Retune(); again && err == nil {
 				a.renew()
 			}
-		}()
+		})
 	}
 	return nil
 }
@@ -570,8 +645,12 @@ func (a *App) flow() engine.Traffic {
 }
 
 func (a *App) Close() {
+	a.mu.Lock()
+	a.closed = true
+	a.mu.Unlock()
 	a.cancel()
 	a.sess.Disconnect()
+	a.tasks.Wait()
 }
 
 func (a *App) adopt(address string, p *sub.Profile) error {
@@ -595,7 +674,7 @@ func (a *App) adopt(address string, p *sub.Profile) error {
 	a.emit(Event{Ev: EvSubscription, Subscription: subscription(st)})
 	a.emit(Event{Ev: EvServers, Servers: a.servers(st)})
 	if a.sess.State() != session.Idle && a.sess.Rebase(a.candidates(st)) {
-		go a.renew()
+		a.spawn(a.renew)
 	}
 	return nil
 }
@@ -633,16 +712,24 @@ func (a *App) onState(e session.Event) {
 	a.mu.Lock()
 	conn := Connection{State: e.State, Choice: a.conn.Choice, Server: e.Server, DelayMs: e.Delay.Milliseconds(), Code: e.Code, Error: e.Error}
 	same := conn == a.conn
+	arrived := e.State == session.Connected && a.conn.State != session.Connected
 	a.conn = conn
+	hush := a.hush
 	a.mu.Unlock()
 	if !same {
 		a.emit(Event{Ev: EvConnection, Connection: conn})
 	}
+	if e.State != session.Connected && hush != nil {
+		hush()
+	}
+	if arrived {
+		time.AfterFunc(a.cfg.Settle, func() { a.spawn(a.resample) })
+	}
 	switch {
 	case e.State == session.Connected:
-		go a.freshen(false)
+		a.spawn(func() { a.freshen(false) })
 	case e.State == session.Failed && (e.Code == session.CodeNoServer || e.Code == session.CodeUnreachable):
-		go a.freshen(true)
+		a.spawn(func() { a.freshen(true) })
 	}
 }
 

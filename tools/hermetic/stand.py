@@ -427,7 +427,7 @@ def platform():
     sock = home + "/core.sock"
     drop = "import os,sys; os.setgroups([]); os.setgid(%s); os.setuid(%s); os.execv(sys.argv[1], sys.argv[1:])" % (app, app)
     env = dict(os.environ, SPOFY_STATE_KEY=KEY, SSL_CERT_FILE=WORK + "/cert.pem")
-    core = spawn("client", [sys.executable, "-c", drop, CORE, "serve", "-state", home + "/state", "-listen", sock, "-platform", "-bypass", "-renew", "2s"],
+    core = spawn("client", [sys.executable, "-c", drop, CORE, "serve", "-state", home + "/state", "-listen", sock, "-platform", "-bypass", "-renew", "2s", "-resample", "3s", "-settle", "1s"],
                  stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=open(WORK + "/core.err", "a"), text=True, bufsize=1, env=env)
     need("platform: the core listens on its socket", "listening" in core.stdout.readline())
     service = spawn("client", [sys.executable, HERE + "/platform.py", sock, app, WORK], stderr=open(WORK + "/platform.err", "w"))
@@ -461,6 +461,18 @@ def platform():
     code, body = fetch("http://local.test/ip")
     expect("platform: direct site sees the client address", body == CLIENT, "seen=%s" % body)
     expect("platform: the engine runs without root", len(engines()) == 1, "engines=%d" % len(engines()))
+
+    def stamps():
+        return [s.get("measuredAt", 0) for s in ui.call("hello")["snapshot"]["servers"]]
+    was = stamps()
+    time.sleep(3.2)
+    began = time.time()
+    ui.call("check")
+    fresh = until(lambda: min(stamps()) > max(was), 20, 0.1)
+    code, body = fetch("http://foreign.test/ip")
+    expect("platform: an old measurement is taken again behind the running tunnel: the server and the tunnel stay",
+           bool(fresh) and ui.active()["server"] == first and body == SERVERS.get(first) and len(asked("tun")) == 1 and len(engines()) == 1,
+           "s=%.1f server=%s seen=%s" % (time.time() - began, ui.active()["server"], body))
 
     other = [n for n in SERVERS if n != first][0]
     noise = spawn("client", ["sh", "-c", "while :; do curl -s -m 1 -o /dev/null http://10.77.1.2/ip; done"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
