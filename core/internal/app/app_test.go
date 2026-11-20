@@ -88,6 +88,17 @@ func (b *bench) seen() []string {
 	return out
 }
 
+func (b *bench) heard(ev string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, e := range b.events {
+		if e.Ev == ev {
+			return true
+		}
+	}
+	return false
+}
+
 func (b *bench) subscribed() *bench {
 	b.t.Helper()
 	if err := b.app.Subscribe(context.Background(), apptest.Address); err != nil {
@@ -647,7 +658,7 @@ func TestOldMeasurementIsRenewedBehindARunningTunnelAndTheReserveOrderFollowsIt(
 	if err := b.app.Connect(Auto); err != nil {
 		t.Fatal(err)
 	}
-	b.until("the new delay is saved", func() bool { return find(b.app.Snapshot().Servers, "pl").DelayMs == 20 })
+	b.until("the new delay is saved and announced", func() bool { return find(b.app.Snapshot().Servers, "pl").DelayMs == 20 && b.heard(EvServers) })
 	if got, w := b.tunnel.Running(), b.tunnel.Workers(); got != "nl" || len(w) != 2 || w[1] != 1 {
 		t.Fatalf("running %q, workers %v", got, w)
 	}
