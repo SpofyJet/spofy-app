@@ -81,6 +81,9 @@ jobs:
           spofy-app/tools/android-core.sh
           cd spofy-app/core
           CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -checklinkname=0" -o "$RUNNER_TEMP/spofy-core" ./cmd/spofy-core
+          mkdir -p "$RUNNER_TEMP/host"
+          mv "$RUNNER_TEMP/spofy-core" "$RUNNER_TEMP/host/"
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o "$RUNNER_TEMP/host/bind" ./internal/stand/bind
       - name: apk
         working-directory: spofy-app/app
         run: |
@@ -97,7 +100,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: host
-          path: ${{ runner.temp }}/spofy-core
+          path: ${{ runner.temp }}/host
           retention-days: 1
       - name: lint
         working-directory: spofy-app/app/android
@@ -123,7 +126,7 @@ jobs:
         with:
           name: host
           path: ${{ runner.temp }}/host
-      - run: chmod +x "$RUNNER_TEMP/host/spofy-core"
+      - run: chmod +x "$RUNNER_TEMP/host/spofy-core" "$RUNNER_TEMP/host/bind"
       - name: kvm
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules

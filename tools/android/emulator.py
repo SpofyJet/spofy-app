@@ -554,6 +554,13 @@ def scenario():
     mine, rest = as_shell(), fetch(HOST, 8081, "/ip")
     expect("an app taken out of the VPN goes past the tunnel and the rest stay inside", ok and "site sees" in mine and not mine.endswith(INSIDE) and rest.endswith("site sees " + INSIDE),
            "s=%.1f app=%s rest=%s device=%s" % (took, mine[-24:], rest[-24:], tunnel()))
+    run("adb", "push", os.path.join(os.path.dirname(CORE), "bind"), "/data/local/tmp/bind")
+    shell("chmod 755 /data/local/tmp/bind")
+    bound = shell("su 2000,2000,3003 /data/local/tmp/bind %s %s 8081 /ip" % (tunnel(), HOST), limit=30)
+    if "operation not permitted" in bound:
+        print("     this kernel does not let an app bind to an interface: the way past the app list through the tunnel does not exist here", flush=True)
+    else:
+        expect("an app taken out of the VPN cannot reach anything through the tunnel by binding to it", "site sees" not in bound, bound.strip()[-80:])
     ok, took = chosen({"mode": "only", "list": ["com.android.shell"]})
     mine, rest = as_shell(), fetch(HOST, 8081, "/ip")
     expect("only the chosen app is in the VPN: it goes through the tunnel and the rest go past it", ok and mine.endswith("site sees " + INSIDE) and "site sees" in rest and not rest.endswith(INSIDE),
