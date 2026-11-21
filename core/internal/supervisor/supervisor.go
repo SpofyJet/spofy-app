@@ -63,11 +63,17 @@ type Event struct {
 	Error    string        `json:"error,omitempty"`
 }
 
+type Owner interface {
+	Knows() bool
+	Inside(network, source, destination string) bool
+}
+
 type Options struct {
 	Command     func() *exec.Cmd
 	Guard       Guard
 	HoldGuard   bool
 	Tunnel      func() *os.File
+	Owner       Owner
 	OnEvent     func(Event)
 	ReadyWait   time.Duration
 	StartWait   time.Duration
@@ -295,7 +301,7 @@ func (s *Supervisor) bringUp(cfg []byte) (time.Duration, error) {
 		return 0, err
 	}
 	p.armed.Store(false)
-	req := engine.Request{Op: "start", Config: cfg}
+	req := engine.Request{Op: "start", Config: cfg, Owners: s.opts.Owner != nil && s.opts.Owner.Knows()}
 	var tun *os.File
 	if s.opts.Tunnel != nil {
 		if tun = s.opts.Tunnel(); tun == nil {
@@ -402,6 +408,7 @@ type process struct {
 	done   chan struct{}
 	armed  atomic.Bool
 	killed atomic.Bool
+	owner  Owner
 
 	mu      sync.Mutex
 	next    uint64
@@ -426,6 +433,7 @@ func (s *Supervisor) spawn() (*process, error) {
 		stderr:  &tail{max: 32 << 10},
 		ready:   make(chan struct{}),
 		done:    make(chan struct{}),
+		owner:   s.opts.Owner,
 		pending: map[uint64]chan engine.Reply{},
 	}
 	cmd.Stderr = p.stderr
@@ -472,6 +480,8 @@ func (p *process) read(r io.Reader, emit func(Event)) {
 			once.Do(func() { close(p.ready) })
 		case m.Ev == "log":
 			emit(Event{Kind: KindLog, Line: m.Line})
+		case m.Ev == "owner" && m.Ask != 0 && m.Flow != nil:
+			go p.decide(m.Ask, *m.Flow)
 		case m.Re != 0:
 			p.mu.Lock()
 			ch := p.pending[m.Re]
@@ -482,6 +492,17 @@ func (p *process) read(r io.Reader, emit func(Event)) {
 			}
 		}
 	}
+}
+
+func (p *process) decide(n uint64, f engine.Flow) {
+	in := p.owner != nil && p.owner.Inside(f.Network, f.Source, f.Destination)
+	line, err := json.Marshal(engine.Request{Op: "owner", Ask: n, In: in})
+	if err != nil {
+		return
+	}
+	p.mu.Lock()
+	p.in.Write(append(line, '\n'))
+	p.mu.Unlock()
 }
 
 func (p *process) call(req engine.Request, wait time.Duration) (engine.Reply, error) {

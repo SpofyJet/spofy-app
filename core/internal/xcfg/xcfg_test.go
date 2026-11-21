@@ -80,6 +80,9 @@ func TestBuildTunGivesTheResolverAddressToTheNameHandlerAndRefusesTheRest(t *tes
 		Outbounds []struct {
 			Tag      string `json:"tag"`
 			Protocol string `json:"protocol"`
+			Settings struct {
+				Redirect string `json:"redirect"`
+			} `json:"settings"`
 		} `json:"outbounds"`
 		Routing struct {
 			Strategy string `json:"domainStrategy"`
@@ -105,7 +108,8 @@ func TestBuildTunGivesTheResolverAddressToTheNameHandlerAndRefusesTheRest(t *tes
 		return s
 	}
 	bare := build(`{"outbounds":[{"tag":"proxy","protocol":"vless"}]}`)
-	if n := len(bare.Outbounds); n != 3 || bare.Outbounds[0].Tag != "proxy" || bare.Outbounds[1].Protocol != "dns" || bare.Outbounds[2].Protocol != "blackhole" {
+	if n := len(bare.Outbounds); n != 5 || bare.Outbounds[0].Tag != "proxy" || bare.Outbounds[1].Protocol != "dns" || bare.Outbounds[2].Protocol != "blackhole" ||
+		bare.Outbounds[3].Tag != TagOutside || bare.Outbounds[3].Protocol != "freedom" || bare.Outbounds[4].Tag != TagOutsideDNS || bare.Outbounds[4].Settings.Redirect != outsideDNS {
 		t.Fatalf("outbounds = %+v", bare.Outbounds)
 	}
 	if r := bare.Routing.Rules; len(r) != 2 || r[0].Port != "53" || r[0].Out != bare.Outbounds[1].Tag || r[0].IP[0] != "172.19.0.2" || r[0].In[0] != TagTun ||
@@ -114,7 +118,7 @@ func TestBuildTunGivesTheResolverAddressToTheNameHandlerAndRefusesTheRest(t *tes
 	}
 	full := build(`{"outbounds":[{"tag":"proxy","protocol":"vless"},{"tag":"names","protocol":"dns"},{"tag":"none","protocol":"blackhole"}],
 		"routing":{"domainStrategy":"IPIfNonMatch","rules":[{"type":"field","port":"53","outboundTag":"names"}]}}`)
-	if n := len(full.Outbounds); n != 3 {
+	if n := len(full.Outbounds); n != 5 {
 		t.Fatalf("outbounds = %+v", full.Outbounds)
 	}
 	if r := full.Routing.Rules; len(r) != 3 || r[0].Out != "names" || r[1].Out != "none" || r[2].Out != "names" || r[2].IP != nil || full.Routing.Strategy != "IPIfNonMatch" {

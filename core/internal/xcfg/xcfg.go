@@ -13,7 +13,12 @@ const (
 	ModeProbe
 )
 
-const TagTun = "tun"
+const (
+	TagTun        = "tun"
+	TagOutside    = "spofy-outside"
+	TagOutsideDNS = "spofy-outside-dns"
+	outsideDNS    = "8.8.8.8:53"
+)
 
 type Tun struct {
 	Name     string
@@ -168,6 +173,9 @@ func resolver(outbounds []json.RawMessage, raw json.RawMessage, addrs []string) 
 		return fallback
 	}
 	dns, drop := find("dns", "spofy-dns"), find("blackhole", "spofy-drop")
+	outbounds = append(outbounds,
+		mustJSON(map[string]string{"tag": TagOutside, "protocol": "freedom"}),
+		mustJSON(map[string]any{"tag": TagOutsideDNS, "protocol": "freedom", "settings": map[string]string{"redirect": outsideDNS}}))
 	routing := map[string]json.RawMessage{}
 	if len(raw) > 0 {
 		if err := json.Unmarshal(raw, &routing); err != nil {
