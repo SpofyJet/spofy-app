@@ -2,14 +2,17 @@ package app
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -37,10 +40,70 @@ const (
 )
 
 const (
-	KeyKillSwitch  = "killSwitch"
-	KeyAutoConnect = "autoConnect"
-	KeyApps        = "apps"
+	KeyKillSwitch   = "killSwitch"
+	KeyAutoConnect  = "autoConnect"
+	KeyApps         = "apps"
+	KeyProbeURL     = "probeUrl"
+	KeyProbeTimeout = "probeTimeout"
+	KeyFragment     = "fragment"
+	KeyDNS          = "dns"
+	KeyIPv6         = "ipv6"
+	KeyLAN          = "lan"
+	KeyLogLevel     = "logLevel"
 )
+
+var Resolvers = map[string][]string{
+	"cloudflare": {"1.1.1.1", "1.0.0.1"},
+	"google":     {"8.8.8.8", "8.8.4.4"},
+	"quad9":      {"9.9.9.9", "149.112.112.112"},
+	"adguard":    {"94.140.14.14", "94.140.15.15"},
+}
+
+var checks = map[string]func(json.RawMessage) bool{
+	KeyKillSwitch:   flag,
+	KeyAutoConnect:  flag,
+	KeyFragment:     flag,
+	KeyIPv6:         flag,
+	KeyLAN:          flag,
+	KeyLogLevel:     validLevel,
+	KeyProbeTimeout: validSeconds,
+	KeyProbeURL:     validURL,
+	KeyDNS:          validDNS,
+}
+
+func validLevel(v json.RawMessage) bool {
+	t, ok := text(v)
+	return ok && (t == "normal" || t == "detailed")
+}
+
+func validSeconds(v json.RawMessage) bool {
+	var n int
+	return json.Unmarshal(v, &n) == nil && n >= 2 && n <= 10 && string(v) == strconv.Itoa(n)
+}
+
+func validURL(v json.RawMessage) bool {
+	t, ok := text(v)
+	u, err := url.Parse(t)
+	return ok && len(t) <= 256 && err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != "" && u.User == nil
+}
+
+func validDNS(v json.RawMessage) bool {
+	t, ok := text(v)
+	if _, preset := Resolvers[t]; !ok || preset {
+		return ok
+	}
+	ip, err := netip.ParseAddr(t)
+	return err == nil && ip.Zone() == "" && ip.IsGlobalUnicast() && !ip.IsPrivate()
+}
+
+func flag(v json.RawMessage) bool {
+	return string(v) == "true" || string(v) == "false"
+}
+
+func text(v json.RawMessage) (string, bool) {
+	var t string
+	return t, json.Unmarshal(v, &t) == nil && t != ""
+}
 
 const (
 	CodeNoSubscription engine.Code = "no_subscription"
@@ -331,6 +394,7 @@ func New(cfg Config) *App {
 	a.online.Store(true)
 	a.plan(cfg.Store.Get(), false)
 	a.conn = Connection{State: session.Idle, Choice: a.choice(cfg.Store.Get())}
+	address, limit := probe(cfg.Store.Get())
 	a.sess = session.New(session.Options{
 		Tunnel:    cfg.Tunnel,
 		OnEvent:   a.onState,
@@ -338,8 +402,8 @@ func New(cfg Config) *App {
 		Online:    a.online.Load,
 		Strict:    cfg.Strict || on(cfg.Store.Get(), KeyKillSwitch),
 		Bypass:    cfg.Bypass,
-		URL:       cfg.URL,
-		Timeout:   cfg.Timeout,
+		URL:       cmp.Or(address, cfg.URL),
+		Timeout:   cmp.Or(limit, cfg.Timeout),
 		Retries:   cfg.Retries,
 		Parallel:  cfg.Parallel,
 	})
@@ -598,7 +662,7 @@ func (a *App) Activate(id string) error {
 	a.emit(Event{Ev: EvServers, Servers: a.servers(st)})
 	a.listed(before)
 	a.follow(st)
-	a.spawn(func() { a.freshen(true) })
+	a.spawn(func() { a.freshen(false) })
 	return nil
 }
 
@@ -798,7 +862,7 @@ func (a *App) Set(key string, value json.RawMessage) error {
 	if key == "" || len(key) > 64 || len(value) > limit || (len(value) > 0 && !json.Valid(value)) {
 		return fail(CodeValue, "bad setting")
 	}
-	if v := string(value); (key == KeyKillSwitch || key == KeyAutoConnect) && v != "" && v != "null" && v != "true" && v != "false" {
+	if check, ok := checks[key]; ok && len(value) > 0 && string(value) != "null" && !check(value) {
 		return fail(CodeValue, "bad setting")
 	}
 	var applied *Apps
@@ -833,7 +897,16 @@ func (a *App) Set(key string, value json.RawMessage) error {
 			a.cfg.Keep(strict)
 		}
 	}
-	a.emit(Event{Ev: EvSettings, Settings: settings(a.cfg.Store.Get())})
+	now := a.cfg.Store.Get()
+	a.emit(Event{Ev: EvSettings, Settings: settings(now)})
+	switch key {
+	case KeyProbeURL, KeyProbeTimeout:
+		a.sess.SetProbe(probe(now))
+	case KeyFragment, KeyDNS, KeyIPv6, KeyLAN, KeyLogLevel:
+		if now.Profile != nil {
+			a.follow(now)
+		}
+	}
 	if key == KeyApps && a.cfg.Retune != nil && a.sess.State() != session.Idle && !sameApps(applied, a.Apps()) {
 		a.spawn(func() {
 			if again, err := a.cfg.Retune(); again && err == nil {
@@ -864,6 +937,29 @@ func (a *App) Resume() error {
 
 func on(st store.State, key string) bool {
 	return string(st.Settings[key]) == "true"
+}
+
+func probe(st store.State) (string, time.Duration) {
+	address, _ := text(st.Settings[KeyProbeURL])
+	var seconds int
+	json.Unmarshal(st.Settings[KeyProbeTimeout], &seconds)
+	return address, time.Duration(seconds) * time.Second
+}
+
+func (a *App) options(st store.State) (run, probe xcfg.Options) {
+	t := xcfg.Tweaks{Fragment: on(st, KeyFragment), NoIPv6: string(st.Settings[KeyIPv6]) == "false", LAN: on(st, KeyLAN)}
+	if name, ok := text(st.Settings[KeyDNS]); ok {
+		t.DNS = Resolvers[name]
+		if t.DNS == nil {
+			t.DNS = []string{name}
+		}
+	}
+	run = a.cfg.Run
+	run.Tweaks = t
+	if level, _ := text(st.Settings[KeyLogLevel]); level == "detailed" {
+		run.LogLevel = "info"
+	}
+	return run, xcfg.Options{Mode: xcfg.ModeProbe, LogLevel: "none", Tweaks: xcfg.Tweaks{Fragment: t.Fragment}}
 }
 
 func (a *App) Report() Report {
@@ -1045,12 +1141,13 @@ func (a *App) servers(st store.State) []Server {
 func (a *App) candidates(st store.State) []session.Candidate {
 	var out []session.Candidate
 	now := a.cfg.Now()
+	running, probing := a.options(st)
 	for _, s := range st.Profile.Servers {
-		run, err := xcfg.Build(s.Config, a.cfg.Run)
+		run, err := xcfg.Build(s.Config, running)
 		if err != nil {
 			continue
 		}
-		probe, err := xcfg.Build(s.Config, xcfg.Options{Mode: xcfg.ModeProbe, LogLevel: "none"})
+		probe, err := xcfg.Build(s.Config, probing)
 		if err != nil {
 			continue
 		}

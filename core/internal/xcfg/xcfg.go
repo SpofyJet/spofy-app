@@ -30,6 +30,7 @@ type Options struct {
 	Mode     Mode
 	Tun      Tun
 	LogLevel string
+	Tweaks   Tweaks
 }
 
 var ErrConfig = errors.New("xcfg: invalid server config")
@@ -55,6 +56,9 @@ func Build(server json.RawMessage, o Options) ([]byte, error) {
 	}
 	if o.Mode == ModeProbe {
 		out["inbounds"] = json.RawMessage(`[]`)
+		if err := tweak(out, o); err != nil {
+			return nil, err
+		}
 	} else {
 		sniffing, oldTags := inspect(in["inbounds"])
 		inbound, tag, err := inboundFor(o, sniffing)
@@ -68,6 +72,12 @@ func Build(server json.RawMessage, o Options) ([]byte, error) {
 				return nil, err
 			}
 			out["routing"] = fixed
+		}
+		if err := tweak(out, o); err != nil {
+			return nil, err
+		}
+		if json.Unmarshal(out["outbounds"], &outbounds) != nil {
+			return nil, ErrConfig
 		}
 		if o.Mode == ModeTun && len(o.Tun.Resolver) > 0 {
 			outs, routing, err := resolver(outbounds, out["routing"], o.Tun.Resolver)

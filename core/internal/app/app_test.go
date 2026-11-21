@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -1384,4 +1385,55 @@ func waitFor(ok func() bool) bool {
 		time.Sleep(10 * time.Millisecond)
 	}
 	return ok()
+}
+
+func TestTunnelAndProbeSettings(t *testing.T) {
+	b := newBench(t, func(c *Config) {
+		c.Run = xcfg.Options{Mode: xcfg.ModeTun, Tun: xcfg.Tun{Name: "spofy0", MTU: 1500, Gateway: []string{"172.19.0.1/30"}, Routes: []string{"0.0.0.0/0"}, Resolver: []string{"172.19.0.2"}}}
+	}).subscribed()
+	for key, bad := range map[string]string{
+		KeyFragment:     `"yes"`,
+		KeyProbeTimeout: `1`,
+		KeyProbeURL:     `"ftp://example.test/"`,
+		KeyDNS:          `"192.168.1.1"`,
+		KeyLogLevel:     `"loud"`,
+		KeyLAN:          `1`,
+	} {
+		if err := b.app.Set(key, json.RawMessage(bad)); code(err) != CodeValue {
+			t.Fatalf("%s = %s: %v", key, bad, err)
+		}
+	}
+	for key, good := range map[string]string{
+		KeyProbeTimeout: `3`,
+		KeyProbeURL:     `"https://probe.example.test/204"`,
+		KeyDNS:          `"quad9"`,
+		KeyIPv6:         `false`,
+	} {
+		if err := b.app.Set(key, json.RawMessage(good)); err != nil {
+			t.Fatalf("%s = %s: %v", key, good, err)
+		}
+	}
+	if err := b.app.Set(KeyDNS, json.RawMessage(`"2606:4700:4700::1111"`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.app.Connect("de"); err != nil {
+		t.Fatal(err)
+	}
+	if got := b.tunnel.LastURL(); got != "https://probe.example.test/204" {
+		t.Fatalf("probe went to %q", got)
+	}
+	before := len(b.tunnel.Starts())
+	if err := b.app.Set(KeyFragment, json.RawMessage(`true`)); err != nil {
+		t.Fatal(err)
+	}
+	if !waitFor(func() bool { return len(b.tunnel.Starts()) > before && b.tunnel.Running() == "de" }) {
+		t.Fatalf("turning the fragment on did not restart the tunnel on the chosen server: starts %d → %d, running %q", before, len(b.tunnel.Starts()), b.tunnel.Running())
+	}
+	if cfg := b.tunnel.Config(); !bytes.Contains(cfg, []byte(xcfg.TagFragment)) || !bytes.Contains(cfg, []byte("2606:4700:4700::1111")) {
+		t.Fatal("the running config has no fragment or chosen DNS")
+	}
+	b.open(nil)
+	if s := b.app.Snapshot().Settings; string(s[KeyFragment]) != "true" || string(s[KeyProbeTimeout]) != "3" {
+		t.Fatalf("settings after restart: %s", s)
+	}
 }

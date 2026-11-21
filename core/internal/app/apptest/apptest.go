@@ -212,6 +212,20 @@ type Tunnel struct {
 	traffic  engine.Traffic
 	gate     chan struct{}
 	slow     chan struct{}
+	config   []byte
+	url      string
+}
+
+func (t *Tunnel) Config() []byte {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.config
+}
+
+func (t *Tunnel) LastURL() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.url
 }
 
 func NewTunnel(t testing.TB) *Tunnel {
@@ -234,10 +248,13 @@ func NewTunnel(t testing.TB) *Tunnel {
 
 func key(cfg []byte) string {
 	var c struct {
-		Outbounds []any `json:"outbounds"`
+		Outbounds []map[string]any `json:"outbounds"`
 	}
 	if json.Unmarshal(cfg, &c) != nil || len(c.Outbounds) == 0 {
 		return ""
+	}
+	if stream, ok := c.Outbounds[0]["streamSettings"].(map[string]any); ok {
+		delete(stream, "sockopt")
 	}
 	b, _ := json.Marshal(c.Outbounds[0])
 	sum := sha256.Sum256(b)
@@ -316,7 +333,7 @@ func (t *Tunnel) Start(cfg []byte) (time.Duration, error) {
 		t.running = ""
 		return 0, &engine.Error{Code: engine.CodeConfig, Err: errors.New("unknown config")}
 	}
-	t.running = id
+	t.running, t.config = id, cfg
 	t.starts = append(t.starts, id)
 	return time.Millisecond, nil
 }
@@ -342,8 +359,9 @@ func (t *Tunnel) Hold() (release func()) {
 	}
 }
 
-func (t *Tunnel) Probe(ctx context.Context, _, _ string, _ time.Duration) (time.Duration, error) {
+func (t *Tunnel) Probe(ctx context.Context, _, url string, _ time.Duration) (time.Duration, error) {
 	t.mu.Lock()
+	t.url = url
 	gate := t.gate
 	t.mu.Unlock()
 	if gate != nil {

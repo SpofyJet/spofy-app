@@ -52,12 +52,18 @@ func fixtureServers(t *testing.T, path string) []json.RawMessage {
 func TestEveryFixtureServerLoads(t *testing.T) {
 	for _, path := range []string{"../../testdata/sub/sub.json", "../../../testdata/private/sub.json"} {
 		for i, raw := range fixtureServers(t, path) {
-			tun, err := xcfg.Build(raw, xcfg.Options{Mode: xcfg.ModeTun, Tun: xcfg.Tun{Name: "spofy0", MTU: 1500, Gateway: []string{"172.19.0.1/30"}, Routes: []string{"0.0.0.0/1", "128.0.0.0/1"}}})
-			if err != nil {
-				t.Fatalf("%s #%d: %v", path, i, err)
-			}
-			if err := Validate(tun); err != nil {
-				t.Fatalf("%s #%d tun: %v", path, i, err)
+			plain := xcfg.Options{Mode: xcfg.ModeTun, Tun: xcfg.Tun{Name: "spofy0", MTU: 1500, Gateway: []string{"172.19.0.1/30"}, Routes: []string{"0.0.0.0/1", "128.0.0.0/1"}}}
+			tweaked := plain
+			tweaked.Tun.Resolver = []string{"172.19.0.2"}
+			tweaked.Tweaks = xcfg.Tweaks{Fragment: true, DNS: []string{"1.1.1.1", "2606:4700:4700::1111"}, NoIPv6: true, LAN: true}
+			for _, o := range []xcfg.Options{plain, tweaked, {Mode: xcfg.ModeProbe, Tweaks: xcfg.Tweaks{Fragment: true}}} {
+				tun, err := xcfg.Build(raw, o)
+				if err != nil {
+					t.Fatalf("%s #%d: %v", path, i, err)
+				}
+				if err := Validate(tun); err != nil {
+					t.Fatalf("%s #%d %+v: %v", path, i, o.Tweaks, err)
+				}
 			}
 			if err := Validate(proxyConfig(t, raw)); err != nil {
 				t.Fatalf("%s #%d proxy: %v", path, i, err)

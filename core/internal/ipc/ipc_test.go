@@ -162,6 +162,8 @@ func TestSessionTranscript(t *testing.T) {
 	step("report", "", "")
 	step("refresh", "", "")
 	step("set", `"key":"apps","value":null`, "")
+	step("set", `"key":"probeTimeout","value":3`, "")
+	step("set", `"key":"dns","value":"10.0.0.1"`, "bad_value")
 	first := r.app.Snapshot().List[0].ID
 	step("subscribe", `"url":"https://sub.example.test/sub/SECOND0123456789"`, "")
 	step("activate", fmt.Sprintf(`"subscription":%q`, first), "")

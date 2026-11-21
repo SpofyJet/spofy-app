@@ -244,3 +244,84 @@ func TestBuildIsDeterministic(t *testing.T) {
 		t.Fatal("output differs between runs")
 	}
 }
+
+func TestTweaksChangeOnlyWhatTheyName(t *testing.T) {
+	server := json.RawMessage(`{"outbounds":[{"tag":"proxy","protocol":"vless","streamSettings":{"network":"tcp","security":"reality"}},{"tag":"h2","protocol":"vless","streamSettings":{"network":"hysteria","security":"tls"}},{"tag":"direct","protocol":"freedom"}],
+		"dns":{"servers":["8.8.8.8",{"address":"77.88.8.8","domains":["domain:example.ru"]}],"hosts":{"a.example":"192.0.2.1"}},
+		"routing":{"rules":[{"type":"field","ip":["geoip:ru"],"outboundTag":"direct"}]}}`)
+	tun := Options{Mode: ModeTun, Tun: Tun{Name: "spofy0", Resolver: []string{"172.19.0.2"}}}
+	plain, err := Build(server, tun)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type shape struct {
+		DNS struct {
+			Servers  []any             `json:"servers"`
+			Hosts    map[string]string `json:"hosts"`
+			Strategy string            `json:"queryStrategy"`
+		} `json:"dns"`
+		Outbounds []struct {
+			Tag      string `json:"tag"`
+			Protocol string `json:"protocol"`
+			Settings struct {
+				Fragment *struct {
+					Packets string `json:"packets"`
+				} `json:"fragment"`
+			} `json:"settings"`
+			Stream struct {
+				Sockopt struct {
+					Dialer string `json:"dialerProxy"`
+				} `json:"sockopt"`
+			} `json:"streamSettings"`
+		} `json:"outbounds"`
+		Routing struct {
+			Rules []struct {
+				In  []string `json:"inboundTag"`
+				IP  []string `json:"ip"`
+				Out string   `json:"outboundTag"`
+			} `json:"rules"`
+		} `json:"routing"`
+	}
+	read := func(o Options) shape {
+		t.Helper()
+		b, err := Build(server, o)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var s shape
+		if err := json.Unmarshal(b, &s); err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	if again, _ := Build(server, Options{Mode: ModeTun, Tun: tun.Tun, Tweaks: Tweaks{}}); !bytes.Equal(again, plain) {
+		t.Fatal("empty tweaks changed the config")
+	}
+	o := tun
+	o.Tweaks = Tweaks{Fragment: true}
+	f := read(o)
+	if f.Outbounds[0].Stream.Sockopt.Dialer != TagFragment || f.Outbounds[1].Stream.Sockopt.Dialer != "" || f.Outbounds[len(f.Outbounds)-3].Tag != TagFragment ||
+		f.Outbounds[len(f.Outbounds)-3].Settings.Fragment == nil || f.Outbounds[len(f.Outbounds)-3].Settings.Fragment.Packets != "tlshello" {
+		t.Fatalf("fragment: %+v", f.Outbounds)
+	}
+	probe := read(Options{Mode: ModeProbe, Tweaks: Tweaks{Fragment: true, DNS: []string{"1.1.1.1"}, NoIPv6: true, LAN: true}})
+	if probe.Outbounds[0].Stream.Sockopt.Dialer != TagFragment || len(probe.Routing.Rules) != 1 || len(probe.DNS.Servers) != 2 {
+		t.Fatalf("a probe takes the fragment and nothing of the tunnel: %+v", probe)
+	}
+	o.Tweaks = Tweaks{DNS: []string{"1.1.1.1", "1.0.0.1"}, NoIPv6: true, LAN: true}
+	d := read(o)
+	if len(d.DNS.Servers) != 2 || d.DNS.Servers[0] != "1.1.1.1" || d.DNS.Hosts["a.example"] != "192.0.2.1" || d.DNS.Strategy != "UseIPv4" {
+		t.Fatalf("dns: %+v", d.DNS)
+	}
+	r := d.Routing.Rules
+	if len(r) != 6 || r[2].Out != "proxy" || r[2].IP[0] != "1.1.1.1" || r[3].IP[0] != "::/0" || r[3].Out != TagBlock || r[4].Out != TagLAN || r[4].In[0] != TagTun || r[5].IP[0] != "geoip:ru" {
+		t.Fatalf("rules: %+v", r)
+	}
+	lan := false
+	for _, o := range d.Outbounds {
+		lan = lan || (o.Tag == TagLAN && o.Protocol == "freedom")
+	}
+	if !lan {
+		t.Fatalf("no way out for the local network: %+v", d.Outbounds)
+	}
+}
