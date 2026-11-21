@@ -1,4 +1,5 @@
 import ctypes
+import faulthandler
 import glob
 import hashlib
 import http.server
@@ -404,7 +405,28 @@ def scenario():
     subprocess.run(["certutil", "-delstore", "Root", "Spofy Stand CA"], capture_output=True)
 
 
+def rescue(after):
+    time.sleep(after)
+    stuck = os.path.join(OUT, "stuck.txt")
+    with open(stuck, "w") as f:
+        faulthandler.dump_traceback(file=f, all_threads=True)
+    print("STUCK after %d s, the threads:\n%s" % (after, open(stuck).read()), flush=True)
+    print("     traces before the rescue: %s" % traces(), flush=True)
+    if os.path.exists(os.path.join(HOME, "uninstall.exe")):
+        try:
+            subprocess.run([os.path.join(HOME, "uninstall.exe"), "-uninstall", "-quiet", "-log", os.path.join(OUT, "rescue-uninstall.log")], timeout=180)
+        except subprocess.TimeoutExpired:
+            print("     the rescue uninstall did not finish in 180 s", flush=True)
+    subprocess.run(["reg", "add", r"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings", "/v", "ProxyEnable", "/t", "REG_DWORD", "/d", "0", "/f"], capture_output=True)
+    print("     traces after the rescue: %s" % traces(), flush=True)
+    for name in sorted(os.listdir(OUT)):
+        if name.endswith(".log"):
+            print("--- %s\n%s" % (name, open(os.path.join(OUT, name), encoding="utf-8", errors="replace").read()[-2500:]), flush=True)
+    os._exit(3)
+
+
 began = time.time()
+threading.Thread(target=rescue, args=(480,), daemon=True).start()
 try:
     scenario()
 finally:
