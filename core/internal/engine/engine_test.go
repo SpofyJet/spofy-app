@@ -8,7 +8,10 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
+	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -56,7 +59,8 @@ func TestEveryFixtureServerLoads(t *testing.T) {
 			tweaked := plain
 			tweaked.Tun.Resolver = []string{"172.19.0.2"}
 			tweaked.Tweaks = xcfg.Tweaks{Fragment: true, DNS: []string{"1.1.1.1", "2606:4700:4700::1111"}, NoIPv6: true, LAN: true}
-			for _, o := range []xcfg.Options{plain, tweaked, {Mode: xcfg.ModeProbe, Tweaks: xcfg.Tweaks{Fragment: true}}} {
+			local := xcfg.Options{Mode: xcfg.ModeProxy, Port: 41234, Tweaks: tweaked.Tweaks}
+			for _, o := range []xcfg.Options{plain, tweaked, {Mode: xcfg.ModeProbe, Tweaks: xcfg.Tweaks{Fragment: true}}, local} {
 				tun, err := xcfg.Build(raw, o)
 				if err != nil {
 					t.Fatalf("%s #%d: %v", path, i, err)
@@ -99,6 +103,52 @@ func TestStartStopProxyMode(t *testing.T) {
 			c.Close()
 			t.Fatalf("round %d: port still open after close", round)
 		}
+	}
+}
+
+func TestTheLocalProxyTakesHTTPAndSocksOnlyOnTheLoopback(t *testing.T) {
+	srv := probeTarget(t)
+	port := freePort(t)
+	cfg, err := xcfg.Build(json.RawMessage(probeConfig), xcfg.Options{Mode: xcfg.ModeProxy, Port: port})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inst, err := Start(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer inst.Close()
+	at := fmt.Sprintf("127.0.0.1:%d", port)
+	viaHTTP := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{Proxy: http.ProxyURL(&url.URL{Scheme: "http", Host: at})}}
+	resp, err := viaHTTP.Get(srv.URL + "/generate_204")
+	if err != nil || resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("http proxy: %v %v", err, resp)
+	}
+	resp.Body.Close()
+	viaSocks := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{Proxy: http.ProxyURL(&url.URL{Scheme: "socks5", Host: at})}}
+	resp, err = viaSocks.Get(srv.URL + "/generate_204")
+	if err != nil || resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("socks proxy: %v %v", err, resp)
+	}
+	resp.Body.Close()
+	if tr := inst.Traffic(xcfg.TagTun); tr.Up == 0 || tr.Down == 0 {
+		t.Fatalf("the way in is counted like the tunnel: %+v", tr)
+	}
+	addrs, _ := net.InterfaceAddrs()
+	outside := 0
+	for _, a := range addrs {
+		ip, ok := a.(*net.IPNet)
+		if !ok || ip.IP.IsLoopback() || ip.IP.IsLinkLocalUnicast() {
+			continue
+		}
+		outside++
+		if c, err := net.DialTimeout("tcp", net.JoinHostPort(ip.IP.String(), strconv.Itoa(port)), time.Second); err == nil {
+			c.Close()
+			t.Fatalf("the proxy answers on %s", ip.IP)
+		}
+	}
+	if outside == 0 {
+		t.Log("no address outside the loopback: only the loopback is checked")
 	}
 }
 

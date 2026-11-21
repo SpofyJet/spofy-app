@@ -18,6 +18,9 @@ const ipv6Key = 'ipv6';
 const lanKey = 'lan';
 const logLevelKey = 'logLevel';
 const remindKey = 'remind';
+const modeKey = 'mode';
+const proxyPortKey = 'proxyPort';
+const modeProxy = 'proxy';
 
 const probeGoogle = 'http://www.gstatic.com/generate_204';
 const probeCloudflare = 'http://cp.cloudflare.com/generate_204';
@@ -35,6 +38,13 @@ List<Choice> get dnsChoices => [
   Choice('quad9', 'Quad9', '9.9.9.9 · ${S.dnsSafe}'),
   Choice('adguard', 'AdGuard', '94.140.14.14 · ${S.dnsClean}'),
 ];
+
+List<Choice> get modeChoices => [
+  Choice(null, S.modeVpn, S.modeVpnHint),
+  Choice(modeProxy, S.modeProxy, S.modeProxyHint),
+];
+
+bool proxied(AppModel model) => model.proxy && model.snapshot.settings[modeKey] == modeProxy;
 
 List<Choice> get ipv6Choices => [Choice(null, S.ipv6Auto, S.ipv6AutoHint), Choice(false, S.ipv6Off, S.ipv6OffHint)];
 
@@ -70,12 +80,10 @@ String chosen(List<Choice> choices, Object? value) {
   return value is String ? value : choices.first.title;
 }
 
-String advancedSummary(Map<String, Object?> s) {
+String advancedSummary(Map<String, Object?> s, {bool proxy = false}) {
   final parts = {
     S.fragment: s[fragmentKey] == true,
-    S.dns: s[dnsKey] != null,
-    S.ipv6: s[ipv6Key] == false,
-    S.lan: s[lanKey] == true,
+    if (!proxy) ...{S.dns: s[dnsKey] != null, S.ipv6: s[ipv6Key] == false, S.lan: s[lanKey] == true},
     S.checking: s[probeUrlKey] != null || (s[probeTimeoutKey] ?? 4) != 4,
   };
   final changed = [
@@ -90,6 +98,7 @@ typedef ChoiceSet = ({String title, List<Choice> choices, String hint, String? o
 ChoiceSet choiceSet(String setting) => switch (setting) {
   dnsKey => (title: S.dns, choices: dnsChoices, hint: S.dnsHint, own: S.dnsOwn, ownHint: S.dnsOwnHint),
   ipv6Key => (title: S.ipv6, choices: ipv6Choices, hint: S.ipv6Hint, own: null, ownHint: ''),
+  modeKey => (title: S.mode, choices: modeChoices, hint: S.modeHint, own: null, ownHint: ''),
   probeUrlKey => (
     title: S.probeTarget,
     choices: probeChoices,
@@ -108,12 +117,13 @@ Widget? mark(BuildContext context, Glyph glyph) =>
     : GlyphMark(glyph);
 
 class ChoiceTile extends StatelessWidget {
-  const ChoiceTile(this.glyph, this.setting, {super.key, required this.model, required this.open});
+  const ChoiceTile(this.glyph, this.setting, {super.key, required this.model, required this.open, this.summary});
 
   final Glyph glyph;
   final String setting;
   final AppModel model;
   final void Function(Widget Function(VoidCallback done) screen) open;
+  final String? summary;
 
   @override
   Widget build(BuildContext context) {
@@ -121,7 +131,8 @@ class ChoiceTile extends StatelessWidget {
     return Tile(
       leading: mark(context, glyph),
       title: choice.title,
-      subtitle: chosen(choice.choices, model.snapshot.settings[setting]),
+      subtitle: summary ?? chosen(choice.choices, model.snapshot.settings[setting]),
+      wrap: true,
       onTap: () => open((done) {
         final choice = choiceSet(setting);
         return ChoiceScreen(
@@ -166,6 +177,8 @@ class SettingsScreen extends StatelessWidget {
         listenable: model,
         builder: (context, _) {
           final settings = model.snapshot.settings;
+          final proxy = proxied(model);
+          final port = settings[proxyPortKey];
           const gap = SizedBox(height: 8);
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -186,9 +199,9 @@ class SettingsScreen extends StatelessWidget {
                     SwitchTile(
                       leading: mark(context, Glyph.block),
                       title: S.killSwitch,
-                      subtitle: S.killSwitchHint,
-                      value: settings[killSwitchKey] == true,
-                      onChanged: (value) => model.set(killSwitchKey, value),
+                      subtitle: proxy ? S.killSwitchProxy : S.killSwitchHint,
+                      value: !proxy && settings[killSwitchKey] == true,
+                      onChanged: proxy ? null : (value) => model.set(killSwitchKey, value),
                     ),
                     if (model.always != null) ...[
                       gap,
@@ -201,6 +214,16 @@ class SettingsScreen extends StatelessWidget {
                       ),
                     ],
                     SectionTitle(S.network),
+                    if (model.proxy) ...[
+                      ChoiceTile(
+                        Glyph.mode,
+                        modeKey,
+                        model: model,
+                        open: open,
+                        summary: proxy && port is int ? S.proxyAt(port) : null,
+                      ),
+                      gap,
+                    ],
                     if (model.apps != null && onApps != null) ...[
                       Tile(
                         leading: mark(context, Glyph.apps),
@@ -213,7 +236,7 @@ class SettingsScreen extends StatelessWidget {
                     Tile(
                       leading: mark(context, Glyph.network),
                       title: S.advanced,
-                      subtitle: advancedSummary(settings),
+                      subtitle: advancedSummary(settings, proxy: proxy),
                       wrap: true,
                       onTap: () => open((done) => AdvancedScreen(model: model, open: open, onDone: done)),
                     ),
@@ -290,6 +313,7 @@ class AdvancedScreen extends StatelessWidget {
         builder: (context, _) {
           final settings = model.snapshot.settings;
           final wait = settings[probeTimeoutKey] is int ? settings[probeTimeoutKey]! as int : 4;
+          final proxy = proxied(model);
           const gap = SizedBox(height: 8);
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -307,18 +331,25 @@ class AdvancedScreen extends StatelessWidget {
                       value: settings[fragmentKey] == true,
                       onChanged: (value) => model.set(fragmentKey, value ? true : null),
                     ),
-                    gap,
-                    ChoiceTile(Glyph.dns, dnsKey, model: model, open: open),
-                    gap,
-                    ChoiceTile(Glyph.route, ipv6Key, model: model, open: open),
-                    gap,
-                    SwitchTile(
-                      leading: mark(context, Glyph.home),
-                      title: S.lan,
-                      subtitle: S.lanHint,
-                      value: settings[lanKey] == true,
-                      onChanged: (value) => model.set(lanKey, value ? true : null),
-                    ),
+                    if (proxy)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(4, 12, 4, 0),
+                        child: Text(S.tunnelProxy, style: Ink.note),
+                      )
+                    else ...[
+                      gap,
+                      ChoiceTile(Glyph.dns, dnsKey, model: model, open: open),
+                      gap,
+                      ChoiceTile(Glyph.route, ipv6Key, model: model, open: open),
+                      gap,
+                      SwitchTile(
+                        leading: mark(context, Glyph.home),
+                        title: S.lan,
+                        subtitle: S.lanHint,
+                        value: settings[lanKey] == true,
+                        onChanged: (value) => model.set(lanKey, value ? true : null),
+                      ),
+                    ],
                     SectionTitle(S.checking),
                     ChoiceTile(Glyph.pulse, probeUrlKey, model: model, open: open),
                     gap,

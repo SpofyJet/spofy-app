@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 )
 
 type Mode int
@@ -11,6 +12,7 @@ type Mode int
 const (
 	ModeTun Mode = iota
 	ModeProbe
+	ModeProxy
 )
 
 const (
@@ -18,6 +20,7 @@ const (
 	TagOutside    = "spofy-outside"
 	TagOutsideDNS = "spofy-outside-dns"
 	outsideDNS    = "8.8.8.8:53"
+	Loopback      = "127.0.0.1"
 )
 
 type Tun struct {
@@ -34,6 +37,7 @@ type Tun struct {
 type Options struct {
 	Mode     Mode
 	Tun      Tun
+	Port     int
 	LogLevel string
 	Tweaks   Tweaks
 }
@@ -61,6 +65,16 @@ func Build(server json.RawMessage, o Options) ([]byte, error) {
 	}
 	if err := modernize(out); err != nil {
 		return nil, err
+	}
+	if o.Mode == ModeProxy {
+		delete(out, "fakedns")
+		if v, ok := out["dns"]; ok {
+			dns, err := withoutFake(v)
+			if err != nil {
+				return nil, err
+			}
+			out["dns"] = dns
+		}
 	}
 	if o.Mode == ModeProbe {
 		out["inbounds"] = json.RawMessage(`[]`)
@@ -108,6 +122,15 @@ func Build(server json.RawMessage, o Options) ([]byte, error) {
 	}
 	out["policy"] = policy
 	return json.Marshal(out)
+}
+
+func Local(cfg []byte) bool {
+	var c struct {
+		Inbounds []struct {
+			Protocol string `json:"protocol"`
+		} `json:"inbounds"`
+	}
+	return json.Unmarshal(cfg, &c) == nil && len(c.Inbounds) == 1 && c.Inbounds[0].Protocol == "mixed"
 }
 
 func MainTag(server json.RawMessage) string {
@@ -168,8 +191,60 @@ func inboundFor(o Options, sniffing json.RawMessage) (map[string]any, string, er
 			settings["autoOutboundsInterface"] = t.OutIface
 		}
 		return map[string]any{"tag": TagTun, "protocol": "tun", "port": 0, "settings": settings, "sniffing": local(sniffing)}, TagTun, nil
+	case ModeProxy:
+		if o.Port <= 0 || o.Port > 65535 {
+			return nil, "", ErrConfig
+		}
+		settings := map[string]any{"auth": "noauth", "udp": true, "ip": Loopback}
+		return map[string]any{"tag": TagTun, "protocol": "mixed", "listen": Loopback, "port": o.Port, "settings": settings, "sniffing": local(unfaked(sniffing))}, TagTun, nil
 	}
 	return nil, "", ErrConfig
+}
+
+func fake(v json.RawMessage) bool {
+	var name string
+	if json.Unmarshal(v, &name) != nil {
+		var server struct {
+			Address string `json:"address"`
+		}
+		json.Unmarshal(v, &server)
+		name = server.Address
+	}
+	return strings.EqualFold(name, "fakedns")
+}
+
+func withoutFake(raw json.RawMessage) (json.RawMessage, error) {
+	dns := map[string]json.RawMessage{}
+	if err := json.Unmarshal(raw, &dns); err != nil {
+		return nil, ErrConfig
+	}
+	var servers []json.RawMessage
+	if len(dns["servers"]) == 0 || string(dns["servers"]) == "null" {
+		return raw, nil
+	}
+	if err := json.Unmarshal(dns["servers"], &servers); err != nil {
+		return nil, ErrConfig
+	}
+	kept := slices.DeleteFunc(slices.Clone(servers), fake)
+	if len(kept) == len(servers) {
+		return raw, nil
+	}
+	dns["servers"] = mustJSON(kept)
+	return json.Marshal(dns)
+}
+
+func unfaked(sniffing json.RawMessage) json.RawMessage {
+	var s map[string]json.RawMessage
+	var over []string
+	if json.Unmarshal(sniffing, &s) != nil || s == nil || json.Unmarshal(s["destOverride"], &over) != nil {
+		return sniffing
+	}
+	kept := slices.DeleteFunc(slices.Clone(over), func(d string) bool { return strings.HasPrefix(d, "fakedns") })
+	if len(kept) == len(over) {
+		return sniffing
+	}
+	s["destOverride"] = mustJSON(kept)
+	return mustJSON(s)
 }
 
 func resolver(outbounds []json.RawMessage, raw json.RawMessage, addrs []string) ([]json.RawMessage, json.RawMessage, error) {

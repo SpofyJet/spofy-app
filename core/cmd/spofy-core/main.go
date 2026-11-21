@@ -187,6 +187,8 @@ type served struct {
 	logs     io.Writer
 	opened   func()
 	install  func(string) error
+	system   app.System
+	logon    func()
 }
 
 func serve(args []string) int {
@@ -255,6 +257,18 @@ func guards(list ...supervisor.Guard) supervisor.Guard {
 	return up
 }
 
+type modal struct {
+	supervisor.Guard
+	local func() bool
+}
+
+func (m modal) Raise() error {
+	if m.local() {
+		return m.Guard.Lower()
+	}
+	return m.Guard.Raise()
+}
+
 type keeper interface {
 	Keep(on bool) error
 	Held() bool
@@ -281,11 +295,14 @@ func (o served) run(ctx context.Context, out io.Writer) error {
 		}
 		g = guards(wall, device(opts.Tun.Name))
 	}
+	var a *app.App
+	if g != nil && o.system != nil {
+		g = modal{g, func() bool { return a.Local() }}
+	}
 	var platform *host.Platform
 	var owner supervisor.Owner
 	var carried func() *os.File
 	var retune func() (bool, error)
-	var a *app.App
 	if o.given {
 		if o.socket == "" || opts.Mode != xcfg.ModeTun {
 			return errors.New("-platform needs -listen and the tun mode")
@@ -356,6 +373,7 @@ func (o served) run(ctx context.Context, out io.Writer) error {
 		Retune:   retune,
 		Keep:     keep,
 		Held:     held,
+		System:   o.system,
 	})
 	checks.Add(1)
 	go func() {

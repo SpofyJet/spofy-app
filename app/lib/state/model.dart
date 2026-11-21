@@ -34,6 +34,7 @@ class AppModel extends ChangeNotifier {
     this.permit,
     this.always,
     this.apps,
+    this.proxy = false,
     this.browse,
     this.install,
     this.clock = DateTime.now,
@@ -46,6 +47,7 @@ class AppModel extends ChangeNotifier {
     this.permit,
     this.always,
     this.apps,
+    this.proxy = false,
     this.browse,
     this.install,
     this.clock = DateTime.now,
@@ -61,6 +63,7 @@ class AppModel extends ChangeNotifier {
   final Future<bool> Function()? permit;
   final VoidCallback? always;
   final AppList? apps;
+  final bool proxy;
   final void Function(String address)? browse;
   final Future<bool> Function(String file)? install;
   final DateTime Function() clock;
@@ -248,7 +251,7 @@ class AppModel extends ChangeNotifier {
     await _ask(Request.online(online: online));
   }
 
-  static const reconnecting = {'fragment', 'dns', 'ipv6', 'lan', 'logLevel'};
+  static const reconnecting = {'mode', 'fragment', 'dns', 'ipv6', 'lan', 'logLevel'};
 
   (String, Object?)? pending;
 

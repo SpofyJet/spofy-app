@@ -28,6 +28,8 @@ const (
 	steady     = time.Second
 )
 
+var orphaned = 5 * time.Second
+
 var (
 	errStranger = errors.New("the pipe belongs to someone other than the system")
 	errIcon     = errors.New("the icon file is broken")
@@ -43,6 +45,7 @@ type shell struct {
 	stalled  bool
 	quitting uint64
 	wake     func()
+	restore  func()
 
 	mu       sync.Mutex
 	model    tray.Model
@@ -190,6 +193,7 @@ func trusted(h windows.Handle) bool {
 
 func (s *shell) serve(ctx context.Context, path string) {
 	wait := time.Duration(0)
+	lost, given := time.Now(), false
 	for {
 		timer := time.NewTimer(wait)
 		select {
@@ -201,10 +205,15 @@ func (s *shell) serve(ctx context.Context, path string) {
 		wait = min(max(wait*2, firstWait), longWait)
 		f, err := dial(ctx, path)
 		if err != nil {
+			if !given && s.restore != nil && time.Since(lost) >= orphaned {
+				given = true
+				s.restore()
+			}
 			continue
 		}
 		began := time.Now()
 		s.session(ctx, f)
+		lost, given = time.Now(), false
 		if time.Since(began) > steady {
 			wait = 0
 		}

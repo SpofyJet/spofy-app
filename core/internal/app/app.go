@@ -61,6 +61,9 @@ const (
 	KeyTheme        = "theme"
 	KeyLanguage     = "language"
 	KeyMotion       = "motion"
+	KeyMode         = "mode"
+	KeyProxyPort    = "proxyPort"
+	ModeProxy       = "proxy"
 )
 
 var Resolvers = map[string][]string{
@@ -85,6 +88,13 @@ var checks = map[string]func(json.RawMessage) bool{
 	KeyTheme:        oneOf("light", "dark"),
 	KeyLanguage:     oneOf("ru", "en"),
 	KeyMotion:       off,
+	KeyMode:         oneOf(ModeProxy),
+	KeyProxyPort:    validPort,
+}
+
+func validPort(v json.RawMessage) bool {
+	var n int
+	return json.Unmarshal(v, &n) == nil && n >= 1024 && n <= 65535 && string(v) == strconv.Itoa(n)
 }
 
 func validRemind(v json.RawMessage) bool {
@@ -165,6 +175,11 @@ const (
 	maxSubscriptions = 20
 )
 
+type System interface {
+	Set(address string) error
+	Clear() error
+}
+
 type Tunnel interface {
 	session.Tunnel
 	Traffic(tag string) (engine.Traffic, error)
@@ -199,6 +214,7 @@ type Config struct {
 	Engine   string
 	Updates  Updates
 	Install  func(path string) error
+	System   System
 }
 
 type Apps struct {
@@ -410,6 +426,7 @@ type App struct {
 	cancel context.CancelFunc
 	online atomic.Bool
 	due    atomic.Int64
+	local  atomic.Bool
 
 	mu      sync.Mutex
 	conn    Connection
@@ -421,6 +438,11 @@ type App struct {
 	tasks   sync.WaitGroup
 	journal []Entry
 	book    *logbook.Book
+	bound   int
+	want    string
+	have    string
+	known   bool
+	kick    chan struct{}
 
 	umu      sync.Mutex
 	offer    *update.Offer
@@ -453,7 +475,7 @@ func New(cfg Config) *App {
 	if cfg.Settle == 0 {
 		cfg.Settle = 10 * time.Second
 	}
-	a := &App{cfg: cfg, hearers: map[int]func(Event){}}
+	a := &App{cfg: cfg, hearers: map[int]func(Event){}, kick: make(chan struct{}, 1)}
 	a.book = logbook.New(logSize, a.now)
 	a.book.Verbose(detailed(cfg.Store.Get()))
 	a.conceal(cfg.Store.Get())
@@ -464,11 +486,11 @@ func New(cfg Config) *App {
 	a.conn = Connection{State: session.Idle, Choice: a.choice(cfg.Store.Get())}
 	address, limit := probe(cfg.Store.Get())
 	a.sess = session.New(session.Options{
-		Tunnel:    cfg.Tunnel,
+		Tunnel:    steered{cfg.Tunnel, &a.local},
 		OnEvent:   a.onState,
 		OnMeasure: a.onMeasure,
 		Online:    a.online.Load,
-		Strict:    cfg.Strict || on(cfg.Store.Get(), KeyKillSwitch),
+		Strict:    a.strict(cfg.Store.Get()),
 		Bypass:    cfg.Bypass,
 		URL:       cmp.Or(address, cfg.URL),
 		Timeout:   cmp.Or(limit, cfg.Timeout),
@@ -481,7 +503,160 @@ func New(cfg Config) *App {
 	if a.updatesOn() && cfg.Updates.Every >= 0 {
 		a.spawn(a.watchUpdates)
 	}
+	if cfg.System != nil {
+		a.spawn(a.steer)
+		a.nudge()
+	}
 	return a
+}
+
+type steered struct {
+	Tunnel
+	local *atomic.Bool
+}
+
+func (s steered) Start(cfg []byte) (time.Duration, error) {
+	s.local.Store(xcfg.Local(cfg))
+	return s.Tunnel.Start(cfg)
+}
+
+func (a *App) Local() bool {
+	return a.local.Load()
+}
+
+func (a *App) proxied(st store.State) bool {
+	mode, _ := text(st.Settings[KeyMode])
+	return mode == ModeProxy && a.cfg.System != nil
+}
+
+func (a *App) strict(st store.State) bool {
+	return a.cfg.Strict || (on(st, KeyKillSwitch) && !a.proxied(st))
+}
+
+func (a *App) nudge() {
+	select {
+	case a.kick <- struct{}{}:
+	default:
+	}
+}
+
+func (a *App) aim() {
+	st := a.cfg.Store.Get()
+	a.mu.Lock()
+	switch {
+	case !a.proxied(st) || a.conn.State == session.Idle || a.conn.State == session.Failed:
+		a.want = ""
+	case protects(a.conn.State) && a.local.Load() && a.bound != 0:
+		a.want = net.JoinHostPort(xcfg.Loopback, strconv.Itoa(a.bound))
+	}
+	a.mu.Unlock()
+	a.nudge()
+}
+
+func (a *App) steer() {
+	for {
+		select {
+		case <-a.ctx.Done():
+			return
+		case <-a.kick:
+		}
+		for a.ctx.Err() == nil {
+			a.mu.Lock()
+			want, have, known := a.want, a.have, a.known
+			a.mu.Unlock()
+			if known && want == have {
+				break
+			}
+			if !a.point(want) {
+				break
+			}
+		}
+	}
+}
+
+func (a *App) point(want string) bool {
+	var err error
+	if want == "" {
+		err = a.cfg.System.Clear()
+	} else {
+		err = a.cfg.System.Set(want)
+	}
+	if err != nil {
+		a.Note("app", "system proxy: "+err.Error())
+		return false
+	}
+	a.mu.Lock()
+	a.have, a.known = want, true
+	a.mu.Unlock()
+	if want == "" {
+		a.Note("app", "system proxy given back")
+	} else {
+		a.Note("app", "system proxy set to "+want)
+	}
+	return true
+}
+
+func (a *App) port(st store.State) int {
+	a.mu.Lock()
+	bound := a.bound
+	a.mu.Unlock()
+	if bound != 0 {
+		return bound
+	}
+	var saved int
+	json.Unmarshal(st.Settings[KeyProxyPort], &saved)
+	port := saved
+	if port == 0 || !free(port) {
+		port = pick()
+	}
+	if port == 0 {
+		return 0
+	}
+	a.mu.Lock()
+	if a.bound == 0 {
+		a.bound = port
+	}
+	port = a.bound
+	a.mu.Unlock()
+	if port != saved && a.save(func(s *store.State) {
+		if s.Settings == nil {
+			s.Settings = map[string]json.RawMessage{}
+		}
+		s.Settings[KeyProxyPort] = json.RawMessage(strconv.Itoa(port))
+	}) == nil {
+		a.emit(Event{Ev: EvSettings, Settings: settings(a.cfg.Store.Get())})
+	}
+	return port
+}
+
+func free(port int) bool {
+	at := net.JoinHostPort(xcfg.Loopback, strconv.Itoa(port))
+	l, err := net.Listen("tcp", at)
+	if err != nil {
+		return false
+	}
+	defer l.Close()
+	u, err := net.ListenPacket("udp", at)
+	if err != nil {
+		return false
+	}
+	u.Close()
+	return true
+}
+
+func pick() int {
+	for range 8 {
+		l, err := net.Listen("tcp", net.JoinHostPort(xcfg.Loopback, "0"))
+		if err != nil {
+			return 0
+		}
+		port := l.Addr().(*net.TCPAddr).Port
+		l.Close()
+		if port >= 1024 && free(port) {
+			return port
+		}
+	}
+	return 0
 }
 
 func (a *App) spawn(work func()) {
@@ -918,6 +1093,11 @@ func (a *App) Connect(server string) error {
 			return fail(session.CodeNotFound, "no such server")
 		}
 	}
+	if now := a.sess.State(); now == session.Idle || now == session.Failed {
+		a.mu.Lock()
+		a.bound = 0
+		a.mu.Unlock()
+	}
 	cands := a.candidates(st)
 	if len(cands) == 0 {
 		return fail(engine.CodeConfig, "no usable server in the subscription")
@@ -1024,6 +1204,9 @@ func (a *App) Set(key string, value json.RawMessage) error {
 	if check, ok := checks[key]; ok && len(value) > 0 && string(value) != "null" && !check(value) {
 		return fail(CodeValue, "bad setting")
 	}
+	if key == KeyMode && a.cfg.System == nil && len(value) > 0 && string(value) != "null" {
+		return fail(CodeValue, "this system has no proxy mode")
+	}
 	var applied *Apps
 	if key == KeyApps {
 		chosen, ok := apps(value)
@@ -1051,8 +1234,8 @@ func (a *App) Set(key string, value json.RawMessage) error {
 	}
 	a.Note("app", "setting "+key+" = "+shown(key, value))
 	a.book.Verbose(detailed(a.cfg.Store.Get()))
-	if key == KeyKillSwitch {
-		strict := a.cfg.Strict || on(a.cfg.Store.Get(), KeyKillSwitch)
+	if key == KeyKillSwitch || key == KeyMode {
+		strict := a.strict(a.cfg.Store.Get())
 		a.sess.SetStrict(strict)
 		if a.cfg.Keep != nil {
 			a.cfg.Keep(strict)
@@ -1063,10 +1246,13 @@ func (a *App) Set(key string, value json.RawMessage) error {
 	switch key {
 	case KeyProbeURL, KeyProbeTimeout:
 		a.sess.SetProbe(probe(now))
-	case KeyFragment, KeyDNS, KeyIPv6, KeyLAN, KeyLogLevel:
+	case KeyFragment, KeyDNS, KeyIPv6, KeyLAN, KeyLogLevel, KeyMode:
 		if now.Profile != nil {
 			a.follow(now)
 		}
+	}
+	if key == KeyMode {
+		a.aim()
 	}
 	if key == KeyApps && a.cfg.Retune != nil && a.sess.State() != session.Idle && !sameApps(applied, a.Apps()) {
 		a.spawn(func() {
@@ -1081,9 +1267,10 @@ func (a *App) Set(key string, value json.RawMessage) error {
 func (a *App) Resume() error {
 	st := a.cfg.Store.Get()
 	if a.cfg.Keep != nil {
-		a.cfg.Keep(a.cfg.Strict || on(st, KeyKillSwitch))
+		a.cfg.Keep(a.strict(st))
 	}
-	if st.Profile == nil || !(on(st, KeyAutoConnect) || a.cfg.Held) {
+	held := a.cfg.Held && !a.proxied(st)
+	if st.Profile == nil || !(on(st, KeyAutoConnect) || held) {
 		if a.cfg.Held {
 			a.cfg.Tunnel.Stop()
 		}
@@ -1122,6 +1309,9 @@ func (a *App) options(st store.State) (run, probe xcfg.Options) {
 	}
 	run = a.cfg.Run
 	run.Tweaks = t
+	if a.proxied(st) {
+		run.Mode, run.Port = xcfg.ModeProxy, a.port(st)
+	}
 	if detailed(st) {
 		run.LogLevel = "info"
 	}
@@ -1152,6 +1342,12 @@ func (a *App) Close() {
 	a.cancel()
 	a.sess.Disconnect()
 	a.tasks.Wait()
+	a.mu.Lock()
+	settled := a.known && a.have == ""
+	a.mu.Unlock()
+	if a.cfg.System != nil && !settled {
+		a.point("")
+	}
 }
 
 func (a *App) adopt(address string, p *sub.Profile) error {
@@ -1247,8 +1443,12 @@ func (a *App) onState(e session.Event) {
 		a.journal = a.journal[max(len(a.journal)-journalSize, 0):]
 	}
 	a.conn = conn
+	if e.State == session.Idle || e.State == session.Failed {
+		a.bound = 0
+	}
 	hush := a.hush
 	a.mu.Unlock()
+	a.aim()
 	if moved {
 		parts := slices.DeleteFunc([]string{string(conn.State), a.named(conn.Server), string(conn.Code), conn.Error}, func(p string) bool { return p == "" })
 		a.Note("app", strings.Join(parts, " "))

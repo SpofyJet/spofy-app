@@ -20,6 +20,7 @@ import (
 	"github.com/SpofyJet/spofy-app/core/internal/guard"
 	"github.com/SpofyJet/spofy-app/core/internal/store"
 	"github.com/SpofyJet/spofy-app/core/internal/sub"
+	"github.com/SpofyJet/spofy-app/core/internal/sysproxy"
 )
 
 const (
@@ -75,7 +76,14 @@ func prepare() (served, func(), error) {
 		os.Rename(folder, fmt.Sprintf("%s.unreadable-%d", folder, time.Now().Unix()))
 	}
 	hwid, release, model := desk.Identity()
-	return served{
+	var system *desktops
+	if exe, err := os.Executable(); err == nil {
+		helper := filepath.Join(filepath.Dir(exe), "spofy-tray.exe")
+		if _, err := os.Stat(helper); err == nil {
+			system = &desktops{helper: helper, logs: logs}
+		}
+	}
+	o := served{
 		folder: folder, key: key, mode: "tun", level: "warning", guarded: true, kept: true,
 		device: sub.Device{HWID: hwid, OS: "Windows", OSVersion: release, Model: model, AppVersion: version},
 		socket: pipe,
@@ -89,7 +97,11 @@ func prepare() (served, func(), error) {
 			}
 			return cmd.Process.Release()
 		},
-	}, closer, nil
+	}
+	if system != nil {
+		o.system, o.logon = system, system.again
+	}
+	return o, closer, nil
 }
 
 type handler struct{}
@@ -105,13 +117,17 @@ func (handler) Execute(_ []string, requests <-chan svc.ChangeRequest, status cha
 	defer cancel()
 	done := make(chan error, 1)
 	go func() { done <- o.run(ctx, io.Discard) }()
-	status <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptShutdown}
+	status <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptShutdown | svc.AcceptSessionChange}
 	for {
 		select {
 		case c := <-requests:
 			switch c.Cmd {
 			case svc.Interrogate:
 				status <- c.CurrentStatus
+			case svc.SessionChange:
+				if c.EventType == wtsSessionLogon && o.logon != nil {
+					go o.logon()
+				}
 			case svc.Stop, svc.Shutdown:
 				status <- svc.Status{State: svc.StopPending, WaitHint: 20000}
 				cancel()
@@ -224,6 +240,9 @@ func uninstall() error {
 	case err == nil:
 		defer s.Close()
 		stop(s)
+		if err := sysproxy.Restore(); err != nil {
+			fmt.Fprintln(os.Stderr, "the system proxy stays:", err)
+		}
 		if err := guard.Release(); err != nil {
 			return errors.Join(err, s.Start())
 		}

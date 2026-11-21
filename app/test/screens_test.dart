@@ -714,6 +714,94 @@ void main() {
     expect(find.text(S.alwaysOn), findsNothing);
   });
 
+  testWidgets('where the system proxy can be set the connection mode is a choice that says what it covers', (
+    tester,
+  ) async {
+    List<String> sets(Scene scene) => [
+      for (final m in scene.transport.sent)
+        if (m.contains('"op":"set"')) m.replaceFirst(RegExp(r'"id":\d+,'), ''),
+    ];
+    await show(tester, home(VpnState.idle, settings: {modeKey: modeProxy, killSwitchKey: true}), phone);
+    await open(tester, S.settings);
+    expect(find.text(S.mode), findsNothing);
+    expect(find.text(S.killSwitchHint), findsOneWidget);
+
+    final idle = home(VpnState.idle, proxy: true);
+    await show(tester, idle, phone);
+    await open(tester, S.settings);
+    expect(find.text(S.modeVpn), findsOneWidget);
+    await golden(tester, 'settings_mode_360');
+    await open(tester, S.mode);
+    expect([S.modeHint, S.modeVpnHint, S.modeProxyHint].map((t) => find.text(t).evaluate().length), [1, 1, 1]);
+    await golden(tester, 'mode_360');
+    await open(tester, S.modeProxy);
+    expect(sets(idle), ['{"op":"set","key":"mode","value":"proxy"}']);
+
+    final scene = proxyScene();
+    await show(tester, scene, phone);
+    await open(tester, S.settings);
+    expect(S.proxyAt(41234).split(' · ').map((t) => find.text(t).evaluate().length), [1, 1]);
+    expect(find.text(S.killSwitchProxy), findsOneWidget);
+    expect(find.text(S.advancedAll([S.fragment, S.checking])), findsOneWidget);
+    expect(tester.widgetList<Toggle>(find.byType(Toggle)).length, 1);
+    await tester.tap(find.bySemanticsLabel(S.killSwitch));
+    await tester.pump();
+    expect(sets(scene), isEmpty);
+    await golden(tester, 'settings_proxy_360');
+    await open(tester, S.advanced);
+    expect(find.text(S.tunnelProxy), findsOneWidget);
+    expect(find.text(S.fragment), findsOneWidget);
+    expect([S.dns, S.ipv6, S.lan].map((t) => find.text(t).evaluate().length), [0, 0, 0]);
+    await golden(tester, 'advanced_proxy_360');
+    await open(tester, S.back);
+    await open(tester, S.mode);
+    await open(tester, S.modeVpn);
+    expect(sets(scene), isEmpty);
+    expect(find.text(S.reconnectAsk), findsOneWidget);
+    await tester.tap(find.descendant(of: find.byType(ReconnectAsk), matching: find.text(S.apply)));
+    await tester.pump();
+    expect(sets(scene), ['{"op":"set","key":"mode","value":null}']);
+
+    await show(tester, proxyScene(), phone, brightness: Brightness.light);
+    await open(tester, S.settings);
+    await golden(tester, 'settings_proxy_light_360');
+    await open(tester, S.advanced);
+    await golden(tester, 'advanced_proxy_light_360');
+    await show(tester, home(VpnState.idle, proxy: true), phone, brightness: Brightness.light);
+    await open(tester, S.settings);
+    await open(tester, S.mode);
+    await golden(tester, 'mode_light_360');
+    await show(tester, proxyScene(), small);
+    await open(tester, S.settings);
+    await golden(tester, 'settings_proxy_small');
+  });
+
+  testWidgets('the connection mode fits a 320 px phone with 130 % text', (tester) async {
+    for (final (locale, path) in [
+      for (final locale in const [Locale('ru', 'RU'), Locale('en', 'US')])
+        for (final path in const [
+          ['settings'],
+          ['settings', 'mode'],
+          ['settings', 'advanced'],
+        ])
+          (locale, path),
+    ]) {
+      await show(tester, proxyScene(), const Size(320, 568), textScale: 1.3, locales: [locale]);
+      for (final name in path) {
+        final label = switch (name) {
+          'mode' => S.mode,
+          'advanced' => S.advanced,
+          _ => S.settings,
+        };
+        await open(tester, label);
+        expect(tester.takeException(), isNull, reason: '$path $label');
+      }
+      for (final text in tester.renderObjectList<RenderParagraph>(find.byType(RichText))) {
+        expect(text.didExceedMaxLines, isFalse, reason: text.text.toPlainText());
+      }
+    }
+  });
+
   testWidgets('apps: every app goes through the VPN until the person says otherwise', (tester) async {
     final scene = home(VpnState.idle, apps: FakeApps());
     await show(tester, scene, phone);

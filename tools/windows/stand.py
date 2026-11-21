@@ -15,6 +15,7 @@ import sys
 import tempfile
 import threading
 import time
+import winreg
 import zlib
 
 CORE = os.path.abspath(sys.argv[1])
@@ -798,6 +799,140 @@ def switch_scenario(ui, servers):
               recreated, len(log), len(broken), len(stuck), gap, slowest, spread, sorted(set(g[0] for g in broken))))
 
 
+class ConnOption(ctypes.Structure):
+    _fields_ = [("option", ctypes.c_uint32), ("value", ctypes.c_void_p)]
+
+
+class ConnList(ctypes.Structure):
+    _fields_ = [("size", ctypes.c_uint32), ("connection", ctypes.c_wchar_p), ("count", ctypes.c_uint32), ("error", ctypes.c_uint32),
+                ("options", ctypes.POINTER(ConnOption))]
+
+
+def ie(put=None):
+    w, k = ctypes.WinDLL("wininet", use_last_error=True), ctypes.WinDLL("kernel32")
+    w.InternetSetOptionW.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_uint32]
+    w.InternetQueryOptionW.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32)]
+    k.GlobalFree.argtypes = [ctypes.c_void_p]
+    opts = (ConnOption * 4)()
+    for i, o in enumerate((10, 2, 3, 4)):
+        opts[i].option = o
+    kept = []
+    if put:
+        opts[0].value = put[0]
+        for i, v in enumerate(put[1:]):
+            if v:
+                kept.append(ctypes.create_unicode_buffer(v))
+                opts[i + 1].value = ctypes.cast(kept[-1], ctypes.c_void_p)
+    lst = ConnList(ctypes.sizeof(ConnList), None, 4, 0, ctypes.cast(opts, ctypes.POINTER(ConnOption)))
+    size = ctypes.c_uint32(ctypes.sizeof(lst))
+    if put:
+        ok = w.InternetSetOptionW(None, 75, ctypes.byref(lst), size.value)
+        for o in (95, 39, 37):
+            w.InternetSetOptionW(None, o, None, 0)
+        return bool(ok)
+    if not w.InternetQueryOptionW(None, 75, ctypes.byref(lst), ctypes.byref(size)):
+        return (0, "", "", "")
+    out = [(opts[0].value or 0) & 0xFFFFFFFF]
+    for o in opts[1:]:
+        out.append(ctypes.wstring_at(o.value) if o.value else "")
+        if o.value:
+            k.GlobalFree(ctypes.c_void_p(o.value))
+    return tuple(out)
+
+
+def record():
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Spofy") as key:
+            return json.loads(winreg.QueryValueEx(key, "SystemProxy")[0])
+    except OSError:
+        return None
+
+
+def browser():
+    return ps("try { (Invoke-WebRequest -UseBasicParsing -TimeoutSec 15 -Uri '%s').StatusCode } catch { $_.Exception.Message }" % SITE)
+
+
+def proxy_scenario(source, servers):
+    theirs = (1 | 4, "10.9.8.7:3128", "corp.example;<local>", "http://pac.example.test/proxy.pac")
+    saved = {"flags": theirs[0], "server": theirs[1], "bypass": theirs[2], "script": theirs[3]}
+    was = ie()
+    set_ok = ie(theirs)
+    expect("the stand gives the person a proxy of their own: a script, a server that is off and exceptions", set_ok and ie() == theirs, "was=%s now=%s" % (was, ie()))
+    ui = Pipe(PIPE)
+    r = ui.ask("set", key="mode", value="proxy")
+    pointed = until(lambda: ie()[1].startswith("127.0.0.1:"), 60, 0.3)
+    settings = (((ui.ask("hello") or {}).get("snapshot") or {}).get("settings") or {})
+    port = settings.get("proxyPort")
+    ours = ie()
+    gone = until(lambda: adapter() == "", 20, 0.5) is not None
+    expect("the proxy mode: the system proxy points at 127.0.0.1 on the port the core keeps, the local network is direct, the adapter is gone",
+           bool(r) and r.get("ok") and bool(pointed) and ours[0] == 3 and ours[1] == "127.0.0.1:%s" % port and "<local>" in ours[2] and "192.168.*" in ours[2] and gone
+           and (record() or {}).get("previous", {}).get("") == saved,
+           "reply=%s now=%s port=%s adapter=%s record=%s sessions=%s" % (str(r)[:120], ours, port, adapter(), record(),
+                                                                       subprocess.run(["query", "session"], capture_output=True, text=True).stdout.strip().replace("\n", " | ")))
+    if not pointed:
+        ui.ask("set", key="mode", value=None)
+        ui.close()
+        ie(was)
+        return
+    seen = sum(seen_on(servers))
+    code = browser()
+    through = sum(seen_on(servers)) - seen
+    expect("a program that follows the system proxy goes through the server", code == "204" and through > 0, "code=%s through=%d" % (code, through))
+    probe = socket.socket()
+    probe.settimeout(3)
+    outside = probe.connect_ex((source, int(port))) == 0
+    probe.close()
+    expect("the local proxy is not open to the network", not outside)
+
+    off = ui.ask("disconnect", 30)
+    back = until(lambda: ie() == theirs, 20, 0.3)
+    expect("disconnected: the person's own proxy settings are back exactly and the record is gone", bool(off) and bool(back) and record() is None, "now=%s record=%s" % (ie(), record()))
+    on = ui.ask("connect", 60)
+    again = until(lambda: ie()[1] == "127.0.0.1:%s" % port, 30, 0.3)
+    expect("connected again on the same port", bool(on) and on.get("ok") and bool(again) and browser() == "204", "now=%s" % (ie(),))
+    ui.close()
+
+    old = service_pid()
+    subprocess.run(["taskkill", "/F", "/PID", str(old)], capture_output=True)
+    back = until(lambda: service_pid() not in (0, old) and pipe_open() and ie()[1] == "127.0.0.1:%s" % port, 60, 0.3)
+    expect("the service is killed and back: the system proxy points at it again and the person's settings are still kept",
+           bool(back) and (record() or {}).get("previous", {}).get("") == saved and browser() == "204", "now=%s record=%s" % (ie(), record()))
+
+    if TRAY:
+        subprocess.run(["sc", "failure", "Spofy", "reset=", "86400", "actions=", "none/0/none/0/none/0"], capture_output=True)
+        tray = subprocess.Popen([TRAY])
+        until(tray_window, 15, 0.1)
+        until(lambda: ie()[1] == "127.0.0.1:%s" % port, 30, 0.3)
+        old = service_pid()
+        subprocess.run(["taskkill", "/F", "/PID", str(old)], capture_output=True)
+        at = time.time()
+        back = until(lambda: ie() == theirs, 30, 0.2)
+        took = time.time() - at
+        expect("the service is killed and not started again: the tray gives the person's proxy back in a few seconds",
+               bool(back) and record() is None and took < 15, "s=%.1f now=%s record=%s" % (took, ie(), record()))
+        if tray.poll() is None:
+            tray.kill()
+        r = subprocess.run([CORE, "install"], capture_output=True, text=True)
+        expect("installed again the service points the system proxy at itself", r.returncode == 0 and bool(until(lambda: ie()[1] == "127.0.0.1:%s" % port, 60, 0.3)),
+               "now=%s %s" % (ie(), r.stderr.strip()[-200:]))
+
+    subprocess.run(["sc", "stop", "Spofy"], capture_output=True, text=True)
+    stopped = until(lambda: "STOPPED" in subprocess.run(["sc", "query", "Spofy"], capture_output=True, text=True).stdout, 40, 0.5)
+    expect("the service stops: the person's proxy settings are back exactly", bool(stopped) and ie() == theirs and record() is None, "now=%s record=%s" % (ie(), record()))
+    subprocess.run(["sc", "start", "Spofy"], capture_output=True, text=True)
+    expect("started again in the proxy mode it connects and points the system proxy at itself",
+           bool(until(lambda: pipe_open() and ie()[1] == "127.0.0.1:%s" % port, 60, 0.5)) and browser() == "204", "now=%s" % (ie(),))
+
+    ui = Pipe(PIPE)
+    ui.ask("set", key="mode", value=None)
+    ui.close()
+    tunnel = until(lambda: ie() == theirs and adapter() == "Up" and fetch(4) == "204", 60, 0.5)
+    expect("back to the VPN mode: the person's proxy settings are back, the adapter is up, a request from the uplink address does not leave",
+           bool(tunnel) and not past(source), "now=%s adapter=%s" % (ie(), adapter()))
+    ie(was)
+
+
 def service_scenario(source, servers, sub):
     source_address[0] = source
     tls()
@@ -847,6 +982,7 @@ def service_scenario(source, servers, sub):
            "adapter=%s" % adapter())
     subprocess.run(["sc", "start", "Spofy"], capture_output=True, text=True)
     expect("started again it connects by itself", bool(until(lambda: pipe_open() and adapter() == "Up" and fetch(4) == "204", 60, 0.5)))
+    proxy_scenario(source, servers)
 
     ui = Pipe(PIPE)
     ui.ask("set", key="killSwitch", value=True)
