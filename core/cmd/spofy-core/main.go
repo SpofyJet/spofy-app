@@ -185,6 +185,7 @@ type served struct {
 	settle   time.Duration
 	kept     bool
 	logs     io.Writer
+	opened   func()
 }
 
 func serve(args []string) int {
@@ -353,7 +354,12 @@ func (o served) run(ctx context.Context, out io.Writer) error {
 		a.Resume()
 	}()
 	if o.socket != "" {
-		err = listen(ctx, o.socket, a, platform, func() { fmt.Fprintln(out, `{"ev":"listening"}`) })
+		err = listen(ctx, o.socket, a, platform, func() {
+			fmt.Fprintln(out, `{"ev":"listening"}`)
+			if o.opened != nil {
+				go o.opened()
+			}
+		})
 	} else {
 		err = ipc.Serve(ctx, os.Stdin, out, a, nil)
 	}

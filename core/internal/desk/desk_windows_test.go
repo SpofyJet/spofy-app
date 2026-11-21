@@ -80,6 +80,15 @@ func TestFolderIsOpenOnlyToTheSystemAndAdministrators(t *testing.T) {
 		t.Fatal(err)
 	}
 	onlySystemAndAdmins(t, path, true)
+	if !trusted(path) {
+		t.Fatal("a folder made by an administrator's program is taken for someone else's on the next start")
+	}
+	if err := Secure(path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("our own folder was moved aside: %v", err)
+	}
 	inner := filepath.Join(path, "state")
 	if err := os.Mkdir(inner, 0o700); err != nil {
 		t.Fatal(err)
@@ -126,6 +135,37 @@ func TestALinkInPlaceOfTheFolderIsMovedAsideAndItsTargetIsLeftAlone(t *testing.T
 	moved, _ := filepath.Glob(path + ".untrusted-*")
 	if len(moved) != 1 {
 		t.Fatalf("the link was not moved aside: %v", moved)
+	}
+}
+
+func TestForgetRemovesOurFolderAndNeverFollowsALink(t *testing.T) {
+	base := t.TempDir()
+	path := filepath.Join(base, "Spofy")
+	if err := Secure(path); err != nil {
+		t.Fatal(err)
+	}
+	os.MkdirAll(filepath.Join(path, "state"), 0o700)
+	os.WriteFile(filepath.Join(path, "state", "data"), []byte("x"), 0o600)
+	if err := Forget(path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("the folder is still there: %v", err)
+	}
+	if err := Forget(path); err != nil {
+		t.Fatalf("a folder that is gone: %v", err)
+	}
+	target := filepath.Join(base, "elsewhere")
+	os.Mkdir(target, 0o755)
+	os.WriteFile(filepath.Join(target, "keep.txt"), []byte("x"), 0o644)
+	if out, err := exec.Command("cmd", "/c", "mklink", "/J", path, target).CombinedOutput(); err != nil {
+		t.Fatalf("mklink: %v %s", err, out)
+	}
+	if err := Forget(path); err == nil {
+		t.Fatal("a link in place of the folder was taken for ours")
+	}
+	if _, err := os.Stat(filepath.Join(target, "keep.txt")); err != nil {
+		t.Fatal("the link's target lost its files")
 	}
 }
 

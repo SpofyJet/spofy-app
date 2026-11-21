@@ -57,7 +57,11 @@ jobs:
         run: |
           CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -checklinkname=0" -o ../dist/spofy-core.exe ./cmd/spofy-core
           CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -H windowsgui" -o ../dist/spofy-tray.exe ./cmd/spofy-tray
-          ls -l ../dist/spofy-core.exe ../dist/spofy-tray.exe
+          version="$(sed -n 's/^version: \([0-9.]*\).*/\1/p' ../app/pubspec.yaml).$GITHUB_RUN_NUMBER"
+          python ../tools/windows/resources.py cmd/spofy-setup "Spofy Setup" "$version" ../app/windows/runner/resources/app_icon.ico cmd/spofy-setup/setup.manifest
+          CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -H windowsgui -X main.version=$version" -o ../dist/spofy-setup.exe ./cmd/spofy-setup
+          CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o ../dist/spofy-pack.exe ./cmd/spofy-pack
+          ls -l ../dist/*.exe
       - name: flutter
         run: |
           read -r version sum < spofy-app/tools/windows/flutter.sha256
@@ -78,6 +82,7 @@ jobs:
           cp ../dist/wintun.dll "$bundle/"
           cp ../dist/spofy-core.exe "$bundle/"
           cp ../dist/spofy-tray.exe "$bundle/"
+          cp ../dist/spofy-setup.exe "$bundle/uninstall.exe"
           ls -l "$bundle"
           du -sh "$bundle"
       - working-directory: spofy-app
@@ -91,5 +96,36 @@ jobs:
           name: windows
           path: |
             spofy-app/dist/shots
+            spofy-app/dist/spofy-setup.exe
+            spofy-app/dist/spofy-pack.exe
             spofy-app/app/build/windows/x64/runner/Release
+          retention-days: 7
+  installer:
+    needs: core
+    runs-on: windows-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: spofy-app
+      - uses: actions/download-artifact@v8
+        with:
+          name: windows
+          path: built
+      - working-directory: spofy-app
+        timeout-minutes: 30
+        run: |
+          mkdir -p dist/installer dist/stand
+          bundle=../built/app/build/windows/x64/runner/Release
+          cp "$bundle/spofy-core.exe" dist/stand/
+          version="$(sed -n 's/^version: \([0-9.]*\).*/\1/p' app/pubspec.yaml).$GITHUB_RUN_NUMBER"
+          python tools/windows/installer.py dist/stand/spofy-core.exe ../built/dist/spofy-pack.exe ../built/dist/spofy-setup.exe "$bundle" dist/installer "$version"
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: installer
+          path: spofy-app/dist/installer
           retention-days: 7

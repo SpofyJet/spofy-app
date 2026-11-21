@@ -45,7 +45,7 @@ func Secure(path string) error {
 	sa := &windows.SecurityAttributes{Length: uint32(unsafe.Sizeof(windows.SecurityAttributes{})), SecurityDescriptor: sd}
 	err = windows.CreateDirectory(windows.StringToUTF16Ptr(path), sa)
 	if err == nil {
-		return nil
+		return own(path)
 	}
 	if !errors.Is(err, windows.ERROR_ALREADY_EXISTS) {
 		return err
@@ -55,6 +55,34 @@ func Secure(path string) error {
 		return err
 	}
 	return windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, dacl, nil)
+}
+
+func Forget(path string) error {
+	attrs, err := windows.GetFileAttributes(windows.StringToUTF16Ptr(path))
+	if errors.Is(err, windows.ERROR_FILE_NOT_FOUND) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if attrs&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 || attrs&windows.FILE_ATTRIBUTE_DIRECTORY == 0 || !trusted(path) {
+		return fmt.Errorf("%s is not ours, left as it is", path)
+	}
+	return os.RemoveAll(path)
+}
+
+func own(path string) error {
+	if trusted(path) {
+		return nil
+	}
+	admins, err := windows.CreateWellKnownSid(windows.WinBuiltinAdministratorsSid)
+	if err == nil {
+		err = windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION, admins, nil, nil, nil)
+	}
+	if err != nil {
+		os.Remove(path)
+	}
+	return err
 }
 
 func trusted(path string) bool {

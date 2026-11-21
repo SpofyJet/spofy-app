@@ -1,0 +1,268 @@
+import ctypes
+import glob
+import hashlib
+import http.server
+import os
+import shutil
+import subprocess
+import sys
+import threading
+import time
+import winreg
+
+import stand
+from stand import PIPE, Pipe, expect, failed, past, pipe_open, ps, until
+
+PACK, STUB, BUNDLE, OUT = (os.path.abspath(a) for a in sys.argv[2:6])
+VERSION = sys.argv[6]
+HOME = os.path.join(os.environ["ProgramFiles"], "Spofy")
+DATA = os.path.join(os.environ["ProgramData"], "Spofy")
+SHORTCUT = os.path.join(os.environ["ProgramData"], r"Microsoft\Windows\Start Menu\Programs\Spofy.lnk")
+RUN = r"Software\Microsoft\Windows\CurrentVersion\Run"
+ENTRY = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\Spofy"
+KEPT = "5f0f5a7e-1d2b-4c3a-9b61-73706f667901"
+AWAY = "http://203.0.113.7/generate_204"
+STANDIN = os.path.join(os.environ["SystemRoot"], "System32", "whoami.exe")
+
+
+class Site(http.server.BaseHTTPRequestHandler):
+    hits = 0
+
+    def do_GET(self):
+        Site.hits += 1
+        self.send_response(204)
+        self.end_headers()
+
+    def log_message(self, *args):
+        pass
+
+
+def value(key, name):
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key, 0, winreg.KEY_READ | winreg.KEY_WOW64_64KEY) as k:
+            return winreg.QueryValueEx(k, name)[0]
+    except OSError:
+        return None
+
+
+def away(limit=3):
+    r = subprocess.run(["curl.exe", "-s", "-m", str(limit), "-o", "NUL", "-w", "%{http_code}", AWAY], capture_output=True, text=True)
+    return r.stdout.strip() == "204"
+
+
+def wfp(kind):
+    path = os.path.join(stand.WORK, kind + ".xml")
+    subprocess.run(["netsh", "wfp", "show", kind, "file=" + path], capture_output=True)
+    text = open(path, encoding="utf-8", errors="replace").read() if os.path.exists(path) else ""
+    return KEPT in text.lower() or ">Spofy<" in text
+
+
+def traces():
+    return {
+        "service": subprocess.run(["sc", "query", "Spofy"], capture_output=True).returncode == 0,
+        "files": os.path.exists(HOME),
+        "shortcut": os.path.exists(SHORTCUT),
+        "run": value(RUN, "Spofy") is not None,
+        "entry": value(ENTRY, "DisplayVersion") is not None,
+        "state": os.path.exists(DATA),
+        "adapter": stand.adapter() != "",
+        "pipe": pipe_open(),
+        "sublayers": wfp("sublayers"),
+        "filters": wfp("filters"),
+        "driver": "wintun.inf" in subprocess.run(["pnputil", "/enum-drivers"], capture_output=True, text=True).stdout.lower(),
+        "leftovers": sorted(os.path.basename(p) for p in glob.glob(HOME + ".*") + glob.glob(DATA + ".*")),
+    }
+
+
+def build(bundle, version):
+    if not os.path.exists(os.path.join(bundle, "uninstall.exe")):
+        shutil.copy(STUB, os.path.join(bundle, "uninstall.exe"))
+    path = os.path.join(OUT, "Spofy-%s-x64.exe" % version)
+    r = subprocess.run([PACK, "-stub", STUB, "-bundle", bundle, "-version", version, "-out", path], capture_output=True, text=True)
+    if r.returncode != 0:
+        raise SystemExit("pack %s: %s %s" % (version, r.stdout[-3000:], r.stderr[-3000:]))
+    print("     built " + r.stdout.strip(), flush=True)
+    return path
+
+
+def sign(exe):
+    kits = sorted(glob.glob(r"C:\Program Files (x86)\Windows Kits\10\bin\10.*\x64\signtool.exe"))
+    if not kits:
+        return False
+    pfx = os.path.join(stand.WORK, "stand.pfx")
+    if not os.path.exists(pfx):
+        ps("$c = New-SelfSignedCertificate -Type CodeSigningCert -Subject 'CN=Spofy Stand' -CertStoreLocation Cert:\\CurrentUser\\My; "
+           "Export-PfxCertificate -Cert $c -FilePath '%s' -Password (ConvertTo-SecureString -String 'stand' -Force -AsPlainText) | Out-Null; "
+           "Remove-Item $c.PSPath" % pfx)
+    r = subprocess.run([kits[-1], "sign", "/fd", "SHA256", "/f", pfx, "/p", "stand", exe], capture_output=True, text=True)
+    return r.returncode == 0
+
+
+def files(root):
+    return {os.path.relpath(os.path.join(d, f), root).lower(): digest(os.path.join(d, f)) for d, _, fs in os.walk(root) for f in fs}
+
+
+def variant(name, **swap):
+    folder = os.path.join(stand.WORK, name)
+    shutil.copytree(BUNDLE, folder)
+    for file, source in swap.items():
+        shutil.copy(source, os.path.join(folder, file.replace("_", "-") + ".exe"))
+    return folder
+
+
+def setup(exe):
+    log = os.path.join(OUT, os.path.basename(exe) + ".log")
+    at = time.time()
+    code = subprocess.run([exe, "-quiet", "-log", log], timeout=600).returncode
+    return code, time.time() - at
+
+
+def remove():
+    log = os.path.join(OUT, "uninstall.log")
+    at = time.time()
+    code = subprocess.run([os.path.join(HOME, "uninstall.exe"), "-uninstall", "-quiet", "-log", log], timeout=600).returncode
+    gone = until(lambda: not os.path.exists(HOME) and value(ENTRY, "DisplayVersion") is None, 120, 0.1)
+    return code, time.time() - at, bool(gone)
+
+
+def digest(path):
+    return hashlib.sha256(open(path, "rb").read()).hexdigest()
+
+
+class Watch:
+    def __init__(self, source):
+        self.source, self.leaks, self.through, self.going = source, 0, [], True
+        self.threads = [threading.Thread(target=self.leak, daemon=True), threading.Thread(target=self.tunnel, daemon=True)]
+        for t in self.threads:
+            t.start()
+
+    def leak(self):
+        while self.going:
+            self.leaks += past(self.source, 2)
+
+    def tunnel(self):
+        while self.going:
+            if away(1):
+                self.through.append(time.time())
+            time.sleep(0.1)
+
+    def stop(self, began):
+        self.going = False
+        for t in self.threads:
+            t.join(10)
+        seen = [began] + [t for t in self.through if t >= began]
+        return max(b - a for a, b in zip(seen, seen[1:] + [time.time()])), self.leaks
+
+
+def owner(hwnd):
+    pid = ctypes.c_uint32()
+    if hwnd:
+        stand.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+    return pid.value
+
+
+def connected(limit=60):
+    return bool(until(lambda: away(2), limit, 0.2))
+
+
+def scenario():
+    uplink = ps("(Get-NetRoute -DestinationPrefix 0.0.0.0/0 | Sort-Object -Property RouteMetric, ifMetric | Select-Object -First 1 | Get-NetAdapter).Name")
+    source = ps("(Get-NetIPAddress -InterfaceAlias '%s' -AddressFamily IPv4 | Select-Object -First 1).IPAddress" % uplink)
+    clean = traces()
+    expect("a clean machine: no trace of Spofy and the internet works directly", not any(clean.values()) and past(source), str(clean))
+
+    real = build(BUNDLE, VERSION)
+    old, new = build(BUNDLE, "0.0.0.1"), build(BUNDLE, "0.0.0.2")
+    signed = sign(new)
+    broken = build(variant("broken", spofy_core=STANDIN), "0.0.0.3")
+    damaged = os.path.join(OUT, "Spofy-damaged-x64.exe")
+    with open(new, "rb") as f, open(damaged, "wb") as d:
+        d.write(f.read()[: os.path.getsize(new) * 2 // 3])
+
+    site = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Site)
+    threading.Thread(target=site.serve_forever, daemon=True).start()
+    port = stand.free_port()
+    remote = stand.server(port, uplink, {"protocol": "freedom", "settings": {"redirect": "127.0.0.1:%d" % site.server_address[1], "finalRules": [{"action": "allow", "ip": ["127.0.0.1/32"]}]}})
+    stand.tls()
+    pages, address = stand.page(open(stand.listed(port), "rb").read())
+
+    code, took = setup(old)
+    up = until(pipe_open, 30, 0.2)
+    size = sum(os.path.getsize(os.path.join(d, f)) for d, _, fs in os.walk(HOME) for f in fs) if os.path.exists(HOME) else 0
+    tray = until(stand.tray_window, 30, 0.1)
+    expect("installed silently: the service runs, the tray is up and starts at logon, the window is in the Start menu",
+           code == 0 and bool(up) and bool(tray) and stand.tray_icon(tray) and value(RUN, "Spofy") == '"%s"' % os.path.join(HOME, "spofy-tray.exe")
+           and os.path.exists(SHORTCUT) and value(ENTRY, "DisplayVersion") == "0.0.0.1",
+           "code=%d s=%.1f on_disk=%.1f MB run=%s tray=%s" % (code, took, size / 1e6, value(RUN, "Spofy"), bool(tray)))
+    if not up:
+        return
+    ui = Pipe(PIPE)
+    added = ui.ask("subscribe", 60, url=address)
+    at = time.time()
+    on = ui.ask("connect", 60)
+    took = time.time() - at
+    hits = Site.hits
+    expect("a subscription and a connection through the installed service: another program goes through the tunnel",
+           bool(added) and added.get("ok") and bool(on) and on.get("ok") and away() and Site.hits > hits and not past(source),
+           "connect=%.2f s %s %s" % (took, str(added)[:200], str(on)[:200]))
+    expect("the Wintun driver is in the system while the tunnel is up", traces()["driver"])
+    ui.ask("set", key="killSwitch", value=True)
+    ui.ask("set", key="autoConnect", value=False)
+    ui.close()
+
+    window = subprocess.Popen([os.path.join(HOME, "spofy.exe")])
+    shown = until(stand.window, 30, 0.2)
+    before = owner(stand.tray_window())
+    watch = Watch(source)
+    began = time.time()
+    code, took = setup(new)
+    back = connected()
+    outage, leaks = watch.stop(began)
+    tray = until(lambda: owner(stand.tray_window()) not in (0, before), 30, 0.1)
+    expect("upgraded over itself with the kill switch and the window open: no reboot, the window closed, the tray replaced, the service connects by itself, nothing leaks",
+           code == 0 and bool(shown) and window.poll() is not None and bool(tray) and back and leaks == 0 and value(ENTRY, "DisplayVersion") == "0.0.0.2",
+           "code=%d setup=%.1f s vpn_down=%.1f s leaks=%d window=%s tray=%s signed=%s" % (code, took, outage, leaks, window.poll(), bool(tray), signed))
+
+    kept = files(HOME)
+    code, took = setup(damaged)
+    expect("a damaged installer is refused before anything is touched: the running version stays and keeps the tunnel",
+           code == 1 and files(HOME) == kept and value(ENTRY, "DisplayVersion") == "0.0.0.2" and away(), "code=%d s=%.1f" % (code, took))
+
+    kept = files(HOME)
+    watch = Watch(source)
+    began = time.time()
+    code, took = setup(broken)
+    back = connected()
+    outage, leaks = watch.stop(began)
+    left = files(HOME)
+    expect("an upgrade whose service does not start: every file of the running version is put back, it connects by itself, nothing leaks",
+           code == 9 and back and leaks == 0 and left == kept and value(ENTRY, "DisplayVersion") == "0.0.0.2" and not glob.glob(HOME + ".*"),
+           "code=%d setup=%.1f s vpn_down=%.1f s leaks=%d changed=%s" % (code, took, outage, leaks, sorted(k for k in set(kept) | set(left) if kept.get(k) != left.get(k))[:5]))
+
+    window = subprocess.Popen([os.path.join(HOME, "spofy.exe")])
+    until(stand.window, 30, 0.2)
+    stand.keep_journal()
+    code, took, gone = remove()
+    free = until(lambda: past(source, 3), 20, 0.2)
+    left = traces()
+    expect("uninstalled with the kill switch on and the window open: the internet works directly and nothing is left",
+           code == 0 and gone and bool(free) and left == clean and not stand.tray_window() and not glob.glob(HOME + "*"),
+           "code=%d s=%.1f left=%s tray=%s" % (code, took, {k: v for k, v in left.items() if v}, bool(stand.tray_window())))
+    print("     installer %.2f MB (%s), on disk %.1f MB" % (os.path.getsize(real) / 1e6, os.path.basename(real), size / 1e6))
+    pages.shutdown()
+    site.shutdown()
+    remote.p.kill()
+    subprocess.run(["certutil", "-delstore", "Root", "Spofy Stand CA"], capture_output=True)
+
+
+began = time.time()
+try:
+    scenario()
+finally:
+    if failed:
+        print("--- service\n" + stand.journal[0])
+        for name in sorted(os.listdir(OUT)):
+            if name.endswith(".log"):
+                print("--- %s\n%s" % (name, open(os.path.join(OUT, name), encoding="utf-8", errors="replace").read()[-2500:]))
+print("%s in %.0f s, %d failed" % ("INSTALLER OK" if not failed else "INSTALLER FAILED", time.time() - began, len(failed)))
+sys.exit(1 if failed else 0)

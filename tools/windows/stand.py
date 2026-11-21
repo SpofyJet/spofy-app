@@ -102,12 +102,12 @@ class Lines:
         return " | ".join(self.lines()[-6:] + open(self.err, encoding="utf-8", errors="replace").read().strip().splitlines()[-6:])[-1500:]
 
 
-def server(port, uplink):
+def server(port, uplink, outbound=None):
     config = {
         "log": {"loglevel": "info"},
         "inbounds": [{"tag": "in", "listen": "127.0.0.1", "port": port, "protocol": "vless", "settings": {"clients": [{"id": USER}], "decryption": "none"},
                       "streamSettings": {"network": "tcp", "security": "none"}}],
-        "outbounds": [{"protocol": "freedom", "settings": {"domainStrategy": "UseIPv4"}, "streamSettings": {"sockopt": {"interface": uplink}}}],
+        "outbounds": [outbound or {"protocol": "freedom", "settings": {"domainStrategy": "UseIPv4"}, "streamSettings": {"sockopt": {"interface": uplink}}}],
     }
     s = Lines("server", [CORE, "engine"])
     s.p.stdin.write(json.dumps({"id": 1, "op": "start", "config": config}) + "\n")
@@ -273,6 +273,13 @@ class Pipe:
 
 
 PIPE = r"\\.\pipe\spofy"
+JOURNAL = os.path.join(os.environ.get("ProgramData", "C:\\ProgramData"), "Spofy", "service.log")
+journal = [""]
+
+
+def keep_journal():
+    if os.path.exists(JOURNAL):
+        journal[0] = open(JOURNAL, encoding="utf-8", errors="replace").read()[-2000:]
 
 
 OUTSIDER = r"""
@@ -727,6 +734,7 @@ def service_scenario(source, servers, sub):
     on = ui.ask("connect", 60)
     ui.close()
     expect("connected again with the kill switch", bool(on) and on.get("ok") and not past(source), str(on)[:200])
+    keep_journal()
     r = subprocess.run([CORE, "uninstall"], capture_output=True, text=True)
     gone = r.returncode == 0 and until(lambda: subprocess.run(["sc", "query", "Spofy"], capture_output=True).returncode != 0 and not pipe_open(), 30, 0.5)
     expect("the service is removed with its channel", bool(gone), r.stderr.strip()[-300:])
@@ -822,22 +830,31 @@ def scenario():
     core = run(sub, "-guard")
     started = core.event("started", 60)
     held = bool(started) and not past(source)
+    engines = engine_of(core.p.pid)
     subprocess.run(["taskkill", "/F", "/PID", str(core.p.pid)], capture_output=True)
+    killed = time.time()
+    gone = {}
+
+    def cleared():
+        if "engine" not in gone and not engine_of(core.p.pid):
+            gone["engine"] = round(time.time() - killed, 1)
+        if "adapter" not in gone and adapter() == "":
+            gone["adapter"] = round(time.time() - killed, 1)
+        return len(gone) == 2
     free = until(lambda: past(source, 3) and fetch(6) == "204", 30, 0.5)
-    left = until(lambda: adapter() == "" and not engine_of(core.p.pid), 20, 0.5)
+    left = until(cleared, 20, 0.5)
     expect("the supervisor is killed: the block and the adapter are gone with it and the internet works", held and bool(free) and bool(left),
-           "held=%s free=%s adapter=%s" % (held, bool(free), adapter()))
+           "held=%s free=%s gone_after_s=%s engines_before=%s engines_left=%s adapter=%s" % (held, bool(free), gone, engines, engine_of(core.p.pid), adapter()))
 
     try:
         second = free_port()
         service_scenario(source, [remote, server(second, uplink)], listed(port, second))
     finally:
         if subprocess.run(["sc", "query", "Spofy"], capture_output=True).returncode == 0:
+            keep_journal()
             subprocess.run([CORE, "uninstall"], capture_output=True)
     if failed:
-        log = os.path.join(os.environ.get("ProgramData", "C:\\ProgramData"), "Spofy", "service.log")
-        if os.path.exists(log):
-            print("--- service\n" + open(log, encoding="utf-8", errors="replace").read()[-2000:])
+        print("--- service\n" + journal[0])
         print("--- run\n%s\n--- server\n%s" % (core.tail(), remote.tail()))
         print(ps("Get-NetAdapter | Format-Table -AutoSize Name, InterfaceDescription, Status; Get-NetRoute -AddressFamily IPv4 | Sort-Object RouteMetric | Select-Object -First 12 | Format-Table -AutoSize DestinationPrefix, NextHop, InterfaceAlias, RouteMetric"))
     for p in (core.p, remote.p):
@@ -845,7 +862,8 @@ def scenario():
             p.kill()
 
 
-began = time.time()
-scenario()
-print("%s in %.0f s, %d failed" % ("WINDOWS OK" if not failed else "WINDOWS FAILED", time.time() - began, len(failed)))
-sys.exit(1 if failed else 0)
+if __name__ == "__main__":
+    began = time.time()
+    scenario()
+    print("%s in %.0f s, %d failed" % ("WINDOWS OK" if not failed else "WINDOWS FAILED", time.time() - began, len(failed)))
+    sys.exit(1 if failed else 0)

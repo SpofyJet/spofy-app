@@ -12,6 +12,7 @@ import (
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/mgr"
+	"golang.zx2c4.com/wintun"
 
 	"github.com/SpofyJet/spofy-app/core/internal/desk"
 	"github.com/SpofyJet/spofy-app/core/internal/guard"
@@ -77,7 +78,7 @@ func prepare() (served, func(), error) {
 		device: sub.Device{HWID: hwid, OS: "Windows", OSVersion: release, Model: model, AppVersion: version},
 		socket: pipe,
 		watch:  time.Second, quiet: 5 * time.Second, renew: 15 * time.Minute, resample: time.Hour, settle: 10 * time.Second,
-		logs: logs,
+		logs: logs, opened: func() { greet(root, logs) },
 	}, closer, nil
 }
 
@@ -172,7 +173,26 @@ func install() error {
 	if err := s.SetRecoveryActionsOnNonCrashFailures(true); err != nil {
 		return err
 	}
-	return s.Start()
+	if err := s.Start(); err != nil {
+		return err
+	}
+	return running(s)
+}
+
+func running(s *mgr.Service) error {
+	for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+		q, err := s.Query()
+		if err != nil {
+			return err
+		}
+		switch q.State {
+		case svc.Running:
+			return nil
+		case svc.Stopped:
+			return fmt.Errorf("the service stopped at start, code %d/%d", q.Win32ExitCode, q.ServiceSpecificExitCode)
+		}
+	}
+	return errors.New("the service did not start in 30 s")
 }
 
 func stop(s *mgr.Service) {
@@ -190,10 +210,32 @@ func uninstall() error {
 	}
 	defer m.Disconnect()
 	s, err := m.OpenService(serviceName)
-	if err != nil {
-		return guard.Release()
+	switch {
+	case err == nil:
+		defer s.Close()
+		stop(s)
+		if err := guard.Release(); err != nil {
+			return errors.Join(err, s.Start())
+		}
+		if err := s.Delete(); err != nil {
+			return errors.Join(err, s.Start())
+		}
+	case errors.Is(err, windows.ERROR_SERVICE_DOES_NOT_EXIST):
+		if err := guard.Release(); err != nil {
+			return err
+		}
+	default:
+		return err
 	}
-	defer s.Close()
-	stop(s)
-	return errors.Join(s.Delete(), guard.Release())
+	if err := wintun.Uninstall(); err != nil {
+		fmt.Fprintln(os.Stderr, "the Wintun driver stays:", err)
+	}
+	root, err := desk.Root()
+	if err == nil {
+		err = desk.Forget(root)
+	}
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "the state stays:", err)
+	}
+	return nil
 }

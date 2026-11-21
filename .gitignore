@@ -5,3 +5,5 @@ dist/
 .DS_Store
 docs/research/
 __pycache__/
+*.syso
+core/cmd/*/resources.rc

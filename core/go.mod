@@ -4,6 +4,7 @@ go 1.27
 
 require (
 	github.com/tailscale/wf v0.0.0-20240214030419-6fbb0a674ee6
+	github.com/ulikunitz/xz v0.5.17
 	github.com/xtls/xray-core v0.0.0-00010101000000-000000000000
 	golang.org/x/sys v0.50.0
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2
