@@ -55,6 +55,7 @@ const (
 	KeyIPv6         = "ipv6"
 	KeyLAN          = "lan"
 	KeyLogLevel     = "logLevel"
+	KeyRemind       = "remind"
 )
 
 var Resolvers = map[string][]string{
@@ -74,6 +75,15 @@ var checks = map[string]func(json.RawMessage) bool{
 	KeyProbeTimeout: validSeconds,
 	KeyProbeURL:     validURL,
 	KeyDNS:          validDNS,
+	KeyRemind:       validRemind,
+}
+
+func validRemind(v json.RawMessage) bool {
+	switch string(v) {
+	case "0", "1", "3", "5", "7":
+		return true
+	}
+	return false
 }
 
 func validLevel(v json.RawMessage) bool {

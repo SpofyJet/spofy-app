@@ -55,6 +55,8 @@ class CoreService : VpnService() {
     private var core: Process? = null
     private var link: LocalSocket? = null
     private var sent = 100
+    private var expire = -1L
+    private var remind = Reminders.DEFAULT
 
     @Volatile
     private var closing = false
@@ -205,6 +207,7 @@ class CoreService : VpnService() {
         socket.connect(LocalSocketAddress(path.path, LocalSocketAddress.Namespace.FILESYSTEM))
         link = socket
         send(JSONObject().put("id", 1).put("op", "platform").put("owners", Build.VERSION.SDK_INT >= 29))
+        send(JSONObject().put("id", 2).put("op", "hello"))
         asks.execute {
             ready = true
             while (true) {
@@ -258,7 +261,26 @@ class CoreService : VpnService() {
         }
     }
 
+    private fun learn(message: JSONObject) {
+        val snapshot = message.optJSONObject("snapshot")
+        when {
+            snapshot != null -> {
+                expire = snapshot.optJSONObject("subscription")?.optLong("expire") ?: 0
+                remind = days(snapshot.optJSONObject("settings"))
+            }
+            message.optString("ev") == "subscription" -> expire = message.optJSONObject("subscription")?.optLong("expire") ?: 0
+            message.optString("ev") == "settings" -> remind = days(message.optJSONObject("settings"))
+            else -> return
+        }
+        if (expire >= 0) {
+            Reminders.plan(this, expire, remind)
+        }
+    }
+
+    private fun days(settings: JSONObject?) = settings?.optInt("remind", Reminders.DEFAULT) ?: Reminders.DEFAULT
+
     private fun handle(message: JSONObject) {
+        learn(message)
         if (!message.has("ask")) {
             if (message.optString("ev") == "connection") {
                 val state = message.getJSONObject("connection").optString("state")

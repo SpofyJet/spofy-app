@@ -1708,3 +1708,20 @@ func TestAMovedSubscriptionKeepsItsPlaceAndANewOneTakesTheNewAddress(t *testing.
 		t.Fatalf("a temporary redirect replaced the address: %q", u)
 	}
 }
+
+func TestTheReminderTakesOnlyTheOfferedDays(t *testing.T) {
+	b := newBench(t, nil)
+	for _, bad := range []string{`2`, `"3"`, `3.0`, `-1`, `30`, `true`} {
+		if err := b.app.Set(KeyRemind, json.RawMessage(bad)); code(err) != CodeValue {
+			t.Fatalf("remind = %s: %v", bad, err)
+		}
+	}
+	for _, good := range []string{`0`, `1`, `3`, `5`, `7`, `null`} {
+		if err := b.app.Set(KeyRemind, json.RawMessage(good)); err != nil {
+			t.Fatalf("remind = %s: %v", good, err)
+		}
+	}
+	if _, kept := b.app.Snapshot().Settings[KeyRemind]; kept {
+		t.Fatal("null did not bring back the default")
+	}
+}

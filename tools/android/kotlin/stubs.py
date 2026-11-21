@@ -8,7 +8,7 @@ groups = {}
 for path in sorted(glob.glob(res + "/*/*")):
     folder = os.path.basename(os.path.dirname(path)).split("-")[0]
     if folder == "values":
-        for kind, name in re.findall(r'<(string|style|color|dimen)\s+name="([^"]+)"', open(path).read()):
+        for kind, name in re.findall(r'<(string|style|color|dimen|plurals)\s+name="([^"]+)"', open(path).read()):
             groups.setdefault(kind, set()).add(name.replace(".", "_"))
     else:
         groups.setdefault(folder, set()).add(os.path.splitext(os.path.basename(path))[0])
