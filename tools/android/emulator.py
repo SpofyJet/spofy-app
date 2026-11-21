@@ -373,12 +373,18 @@ def reach(limit=40):
     return None
 
 
+WAITING = re.compile(r"Alarm\{[^}\n]*\}[^\n]*\n\s*tag=\*w?alarm\*:app\.spofy\.REMIND")
+
+
 def alarmed():
-    return re.search(r"tag=\*w?alarm\*:app\.spofy\.REMIND", shell("dumpsys alarm", limit=30)) is not None
+    return WAITING.search(shell("dumpsys alarm", limit=30)) is not None
 
 
 def alarms():
-    return " | ".join(l.strip() for l in shell("dumpsys alarm", limit=30).splitlines() if "app.spofy" in l)[:600]
+    lines = shell("dumpsys alarm", limit=30).splitlines()
+    near = [i for i, l in enumerate(lines) if "app.spofy.REMIND" in l]
+    heads = [l.strip()[:60] for l in lines if l.startswith("  ") and not l.startswith("   ") and l.strip().endswith(":")]
+    return ("sections=%s | " % heads[:12] + " | ".join(" / ".join(x.strip() for x in lines[max(i - 2, 0):i + 1]) for i in near))[:900]
 
 
 def front():
@@ -519,7 +525,7 @@ def scenario():
     expect("the end of the subscription is reminded: an alarm waits for it", bool(planned), "" if planned else alarms())
     ui.call("set", key="remind", value=0)
     off = until(lambda: not alarmed(), 20)
-    expect("with reminders switched off no alarm waits", bool(off))
+    expect("with reminders switched off no alarm waits", bool(off), "" if off else alarms())
     ui.call("set", key="remind", value=None)
     until(alarmed, 20)
     shell("am broadcast -n %s/.ReminderReceiver -a app.spofy.REMIND --el expire 1798761600 --ei kind 0" % PACKAGE)
