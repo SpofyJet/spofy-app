@@ -4,6 +4,7 @@ APK, CORE, OUT = sys.argv[1], os.path.abspath(sys.argv[2]), os.path.abspath(sys.
 RELEASE = sys.argv[4] if len(sys.argv) > 4 else ""
 INSIDE = "127.0.0.2"
 RESOLVER = "172.19.0.2"
+PRIVATE = {"8.8.8.8", "8.8.4.4", "2001:4860:4860::8888", "2001:4860:4860::8844"}
 PACKAGE = "app.spofy"
 DATA = "/data/user/0/" + PACKAGE
 GATE = "10.0.2.2"
@@ -312,6 +313,11 @@ def probe(o):
     return o[4] == RESOLVER + ":853"
 
 
+def https(o):
+    host, port = o[4].rsplit(":", 1)
+    return port == "443" and host.strip("[]") in PRIVATE
+
+
 def past(o):
     host, port = o[4].rsplit(":", 1)
     return port == "53" or (o[0] == "tcp" and port == "853" and ipaddress.ip_address(host.strip("[]")).is_global)
@@ -600,10 +606,10 @@ def scenario():
            "s=%.1f app=%s rest=%s device=%s" % (took, mine[-24:], rest[-24:], tunnel()))
     shell("log -p d -t spofy mark-only")
     found = until(lambda: named("example.edu"), 20, 1)
-    asked = [o for o in owners("mark-only") if o[4].endswith(":53")]
+    lookups = [o for o in owners("mark-only") if o[4].endswith(":53")]
     if phone["sdk"] >= 29:
-        expect("the only app in the VPN resolves names, and its DNS goes through the tunnel", bool(found) and bool(asked) and all(o[1] == "2000" and o[2] == "true" for o in asked),
-               "names=%s dns=%s" % (bool(found), [(o[0], o[1], o[2]) for o in asked]))
+        expect("the only app in the VPN resolves names, and its DNS goes through the tunnel", bool(found) and bool(lookups) and all(o[1] == "2000" and o[2] == "true" for o in lookups),
+               "names=%s dns=%s" % (bool(found), [(o[0], o[1], o[2]) for o in lookups]))
     else:
         expect("the only app in the VPN resolves names", bool(found))
     ok, took = chosen(None)
@@ -629,9 +635,12 @@ def scenario():
     log = adb("logcat", "-d", "-s", "spofy:D", limit=60).splitlines()
     probes = [o for o in checked if o[2] == "false" and probe(o)]
     passed = [o for o in checked if o[2] == "false" and past(o)]
-    refused = [o for o in checked if o[2] == "false" and not probe(o) and not past(o)]
+    tls = [o for o in checked if o[2] == "false" and https(o)]
+    refused = [o for o in checked if o[2] == "false" and not probe(o) and not past(o) and not https(o)]
     if probes:
         print("     the system's check for DNS over TLS on the tunnel's DNS address was refused %d times: there is no such server, it uses plain DNS there" % len(probes), flush=True)
+    if tls:
+        print("     the system's DNS over HTTPS to the private DNS server was refused %d times: it then uses DNS over TLS, which goes past the tunnel" % len(tls), flush=True)
     if passed:
         print("     DNS whose owner the system does not name went past the tunnel %d times (port 53 %d, DNS over TLS %d)" % (
             len(passed), sum(o[4].endswith(":53") for o in passed), sum(o[4].endswith(":853") for o in passed)), flush=True)
