@@ -126,7 +126,11 @@ jobs:
           bundle=../built/app/build/windows/x64/runner/Release
           cp "$bundle/spofy-core.exe" dist/stand/
           version="$(sed -n 's/^version: \([0-9.]*\).*/\1/p' app/pubspec.yaml).$GITHUB_RUN_NUMBER"
-          python tools/windows/installer.py dist/stand/spofy-core.exe ../built/dist/spofy-pack.exe ../built/dist/spofy-setup.exe "$bundle" dist/installer "$version" ../built/dist/spofy-release.exe
+          code=0
+          timeout 25m python -u tools/windows/installer.py dist/stand/spofy-core.exe ../built/dist/spofy-pack.exe ../built/dist/spofy-setup.exe "$bundle" dist/installer "$version" ../built/dist/spofy-release.exe > dist/installer/stand.log 2>&1 < /dev/null || code=$?
+          cat dist/installer/stand.log
+          tasklist //v > dist/installer/tasks-after.txt 2>&1 || true
+          exit $code
       - if: always()
         uses: actions/upload-artifact@v7
         with:
