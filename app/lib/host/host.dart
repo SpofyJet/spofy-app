@@ -20,6 +20,8 @@ abstract interface class Host {
 
   AppList? get apps;
 
+  bool get proxy;
+
   void Function(String address)? get browse;
 
   Future<bool> Function(String file)? get install;
@@ -54,6 +56,9 @@ class AndroidHost implements Host {
 
   @override
   AppList? get apps => const _AndroidApps();
+
+  @override
+  bool get proxy => false;
 
   @override
   void Function(String address)? get browse =>
@@ -163,6 +168,9 @@ class DesktopHost implements Host {
 
   @override
   AppList? get apps => null;
+
+  @override
+  bool get proxy => false;
 
   @override
   void Function(String address)? get browse =>

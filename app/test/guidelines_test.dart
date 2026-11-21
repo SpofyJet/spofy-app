@@ -19,6 +19,9 @@ void main() {
     'apps': (() => home(VpnState.idle, apps: FakeApps()), [S.settings, S.apps]),
     'advanced': (() => home(VpnState.idle), [S.settings, S.advanced]),
     'dns': (() => home(VpnState.idle), [S.settings, S.advanced, S.dns]),
+    'settings in proxy mode': (() => proxyScene(), [S.settings]),
+    'connection mode': (() => home(VpnState.idle, proxy: true), [S.settings, S.mode]),
+    'advanced in proxy mode': (() => proxyScene(), [S.settings, S.advanced]),
     'support': (
       () => home(VpnState.stalled, server: 'de', code: 'server_unreachable', browse: (_) {}),
       [S.settings, S.support],

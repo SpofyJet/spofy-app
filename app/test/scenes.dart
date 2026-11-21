@@ -145,12 +145,13 @@ class Scene {
     Failure? failure,
     VoidCallback? always,
     AppList? apps,
+    bool proxy = false,
     void Function(String address)? browse,
     Future<bool> Function(String file)? install,
     List<Brief> briefs = const [],
     Update? update,
   }) : transport = SilentTransport() {
-    model = AppModel(CoreClient(transport), always: always, apps: apps, browse: browse, install: install)
+    model = AppModel(CoreClient(transport), always: always, apps: apps, proxy: proxy, browse: browse, install: install)
       ..snapshot = Snapshot(
         version: '0.1.0',
         connection: connection,
@@ -184,6 +185,7 @@ Scene home(
   Map<String, Object?> settings = const {},
   VoidCallback? always,
   AppList? apps,
+  bool proxy = false,
   void Function(String address)? browse,
   Future<bool> Function(String file)? install,
   List<Brief> briefs = const [],
@@ -193,6 +195,7 @@ Scene home(
 }) => Scene(
   always: always,
   apps: apps,
+  proxy: proxy,
   browse: browse,
   install: install,
   briefs: briefs,
@@ -210,6 +213,14 @@ Scene home(
   settings: settings,
   traffic: state.protecting ? const Traffic(up: 83 * 1024 * 1024, down: 1288490188) : const Traffic(),
   speed: state.protecting && !pending ? const Traffic(up: 190464, down: 13107200) : null,
+);
+
+Scene proxyScene({VpnState state = VpnState.connected}) => home(
+  state,
+  server: 'nl',
+  delay: 38,
+  proxy: true,
+  settings: {'mode': 'proxy', 'proxyPort': 41234, 'killSwitch': true, 'dns': 'cloudflare'},
 );
 
 Future<void> loadAssets() async {
@@ -261,7 +272,7 @@ Future<void> golden(WidgetTester tester, String name) async {
 }
 
 Future<void> open(WidgetTester tester, String label) async {
-  final target = find.bySemanticsLabel(RegExp('^$label')).hitTestable();
+  final target = find.bySemanticsLabel(RegExp('^${RegExp.escape(label)}')).hitTestable();
   if (target.evaluate().isEmpty) {
     await tester.scrollUntilVisible(
       target,

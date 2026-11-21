@@ -150,16 +150,17 @@ class SwitchTile extends StatelessWidget {
   final String subtitle;
   final Widget? leading;
   final bool value;
-  final ValueChanged<bool> onChanged;
+  final ValueChanged<bool>? onChanged;
 
   @override
   Widget build(BuildContext context) {
+    final changed = onChanged;
     return Semantics(
-      toggled: value,
+      toggled: changed == null ? null : value,
       hint: subtitle.isEmpty ? null : subtitle,
       child: Pressable(
         label: title,
-        onTap: () => onChanged(!value),
+        onTap: changed == null ? null : () => changed(!value),
         child: Panel(
           padding: EdgeInsets.symmetric(horizontal: 16, vertical: leading == null ? 14 : 12),
           child: Row(
@@ -175,8 +176,7 @@ class SwitchTile extends StatelessWidget {
                       Row(
                         children: [
                           Expanded(child: Text(title, style: Ink.strong)),
-                          const SizedBox(width: 12),
-                          Toggle(value: value),
+                          if (changed != null) ...[const SizedBox(width: 12), Toggle(value: value)],
                         ],
                       ),
                       if (subtitle.isNotEmpty)

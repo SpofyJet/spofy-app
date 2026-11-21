@@ -30,6 +30,7 @@ enum Glyph {
   home,
   pulse,
   infinity,
+  mode,
 }
 
 class GlyphIcon extends StatelessWidget {
@@ -243,6 +244,11 @@ class _GlyphPainter extends CustomPainter {
             ..cubicTo(8.5, 16, 10, 15, 12, 12),
           line,
         );
+      case Glyph.mode:
+        canvas.drawLine(const Offset(4, 8), const Offset(19, 8), line);
+        canvas.drawPath(poly(const [Offset(15.5, 4.5), Offset(19, 8), Offset(15.5, 11.5)]), line);
+        canvas.drawLine(const Offset(20, 16), const Offset(5, 16), line);
+        canvas.drawPath(poly(const [Offset(8.5, 12.5), Offset(5, 16), Offset(8.5, 19.5)]), line);
     }
   }
 

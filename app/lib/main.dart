@@ -19,6 +19,7 @@ void main() {
     permit: platform.permit,
     always: platform.always,
     apps: platform.apps,
+    proxy: platform.proxy,
     browse: platform.browse,
     install: platform.install,
   );

@@ -53,6 +53,10 @@ abstract final class S {
     'Если VPN оборвётся, интернет остановится, а не пойдёт напрямую',
     'If the VPN drops, the internet stops instead of going around it',
   );
+  static String get killSwitchProxy => _t(
+    'Не действует в режиме прокси: программы без прокси идут напрямую',
+    'Doesn’t apply in proxy mode: programs without the proxy go direct',
+  );
 
   static String version(String number) => _t('Версия $number', 'Version $number');
   static String get apps => _t('Приложения', 'Apps');
@@ -221,6 +225,24 @@ abstract final class S {
   static String get look => _t('Вид', 'Appearance');
   static String get network => _t('Сеть', 'Network');
   static String get advanced => _t('Дополнительно', 'Advanced');
+  static String get mode => _t('Режим работы', 'Connection mode');
+  static String get modeHint => _t(
+    'Прокси не создаёт сетевой адаптер. Выберите его, если адаптер VPN мешает другой программе или рабочей сети',
+    'The proxy adds no network adapter. Choose it if the VPN adapter gets in the way of another program or a work network',
+  );
+  static String get modeVpn => _t('VPN (весь трафик)', 'VPN (all traffic)');
+  static String get modeVpnHint =>
+      _t('Через сервер идут все программы и игры', 'Every program and game goes through the server');
+  static String get modeProxy => _t('Системный прокси', 'System proxy');
+  static String get modeProxyHint => _t(
+    'Через сервер идут браузеры и программы, которые используют прокси Windows. Остальные — напрямую',
+    'Browsers and programs that use the Windows proxy go through the server. The rest go direct',
+  );
+  static String proxyAt(int port) => '$modeProxy · 127.0.0.1:$port';
+  static String get tunnelProxy => _t(
+    'В режиме прокси действует только фрагментация. Домашняя сеть всегда идёт напрямую, DNS и IPv6 — настройки режима VPN',
+    'In proxy mode only fragmentation applies. The local network always goes direct; DNS and IPv6 belong to the VPN mode',
+  );
 
   static String _lower(String s) =>
       s.length > 1 && s[1] == s[1].toLowerCase() ? s[0].toLowerCase() + s.substring(1) : s;

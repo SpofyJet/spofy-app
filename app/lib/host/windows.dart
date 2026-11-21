@@ -25,6 +25,9 @@ class WindowsHost implements Host {
   AppList? get apps => null;
 
   @override
+  bool get proxy => true;
+
+  @override
   void Function(String address)? get browse => browseOnWindows;
 
   @override
