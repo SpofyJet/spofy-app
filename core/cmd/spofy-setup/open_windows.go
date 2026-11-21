@@ -16,6 +16,8 @@ import (
 var (
 	shellExecuteEx           = windows.NewLazySystemDLL("shell32.dll").NewProc("ShellExecuteExW")
 	allowSetForegroundWindow = user32.NewProc("AllowSetForegroundWindow")
+	getShellWindow           = user32.NewProc("GetShellWindow")
+	createProcessWithToken   = windows.NewLazySystemDLL("advapi32.dll").NewProc("CreateProcessWithTokenW")
 )
 
 type executeInfo struct {
@@ -74,12 +76,16 @@ func (s *setup) show(elevated bool) int {
 		return codeOK
 	}
 	path := filepath.Join(s.home, window)
-	cmd := exec.Command(path)
-	if root, err := windows.GetSystemWindowsDirectory(); elevated && err == nil {
-		cmd = exec.Command(filepath.Join(root, "explorer.exe"), path)
-	}
-	cmd.Dir = s.home
 	allowSetForegroundWindow.Call(0xFFFFFFFF)
+	if elevated {
+		err := asShell(path, s.home)
+		if err == nil {
+			return codeOK
+		}
+		s.printf("the window opens with the rights of the setup: %v", err)
+	}
+	cmd := exec.Command(path)
+	cmd.Dir = s.home
 	if err := cmd.Start(); err != nil {
 		return s.fail(codeFailed, says().failed, err)
 	}
@@ -114,4 +120,51 @@ func (s *setup) elevate(self string, args []string, raised bool) int {
 		return codeFailed
 	}
 	return int(code)
+}
+
+func asShell(path, dir string) error {
+	hwnd, _, _ := getShellWindow.Call()
+	if hwnd == 0 {
+		return errors.New("no shell on this desktop")
+	}
+	var pid uint32
+	if _, err := windows.GetWindowThreadProcessId(windows.HWND(hwnd), &pid); err != nil {
+		return err
+	}
+	p, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, pid)
+	if err != nil {
+		return err
+	}
+	defer windows.CloseHandle(p)
+	var shell windows.Token
+	if err := windows.OpenProcessToken(p, windows.TOKEN_DUPLICATE, &shell); err != nil {
+		return err
+	}
+	defer shell.Close()
+	var t windows.Token
+	if err := windows.DuplicateTokenEx(shell, windows.TOKEN_QUERY|windows.TOKEN_DUPLICATE|windows.TOKEN_ASSIGN_PRIMARY, nil, windows.SecurityImpersonation, windows.TokenPrimary, &t); err != nil {
+		return err
+	}
+	defer t.Close()
+	app, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return err
+	}
+	line, err := windows.UTF16PtrFromString(windows.EscapeArg(path))
+	if err != nil {
+		return err
+	}
+	wd, err := windows.UTF16PtrFromString(dir)
+	if err != nil {
+		return err
+	}
+	si := windows.StartupInfo{Cb: uint32(unsafe.Sizeof(windows.StartupInfo{}))}
+	var pi windows.ProcessInformation
+	if r, _, err := createProcessWithToken.Call(uintptr(t), 0, uintptr(unsafe.Pointer(app)), uintptr(unsafe.Pointer(line)), 0, 0,
+		uintptr(unsafe.Pointer(wd)), uintptr(unsafe.Pointer(&si)), uintptr(unsafe.Pointer(&pi))); r == 0 {
+		return err
+	}
+	windows.CloseHandle(pi.Thread)
+	windows.CloseHandle(pi.Process)
+	return nil
 }

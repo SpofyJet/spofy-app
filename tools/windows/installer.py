@@ -57,14 +57,17 @@ def away(limit=3):
 
 def wfp(kind):
     path = os.path.join(stand.WORK, kind + ".xml")
-    subprocess.run(["netsh", "wfp", "show", kind, "file=" + path], capture_output=True)
+    try:
+        subprocess.run(["netsh", "wfp", "show", kind, "file=" + path], capture_output=True, timeout=60)
+    except subprocess.TimeoutExpired:
+        return "stuck"
     text = open(path, encoding="utf-8", errors="replace").read() if os.path.exists(path) else ""
     return KEPT in text.lower() or ">Spofy<" in text
 
 
 def traces():
     return {
-        "service": subprocess.run(["sc", "query", "Spofy"], capture_output=True).returncode == 0,
+        "service": subprocess.run(["sc", "query", "Spofy"], capture_output=True, timeout=30).returncode == 0,
         "files": os.path.exists(HOME),
         "shortcut": os.path.exists(SHORTCUT),
         "desktop": os.path.exists(DESKTOP),
@@ -75,7 +78,7 @@ def traces():
         "pipe": pipe_open(),
         "sublayers": wfp("sublayers"),
         "filters": wfp("filters"),
-        "driver": "wintun.inf" in subprocess.run(["pnputil", "/enum-drivers"], capture_output=True, text=True).stdout.lower(),
+        "driver": "wintun.inf" in subprocess.run(["pnputil", "/enum-drivers"], capture_output=True, text=True, timeout=60).stdout.lower(),
         "leftovers": sorted(os.path.basename(p) for p in glob.glob(HOME + ".*") + glob.glob(DATA + ".*")),
     }
 
@@ -411,7 +414,9 @@ def rescue(after):
     with open(stuck, "w") as f:
         faulthandler.dump_traceback(file=f, all_threads=True)
     print("STUCK after %d s, the threads:\n%s" % (after, open(stuck).read()), flush=True)
-    print("     traces before the rescue: %s" % traces(), flush=True)
+    for image in ("Spofy-*", "uninstall*", "consent.exe"):
+        r = subprocess.run(["taskkill", "/F", "/T", "/FI", "IMAGENAME eq " + image], capture_output=True, text=True, timeout=30)
+        print("     taskkill %s: %s" % (image, (r.stdout + r.stderr).strip()[:300]), flush=True)
     if os.path.exists(os.path.join(HOME, "uninstall.exe")):
         try:
             subprocess.run([os.path.join(HOME, "uninstall.exe"), "-uninstall", "-quiet", "-log", os.path.join(OUT, "rescue-uninstall.log")], timeout=180)
