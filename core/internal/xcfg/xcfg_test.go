@@ -304,8 +304,11 @@ func TestTweaksChangeOnlyWhatTheyName(t *testing.T) {
 	o := tun
 	o.Tweaks = Tweaks{Fragment: true}
 	f := read(o)
-	if f.Outbounds[0].Stream.Sockopt.Dialer != TagFragment || f.Outbounds[1].Stream.Sockopt.Dialer != "" || f.Outbounds[len(f.Outbounds)-3].Tag != TagFragment ||
-		f.Outbounds[len(f.Outbounds)-3].Settings.Fragment == nil || f.Outbounds[len(f.Outbounds)-3].Settings.Fragment.Packets != "tlshello" {
+	cut := false
+	for _, out := range f.Outbounds {
+		cut = cut || (out.Tag == TagFragment && out.Protocol == "freedom" && out.Settings.Fragment != nil && out.Settings.Fragment.Packets == "tlshello")
+	}
+	if f.Outbounds[0].Stream.Sockopt.Dialer != TagFragment || f.Outbounds[1].Stream.Sockopt.Dialer != "" || !cut {
 		t.Fatalf("fragment: %+v", f.Outbounds)
 	}
 	probe := read(Options{Mode: ModeProbe, Tweaks: Tweaks{Fragment: true, DNS: []string{"1.1.1.1"}, NoIPv6: true, LAN: true}})
