@@ -190,7 +190,8 @@ func TestSessionTranscript(t *testing.T) {
 	step("checkUpdate", "", "")
 	step("fetchUpdate", "", "")
 	step("installUpdate", "", "update_off")
-	got := strings.ReplaceAll(strings.Join(r.log, "\n")+"\n", r.updates, "/state/updates")
+	folder, _ := json.Marshal(r.updates + string(os.PathSeparator))
+	got := strings.ReplaceAll(strings.Join(r.log, "\n")+"\n", strings.Trim(string(folder), `"`), "/state/updates/")
 	if strings.Contains(got, "TESTTOKEN") && strings.Count(got, "TESTTOKEN") != 1 {
 		t.Fatal("the subscription address appears outside the subscribe request")
 	}

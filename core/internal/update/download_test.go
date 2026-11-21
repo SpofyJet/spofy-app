@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"sync"
@@ -155,7 +156,7 @@ func TestDownloadSavesTheWholeFileForTheOwnerOnly(t *testing.T) {
 		t.Fatalf("saved %d bytes, err = %v", len(got), err)
 	}
 	fi, err := os.Stat(path)
-	if err != nil || fi.Mode().Perm() != 0o600 {
+	if err != nil || (runtime.GOOS != "windows" && fi.Mode().Perm() != 0o600) {
 		t.Fatalf("mode %v, err = %v", fi.Mode(), err)
 	}
 	if n := names(t, dir); !slices.Equal(n, []string{apk}) {

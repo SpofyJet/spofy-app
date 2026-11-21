@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -96,7 +97,7 @@ func TestKeygenWritesTheKeyForTheOwnerOnlyAndPrintsOnlyThePublicKey(t *testing.T
 	key := filepath.Join(t.TempDir(), "release.key")
 	printed := do(t, "keygen", "-out", key)
 	fi, err := os.Stat(key)
-	if err != nil || fi.Mode().Perm() != 0o600 {
+	if err != nil || (runtime.GOOS != "windows" && fi.Mode().Perm() != 0o600) {
 		t.Fatalf("mode %v, err = %v", fi.Mode(), err)
 	}
 	raw, err := os.ReadFile(key)
