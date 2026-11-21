@@ -3,6 +3,8 @@ package app
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -31,6 +33,7 @@ const (
 	EvSubscription = "subscription"
 	EvServers      = "servers"
 	EvSettings     = "settings"
+	EvList         = "subscriptions"
 )
 
 const (
@@ -48,6 +51,13 @@ const (
 	CodeStore          engine.Code = "store_failed"
 	CodeConnected      engine.Code = "connected"
 	CodeValue          engine.Code = "bad_value"
+	CodeUnknown        engine.Code = "sub_unknown"
+)
+
+const (
+	KindURL          = "url"
+	KindLinks        = "links"
+	maxSubscriptions = 20
 )
 
 type Tunnel interface {
@@ -198,6 +208,18 @@ func stop(p *sub.Profile, now time.Time) Stop {
 	return StopOther
 }
 
+type Brief struct {
+	ID      string `json:"id"`
+	Title   string `json:"title"`
+	Kind    string `json:"kind"`
+	Active  bool   `json:"active"`
+	Servers int    `json:"servers"`
+	Used    int64  `json:"used"`
+	Total   int64  `json:"total"`
+	Expire  int64  `json:"expire"`
+	Stop    Stop   `json:"stop"`
+}
+
 type Entry struct {
 	At     int64         `json:"at"`
 	State  session.State `json:"state"`
@@ -221,6 +243,7 @@ type Snapshot struct {
 	Protocol     int                        `json:"protocol"`
 	Connection   Connection                 `json:"connection"`
 	Subscription *Subscription              `json:"subscription"`
+	List         []Brief                    `json:"subscriptions"`
 	Servers      []Server                   `json:"servers"`
 	Settings     map[string]json.RawMessage `json:"settings"`
 }
@@ -229,6 +252,7 @@ type Event struct {
 	Ev           string
 	Connection   Connection
 	Subscription *Subscription
+	List         []Brief
 	Servers      []Server
 	Settings     map[string]json.RawMessage
 }
@@ -244,6 +268,8 @@ func (e Event) MarshalJSON() ([]byte, error) {
 		part = e.Servers
 	case EvSettings:
 		part = e.Settings
+	case EvList:
+		part = e.List
 	default:
 		return nil, errors.New("app: unknown event")
 	}
@@ -389,6 +415,7 @@ func (a *App) Snapshot() Snapshot {
 		Protocol:     Protocol,
 		Connection:   conn,
 		Subscription: subscription(st, a.now()),
+		List:         list(st, a.now()),
 		Servers:      a.servers(st),
 		Settings:     settings(st),
 	}
@@ -501,19 +528,142 @@ func (a *App) renew() {
 	}
 }
 
-func (a *App) Unsubscribe() error {
+func (a *App) Unsubscribe(id string) error {
+	before := a.cfg.Store.Get()
+	if id != "" && (before.Profile == nil || current(before) != id) {
+		removed := false
+		err := a.save(func(s *store.State) {
+			n := len(s.Others)
+			s.Others = slices.DeleteFunc(s.Others, func(o store.Saved) bool { return parked(o) == id })
+			removed = len(s.Others) != n
+		})
+		if err != nil {
+			return err
+		}
+		if !removed {
+			return fail(CodeUnknown, "no such subscription")
+		}
+		a.listed(before)
+		return nil
+	}
 	a.sess.Disconnect()
 	err := a.save(func(s *store.State) {
-		s.URL, s.Profile, s.Server, s.Delays, s.FetchedAt = "", nil, "", nil, time.Time{}
+		s.ID, s.URL, s.Profile, s.Server, s.Delays, s.FetchedAt = "", "", nil, "", nil, time.Time{}
+		if len(s.Others) > 0 {
+			bring(s, s.Others[0])
+			s.Others = s.Others[1:]
+		}
 	})
 	if err != nil {
 		return err
 	}
-	a.plan(a.cfg.Store.Get(), false)
-	a.setChoice(Auto)
-	a.emit(Event{Ev: EvSubscription})
-	a.emit(Event{Ev: EvServers, Servers: []Server{}})
+	st := a.cfg.Store.Get()
+	a.plan(st, false)
+	a.setChoice(a.choice(st))
+	a.emit(Event{Ev: EvSubscription, Subscription: subscription(st, a.now())})
+	a.emit(Event{Ev: EvServers, Servers: a.servers(st)})
+	a.listed(before)
 	return nil
+}
+
+func (a *App) Activate(id string) error {
+	before := a.cfg.Store.Get()
+	if before.Profile != nil && current(before) == id {
+		return nil
+	}
+	found := false
+	err := a.save(func(s *store.State) {
+		i := slices.IndexFunc(s.Others, func(o store.Saved) bool { return parked(o) == id })
+		if i < 0 {
+			return
+		}
+		found = true
+		next := s.Others[i]
+		s.Others = slices.Delete(s.Others, i, i+1)
+		if s.Profile != nil {
+			s.Others = slices.Insert(s.Others, 0, park(s))
+		}
+		bring(s, next)
+	})
+	if err != nil {
+		return err
+	}
+	if !found {
+		return fail(CodeUnknown, "no such subscription")
+	}
+	st := a.cfg.Store.Get()
+	a.plan(st, false)
+	a.setChoice(a.choice(st))
+	a.emit(Event{Ev: EvSubscription, Subscription: subscription(st, a.now())})
+	a.emit(Event{Ev: EvServers, Servers: a.servers(st)})
+	a.listed(before)
+	a.follow(st)
+	a.spawn(func() { a.freshen(true) })
+	return nil
+}
+
+func (a *App) follow(st store.State) {
+	switch {
+	case a.sess.State() == session.Idle:
+	case len(st.Profile.Servers) == 0:
+		a.sess.Disconnect()
+	case a.sess.Rebase(a.candidates(st)):
+		a.spawn(a.renew)
+	}
+}
+
+func (a *App) listed(before store.State) {
+	st := a.cfg.Store.Get()
+	if !slices.Equal(ids(before), ids(st)) {
+		a.emit(Event{Ev: EvList, List: list(st, a.now())})
+	}
+}
+
+func ids(st store.State) []string {
+	var out []string
+	if st.Profile != nil {
+		out = append(out, current(st))
+	}
+	for _, o := range st.Others {
+		out = append(out, parked(o))
+	}
+	return out
+}
+
+func ident(address string, p *sub.Profile) string {
+	h := sha256.New()
+	if address != "" {
+		h.Write([]byte("url\n" + address))
+	} else {
+		h.Write([]byte("links"))
+		for _, s := range p.Servers {
+			h.Write([]byte("\n"))
+			h.Write(s.Config)
+		}
+	}
+	return hex.EncodeToString(h.Sum(nil)[:6])
+}
+
+func current(st store.State) string {
+	if st.ID != "" {
+		return st.ID
+	}
+	return ident(st.URL, st.Profile)
+}
+
+func parked(o store.Saved) string {
+	if o.ID != "" {
+		return o.ID
+	}
+	return ident(o.URL, o.Profile)
+}
+
+func park(s *store.State) store.Saved {
+	return store.Saved{ID: current(*s), URL: s.URL, Profile: s.Profile, FetchedAt: s.FetchedAt, Server: s.Server, Delays: s.Delays}
+}
+
+func bring(s *store.State, o store.Saved) {
+	s.ID, s.URL, s.Profile, s.FetchedAt, s.Server, s.Delays = parked(o), o.URL, o.Profile, o.FetchedAt, o.Server, o.Delays
 }
 
 func (a *App) Connect(server string) error {
@@ -743,8 +893,22 @@ func (a *App) Close() {
 }
 
 func (a *App) adopt(address string, p *sub.Profile) error {
+	before := a.cfg.Store.Get()
+	key := ident(address, p)
 	err := a.save(func(s *store.State) {
-		s.URL, s.Profile, s.FetchedAt = address, p, a.now()
+		moved := s.Profile != nil && current(*s) != key
+		if moved {
+			s.Others = slices.Insert(s.Others, 0, park(s))
+			s.Server, s.Delays = "", nil
+		}
+		if i := slices.IndexFunc(s.Others, func(o store.Saved) bool { return parked(o) == key }); i >= 0 {
+			if moved || s.Profile == nil {
+				s.Server, s.Delays = s.Others[i].Server, s.Others[i].Delays
+			}
+			s.Others = slices.Delete(s.Others, i, i+1)
+		}
+		s.Others = s.Others[:min(len(s.Others), maxSubscriptions-1)]
+		s.ID, s.URL, s.Profile, s.FetchedAt = key, address, p, a.now()
 		for id := range s.Delays {
 			if !has(p, id) {
 				delete(s.Delays, id)
@@ -762,12 +926,12 @@ func (a *App) adopt(address string, p *sub.Profile) error {
 	a.setChoice(a.choice(st))
 	a.emit(Event{Ev: EvSubscription, Subscription: subscription(st, a.now())})
 	a.emit(Event{Ev: EvServers, Servers: a.servers(st)})
-	switch {
-	case len(p.Servers) == 0:
+	a.listed(before)
+	if len(p.Servers) == 0 {
 		a.sess.Disconnect()
-	case a.sess.State() != session.Idle && a.sess.Rebase(a.candidates(st)):
-		a.spawn(a.renew)
+		return nil
 	}
+	a.follow(st)
 	return nil
 }
 
@@ -923,6 +1087,29 @@ func subscription(st store.State, now time.Time) *Subscription {
 		s.FetchedAt = st.FetchedAt.Unix()
 	}
 	return s
+}
+
+func list(st store.State, now time.Time) []Brief {
+	out := []Brief{}
+	add := func(id, address string, p *sub.Profile, active bool) {
+		b := Brief{ID: id, Title: p.Title, Kind: KindURL, Active: active, Servers: len(p.Servers), Used: p.Usage.Upload + p.Usage.Download, Total: p.Usage.Total, Stop: stop(p, now)}
+		if address == "" {
+			b.Kind = KindLinks
+		}
+		if !p.Usage.Expire.IsZero() {
+			b.Expire = p.Usage.Expire.Unix()
+		}
+		out = append(out, b)
+	}
+	if st.Profile != nil {
+		add(current(st), st.URL, st.Profile, true)
+	}
+	for _, o := range st.Others {
+		if o.Profile != nil {
+			add(parked(o), o.URL, o.Profile, false)
+		}
+	}
+	return out
 }
 
 func settings(st store.State) map[string]json.RawMessage {

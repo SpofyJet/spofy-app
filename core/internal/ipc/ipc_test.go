@@ -162,8 +162,15 @@ func TestSessionTranscript(t *testing.T) {
 	step("report", "", "")
 	step("refresh", "", "")
 	step("set", `"key":"apps","value":null`, "")
+	first := r.app.Snapshot().List[0].ID
+	step("subscribe", `"url":"https://sub.example.test/sub/SECOND0123456789"`, "")
+	step("activate", fmt.Sprintf(`"subscription":%q`, first), "")
+	second := r.app.Snapshot().List[1].ID
+	step("activate", `"subscription":"000000000000"`, "sub_unknown")
+	step("activate", "", "bad_request")
 	step("hello", "", "")
 	step("teleport", "", "unknown_op")
+	step("unsubscribe", fmt.Sprintf(`"subscription":%q`, second), "")
 	step("unsubscribe", "", "")
 	step("hello", "", "")
 	got := strings.Join(r.log, "\n") + "\n"

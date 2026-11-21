@@ -40,12 +40,23 @@ type Delay struct {
 
 type State struct {
 	Version   int                        `json:"version"`
+	ID        string                     `json:"id,omitempty"`
 	URL       string                     `json:"url,omitempty"`
 	Profile   *sub.Profile               `json:"profile,omitempty"`
 	FetchedAt time.Time                  `json:"fetchedAt,omitzero"`
 	Server    string                     `json:"server,omitempty"`
 	Settings  map[string]json.RawMessage `json:"settings,omitempty"`
 	Delays    map[string]Delay           `json:"delays,omitempty"`
+	Others    []Saved                    `json:"others,omitempty"`
+}
+
+type Saved struct {
+	ID        string           `json:"id,omitempty"`
+	URL       string           `json:"url,omitempty"`
+	Profile   *sub.Profile     `json:"profile"`
+	FetchedAt time.Time        `json:"fetchedAt,omitzero"`
+	Server    string           `json:"server,omitempty"`
+	Delays    map[string]Delay `json:"delays,omitempty"`
 }
 
 type Store struct {
