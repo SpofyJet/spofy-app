@@ -1046,6 +1046,40 @@ void main() {
     expect(connected.transport.sent.first, contains('"op":"check"'));
   });
 
+  testWidgets('the first frame waits for the core and the flag on the home screen, never longer than the hold', (
+    tester,
+  ) async {
+    const hold = Duration(milliseconds: 300);
+    Future<void> start(Scene scene) async {
+      tester.binding.resetFirstFrameSent();
+      await tester.pumpWidget(SpofyApp(key: ObjectKey(scene), model: scene.model, now: () => clock, hold: hold));
+    }
+
+    final waiting = Scene(ready: false);
+    await start(waiting);
+    await tester.pump(const Duration(milliseconds: 290));
+    expect(tester.binding.sendFramesToEngine, isFalse);
+    await tester.pump(const Duration(milliseconds: 20));
+    expect(tester.binding.sendFramesToEngine, isTrue);
+    expect(find.byType(Skeleton), findsWidgets);
+
+    final connected = home(VpnState.connected, server: 'nl', delay: 38);
+    final flag = flagImage(shownServer(connected.model)!.country)!;
+    final key = await flag.obtainKey(createLocalImageConfiguration(tester.element(find.byType(SpofyApp))));
+    expect(PaintingBinding.instance.imageCache.evict(key), isTrue);
+    await start(connected);
+    expect(tester.binding.sendFramesToEngine, isFalse);
+    await tester.runAsync(() => precacheImage(flag, tester.element(find.byType(SpofyApp))));
+    await tester.pump();
+    expect(tester.binding.sendFramesToEngine, isTrue);
+    expect(PaintingBinding.instance.imageCache.statusForKey(key).keepAlive, isTrue);
+
+    final broken = Scene(ready: false, fault: AppModel.coreClosed);
+    await start(broken);
+    await tester.pump();
+    expect(tester.binding.sendFramesToEngine, isTrue);
+  });
+
   testWidgets('a window that only lost focus keeps counting and does not check the connection when focused again', (
     tester,
   ) async {

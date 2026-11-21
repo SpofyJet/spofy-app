@@ -19,13 +19,20 @@ import 'update.dart';
 import 'widgets.dart';
 
 class SpofyApp extends StatefulWidget {
-  const SpofyApp({super.key, required this.model, this.now = DateTime.now, this.dress, this.drawn, this.hold = false});
+  const SpofyApp({
+    super.key,
+    required this.model,
+    this.now = DateTime.now,
+    this.dress,
+    this.drawn,
+    this.hold = Duration.zero,
+  });
 
   final AppModel model;
   final DateTime Function() now;
   final void Function(bool dark, Color background)? dress;
   final VoidCallback? drawn;
-  final bool hold;
+  final Duration hold;
 
   @override
   State<SpofyApp> createState() => _SpofyAppState();
@@ -42,15 +49,16 @@ class _SpofyAppState extends State<SpofyApp> with WidgetsBindingObserver {
   Lang? _lang;
   Palette? _dressed;
   Timer? _held;
+  Future<void>? _preparing;
   VoidCallback? _drawn;
 
   @override
   void initState() {
     super.initState();
     _drawn = widget.drawn;
-    if (widget.hold) {
+    if (widget.hold > Duration.zero) {
       WidgetsBinding.instance.deferFirstFrame();
-      _held = Timer(const Duration(milliseconds: 300), _show);
+      _held = Timer(widget.hold, _show);
     }
     WidgetsBinding.instance.addObserver(this);
     widget.model.addListener(_schedule);
@@ -89,6 +97,30 @@ class _SpofyAppState extends State<SpofyApp> with WidgetsBindingObserver {
       held.cancel();
       WidgetsBinding.instance.allowFirstFrame();
     }
+  }
+
+  void _reveal() {
+    _show();
+    final drawn = _drawn;
+    if (drawn != null) {
+      _drawn = null;
+      WidgetsBinding.instance.addPostFrameCallback((_) => drawn());
+      WidgetsBinding.instance.scheduleFrame();
+    }
+  }
+
+  Future<void> _prepare() {
+    final flag = flagImage(shownServer(widget.model)?.country ?? '');
+    if (flag == null) {
+      return Future.value();
+    }
+    final done = Completer<void>();
+    final stream = flag.resolve(ImageConfiguration(bundle: rootBundle));
+    final listener = ImageStreamListener((_, _) => done.complete(), onError: (_, _) => done.complete());
+    stream.addListener(listener);
+    return done.future.whenComplete(
+      () => WidgetsBinding.instance.addPostFrameCallback((_) => stream.removeListener(listener)),
+    );
   }
 
   void _look({bool again = false}) {
@@ -139,14 +171,14 @@ class _SpofyAppState extends State<SpofyApp> with WidgetsBindingObserver {
 
   void _schedule() {
     _look();
-    if (widget.model.ready || widget.model.fault.isNotEmpty) {
-      _show();
-      final drawn = _drawn;
-      if (drawn != null) {
-        _drawn = null;
-        WidgetsBinding.instance.addPostFrameCallback((_) => drawn());
-        WidgetsBinding.instance.scheduleFrame();
-      }
+    if (widget.model.ready && _held != null) {
+      _preparing ??= _prepare().whenComplete(() {
+        if (mounted) {
+          _reveal();
+        }
+      });
+    } else if (widget.model.ready || widget.model.fault.isNotEmpty) {
+      _reveal();
     }
     if (widget.model.ready && widget.model.offered != null && !_subscription) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _subscribe());

@@ -61,6 +61,7 @@ class MainActivity : FlutterActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         keep(intent)
+        bind()
         super.onCreate(savedInstanceState)
     }
 
@@ -157,12 +158,17 @@ class MainActivity : FlutterActivity() {
             return
         }
         starting.add(result)
+        bind()
+    }
+
+    private fun bind() {
+        if (binding) {
+            return
+        }
+        binding = bindService(Intent(this, CoreService::class.java), link, Context.BIND_AUTO_CREATE)
         if (!binding) {
-            binding = bindService(Intent(this, CoreService::class.java), link, Context.BIND_AUTO_CREATE)
-            if (!binding) {
-                starting.forEach { it.error("no_service", "the core service did not start", null) }
-                starting.clear()
-            }
+            starting.forEach { it.error("no_service", "the core service did not start", null) }
+            starting.clear()
         }
     }
 
