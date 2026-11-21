@@ -51,6 +51,7 @@ type Panel struct {
 	srv *httptest.Server
 
 	mu      sync.Mutex
+	routes  map[string]http.Handler
 	body    []byte
 	header  http.Header
 	status  int
@@ -72,8 +73,22 @@ func NewPanel(t testing.TB) *Panel {
 	return p
 }
 
+func (p *Panel) Route(host string, h http.Handler) {
+	p.mu.Lock()
+	if p.routes == nil {
+		p.routes = map[string]http.Handler{}
+	}
+	p.routes[host] = h
+	p.mu.Unlock()
+}
+
 func (p *Panel) serve(w http.ResponseWriter, r *http.Request) {
 	p.mu.Lock()
+	if h, ok := p.routes[r.Host]; ok {
+		p.mu.Unlock()
+		h.ServeHTTP(w, r)
+		return
+	}
 	p.hits++
 	p.last = r.Header.Clone()
 	p.paths = append(p.paths, r.URL.Path)

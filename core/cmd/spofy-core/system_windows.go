@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"golang.org/x/sys/windows"
@@ -79,6 +81,14 @@ func prepare() (served, func(), error) {
 		socket: pipe,
 		watch:  time.Second, quiet: 5 * time.Second, renew: 15 * time.Minute, resample: time.Hour, settle: 10 * time.Second,
 		logs: logs, opened: func() { greet(root, logs) },
+		install: func(path string) error {
+			cmd := exec.Command(path, "-quiet", "-log", filepath.Join(root, "setup.log"))
+			cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.DETACHED_PROCESS | windows.CREATE_NEW_PROCESS_GROUP}
+			if err := cmd.Start(); err != nil {
+				return err
+			}
+			return cmd.Process.Release()
+		},
 	}, closer, nil
 }
 

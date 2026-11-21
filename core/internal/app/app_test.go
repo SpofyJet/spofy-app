@@ -1062,7 +1062,7 @@ func TestTrafficAndEvents(t *testing.T) {
 		t.Fatalf("traffic = %+v", tr)
 	}
 	for ev, want := range map[string]string{
-		EvConnection:   `{"ev":"connection","connection":{"state":"idle","choice":"auto","server":"","delayMs":0,"code":"","error":""}}`,
+		EvConnection:   `{"ev":"connection","connection":{"state":"idle","choice":"auto","server":"","delayMs":0,"code":"","error":"","since":0}}`,
 		EvSubscription: `{"ev":"subscription","subscription":null}`,
 		EvServers:      `{"ev":"servers","servers":[]}`,
 		EvSettings:     `{"ev":"settings","settings":{}}`,
@@ -1527,5 +1527,75 @@ func TestSubscribeKeepsTheLinksWhenThereIsNoJSON(t *testing.T) {
 		if again := b.app.Snapshot(); len(again.Servers) != 3 || find(again.Servers, "fl").Protocol != "hysteria" {
 			t.Fatalf("%s: after restart %+v", name, again.Servers)
 		}
+	}
+}
+
+func TestPastedKeysBecomeASubscriptionOfTheirOwn(t *testing.T) {
+	b := newBench(t, nil)
+	links, err := sub.ParseLinks(providerLinks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.tunnel.Know(links.Servers)
+	b.tunnel.Answer(map[string]time.Duration{"de": ms(50), "lt": ms(30), "fl": ms(70)})
+	if err := b.app.Subscribe(context.Background(), "\n"+providerLinks+"\n"); err != nil {
+		t.Fatal(err)
+	}
+	snap := b.app.Snapshot()
+	if len(snap.Servers) != 3 || len(snap.List) != 1 || snap.List[0].Kind != KindLinks || len(b.panel.Paths()) != 0 {
+		t.Fatalf("servers %d list %+v asked %v", len(snap.Servers), snap.List, b.panel.Paths())
+	}
+	if changed, err := b.app.Refresh(context.Background()); changed || err != nil || len(b.panel.Paths()) != 0 {
+		t.Fatalf("refreshing pasted keys: changed %v err %v asked %v", changed, err, b.panel.Paths())
+	}
+	if err := b.app.Subscribe(context.Background(), "просто текст"); code(err) != CodeBadURL {
+		t.Fatalf("text without keys: %v", err)
+	}
+	if err := b.app.Subscribe(context.Background(), apptest.Address); err != nil {
+		t.Fatal(err)
+	}
+	if again := b.app.Snapshot(); len(again.List) != 2 || again.List[1].Kind != KindLinks || again.List[1].Servers != 3 {
+		t.Fatalf("list %+v", again.List)
+	}
+}
+
+func TestServersSayHowTheyConnect(t *testing.T) {
+	b := newBench(t, nil).subscribed()
+	seen := map[string]bool{}
+	for _, s := range b.app.Snapshot().Servers {
+		if s.Protocol == "" || (s.Transport == "" && s.Protocol != "hysteria") {
+			t.Fatalf("server %+v", s)
+		}
+		seen[s.Protocol+" "+s.Transport+" "+s.Security] = true
+	}
+	if len(seen) < 2 {
+		t.Fatalf("all servers look the same: %v", seen)
+	}
+}
+
+func TestTheConnectionKnowsSinceWhenItProtects(t *testing.T) {
+	b := newBench(t, nil).subscribed()
+	if s := b.app.Snapshot().Connection.Since; s != 0 {
+		t.Fatalf("idle since %d", s)
+	}
+	began := b.clock.Now().Unix()
+	if err := b.app.Connect("de"); err != nil {
+		t.Fatal(err)
+	}
+	if s := b.app.Snapshot().Connection.Since; s != began {
+		t.Fatalf("since %d, want %d", s, began)
+	}
+	b.clock.Advance(time.Minute)
+	if err := b.app.Connect("nl"); err != nil {
+		t.Fatal(err)
+	}
+	if c := b.app.Snapshot().Connection; c.Server != "nl" || c.Since != began+60 {
+		t.Fatalf("a server chosen by hand is a new connection: %+v", c)
+	}
+	if err := b.app.Disconnect(); err != nil {
+		t.Fatal(err)
+	}
+	if s := b.app.Snapshot().Connection.Since; s != 0 {
+		t.Fatalf("after turning off: %d", s)
 	}
 }

@@ -178,6 +178,12 @@ func Serve(ctx context.Context, r io.Reader, w io.Writer, a *app.App, p *host.Pl
 		case "report":
 			r := a.Report()
 			send(Reply{Re: req.ID, OK: true, Report: &r})
+		case "checkUpdate":
+			later(req.ID, func() error { return a.CheckUpdate(ctx) })
+		case "fetchUpdate":
+			later(req.ID, a.FetchUpdate)
+		case "installUpdate":
+			answer(req.ID, a.InstallUpdate())
 		case "logs":
 			lines := a.Logs()
 			send(Reply{Re: req.ID, OK: true, Logs: &lines})

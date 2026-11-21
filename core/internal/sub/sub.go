@@ -273,3 +273,20 @@ func split(name string) (country, label string) {
 func regional(r rune) bool {
 	return r >= 0x1F1E6 && r <= 0x1F1FF
 }
+
+func Transport(cfg json.RawMessage) (network, security string) {
+	var c struct {
+		Outbounds []outbound `json:"outbounds"`
+	}
+	if json.Unmarshal(cfg, &c) != nil || len(c.Outbounds) == 0 {
+		return "", ""
+	}
+	network = strings.ToLower(c.Outbounds[0].Stream.Network)
+	if network == "tcp" {
+		network = "raw"
+	}
+	if network == "" && c.Outbounds[0].Protocol != "hysteria" {
+		network = "raw"
+	}
+	return network, strings.ToLower(c.Outbounds[0].Stream.Security)
+}

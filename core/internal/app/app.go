@@ -26,6 +26,7 @@ import (
 	"github.com/SpofyJet/spofy-app/core/internal/store"
 	"github.com/SpofyJet/spofy-app/core/internal/sub"
 	"github.com/SpofyJet/spofy-app/core/internal/supervisor"
+	"github.com/SpofyJet/spofy-app/core/internal/update"
 	"github.com/SpofyJet/spofy-app/core/internal/xcfg"
 )
 
@@ -155,6 +156,10 @@ type Config struct {
 	Retune   func() (bool, error)
 	Keep     func(on bool)
 	Held     bool
+	Build    int
+	Engine   string
+	Updates  Updates
+	Install  func(path string) error
 }
 
 type Apps struct {
@@ -219,6 +224,7 @@ type Connection struct {
 	DelayMs int64         `json:"delayMs"`
 	Code    engine.Code   `json:"code"`
 	Error   string        `json:"error"`
+	Since   int64         `json:"since"`
 }
 
 type Server struct {
@@ -227,6 +233,8 @@ type Server struct {
 	Label      string `json:"label"`
 	Country    string `json:"country"`
 	Protocol   string `json:"protocol"`
+	Transport  string `json:"transport"`
+	Security   string `json:"security"`
 	Tier       int    `json:"tier"`
 	DelayMs    int64  `json:"delayMs"`
 	MeasuredAt int64  `json:"measuredAt"`
@@ -315,6 +323,9 @@ type Snapshot struct {
 	List         []Brief                    `json:"subscriptions"`
 	Servers      []Server                   `json:"servers"`
 	Settings     map[string]json.RawMessage `json:"settings"`
+	Build        int                        `json:"build"`
+	Engine       string                     `json:"engine"`
+	Update       *Update                    `json:"update"`
 }
 
 type Event struct {
@@ -324,6 +335,7 @@ type Event struct {
 	List         []Brief
 	Servers      []Server
 	Settings     map[string]json.RawMessage
+	Update       *Update
 }
 
 func (e Event) MarshalJSON() ([]byte, error) {
@@ -339,6 +351,8 @@ func (e Event) MarshalJSON() ([]byte, error) {
 		part = e.Settings
 	case EvList:
 		part = e.List
+	case EvUpdate:
+		part = e.Update
 	default:
 		return nil, errors.New("app: unknown event")
 	}
@@ -368,9 +382,14 @@ type App struct {
 	tasks   sync.WaitGroup
 	journal []Entry
 	book    *logbook.Book
-	started int64
-	renews  bool
-	tried   time.Time
+
+	umu      sync.Mutex
+	offer    *update.Offer
+	upd      *Update
+	fetching bool
+	started  int64
+	renews   bool
+	tried    time.Time
 }
 
 func New(cfg Config) *App {
@@ -418,6 +437,9 @@ func New(cfg Config) *App {
 	})
 	if cfg.Watch > 0 {
 		a.spawn(a.watch)
+	}
+	if a.updatesOn() && cfg.Updates.Every >= 0 {
+		a.spawn(a.watchUpdates)
 	}
 	return a
 }
@@ -483,6 +505,9 @@ func (a *App) Snapshot() Snapshot {
 	a.mu.Lock()
 	conn := a.conn
 	a.mu.Unlock()
+	a.umu.Lock()
+	upd := a.updateNow()
+	a.umu.Unlock()
 	return Snapshot{
 		Version:      a.cfg.Version,
 		Protocol:     Protocol,
@@ -491,13 +516,22 @@ func (a *App) Snapshot() Snapshot {
 		List:         list(st, a.now()),
 		Servers:      a.servers(st),
 		Settings:     settings(st),
+		Build:        a.cfg.Build,
+		Engine:       a.cfg.Engine,
+		Update:       upd,
 	}
 }
 
 func (a *App) Subscribe(ctx context.Context, address string) error {
-	u, err := url.Parse(strings.TrimSpace(address))
+	text := strings.TrimSpace(address)
+	if !strings.Contains(text, "://") || !strings.HasPrefix(strings.ToLower(text), "http") {
+		if p, err := sub.ParseLinks(text); err == nil {
+			return a.adopt("", p)
+		}
+	}
+	u, err := url.Parse(text)
 	if err != nil || u.Scheme != "https" || u.Host == "" {
-		return fail(CodeBadURL, "the address must start with https://")
+		return fail(CodeBadURL, "the address must start with https://, a key with its scheme")
 	}
 	p, err := sub.Fetch(ctx, a.cfg.HTTP, u.String(), a.cfg.Device, "")
 	if errors.Is(err, sub.ErrFormat) || (err == nil && p.Format == sub.FormatLinks) {
@@ -516,8 +550,11 @@ func (a *App) Subscribe(ctx context.Context, address string) error {
 
 func (a *App) Refresh(ctx context.Context) (bool, error) {
 	st := a.cfg.Store.Get()
-	if st.URL == "" || st.Profile == nil {
+	if st.Profile == nil {
 		return false, fail(CodeNoSubscription, "no subscription")
+	}
+	if st.URL == "" {
+		return false, nil
 	}
 	p, err := sub.Fetch(ctx, a.cfg.HTTP, st.URL, a.cfg.Device, st.Profile.ETag)
 	if errors.Is(err, sub.ErrNotModified) {
@@ -1078,7 +1115,13 @@ func (a *App) setChoice(choice string) {
 
 func (a *App) onState(e session.Event) {
 	a.mu.Lock()
-	conn := Connection{State: e.State, Choice: a.conn.Choice, Server: e.Server, DelayMs: e.Delay.Milliseconds(), Code: e.Code, Error: e.Error}
+	conn := Connection{State: e.State, Choice: a.conn.Choice, Server: e.Server, DelayMs: e.Delay.Milliseconds(), Code: e.Code, Error: e.Error, Since: a.conn.Since}
+	switch {
+	case !protects(e.State):
+		conn.Since = 0
+	case !protects(a.conn.State):
+		conn.Since = a.now().Unix()
+	}
 	same := conn == a.conn
 	arrived := e.State == session.Connected && a.conn.State != session.Connected
 	moved := conn.State != a.conn.State || conn.Server != a.conn.Server || conn.Code != a.conn.Code
@@ -1151,6 +1194,7 @@ func (a *App) servers(st store.State) []Server {
 	}
 	for _, s := range st.Profile.Servers {
 		v := Server{ID: s.ID, Name: s.Name, Label: s.Label, Country: s.Country, Protocol: s.Protocol, Tier: a.cfg.Tier(s)}
+		v.Transport, v.Security = sub.Transport(s.Config)
 		if d, ok := st.Delays[s.ID]; ok {
 			v.DelayMs, v.MeasuredAt = d.Ms, d.At.Unix()
 		}
@@ -1362,4 +1406,8 @@ func (a *App) conceal(st store.State) {
 		add(o.URL, o.Profile)
 	}
 	a.book.Hide(words)
+}
+
+func protects(s session.State) bool {
+	return s == session.Connected || s == session.Switching || s == session.Stalled || s == session.Offline
 }

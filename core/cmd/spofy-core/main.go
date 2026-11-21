@@ -186,6 +186,7 @@ type served struct {
 	kept     bool
 	logs     io.Writer
 	opened   func()
+	install  func(string) error
 }
 
 func serve(args []string) int {
@@ -338,6 +339,10 @@ func (o served) run(ctx context.Context, out io.Writer) error {
 		Device:   o.device,
 		Run:      opts,
 		Version:  version,
+		Build:    buildNumber(),
+		Engine:   engineRev,
+		Updates:  updates(o.folder),
+		Install:  o.install,
 		Strict:   o.strict,
 		Bypass:   o.bypass,
 		Watch:    o.watch,
