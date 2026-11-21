@@ -20,21 +20,6 @@ import 'replay.dart';
 import 'scenes.dart';
 import 'transcript.dart';
 
-const phone = Size(360, 800);
-const small = Size(360, 640);
-const tall = Size(390, 844);
-const desktop = Size(1100, 720);
-
-Future<void> golden(WidgetTester tester, String name) async {
-  await expectLater(find.byType(SpofyApp), matchesGoldenFile('goldens/$name.png'));
-}
-
-Future<void> open(WidgetTester tester, String label) async {
-  await tester.tap(find.bySemanticsLabel(RegExp('^$label')));
-  await tester.pump();
-  await tester.pump(const Duration(milliseconds: 400));
-}
-
 void main() {
   setUpAll(loadFonts);
 
@@ -135,9 +120,7 @@ void main() {
     await show(tester, home(VpnState.idle), phone);
     await open(tester, S.server);
     await golden(tester, 'servers_360');
-    expect(find.text('Обход 1'), findsOneWidget);
-    final names = tester.widgetList<Tile>(find.byType(Tile)).map((t) => t.title).toList();
-    expect(names.take(4), ['Авто', 'Обход 1', 'Нидерланды', 'Германия']);
+    expect(rows(tester).take(4), ['Обход', 'Нидерланды', 'Германия', 'Финляндия']);
   });
 
   testWidgets('servers on a desktop window', (tester) async {
@@ -165,7 +148,10 @@ void main() {
     await tester.scrollUntilVisible(
       title,
       200,
-      scrollable: find.descendant(of: find.byType(ServersScreen), matching: find.byType(Scrollable)),
+      scrollable: find.descendant(
+        of: find.byType(ServersScreen),
+        matching: find.byWidgetPredicate((w) => w is Scrollable && w.axisDirection == AxisDirection.down),
+      ),
     );
     await tester.pump(const Duration(milliseconds: 300));
     await golden(tester, 'servers_notes_360');
@@ -173,7 +159,7 @@ void main() {
       find.textContaining('Они в тарифе «Больше»\nСменить тариф в боте\n@example_bot', findRichText: true),
       findsOneWidget,
     );
-    expect(tester.widgetList<Tile>(find.byType(Tile)).where((t) => t.title == 'Сингапур'), hasLength(1));
+    expect(rows(tester).where((t) => t == 'Сингапур'), hasLength(1));
     await tester.tap(title);
     await tester.pump();
     expect(opened, ['https://t.me/example_bot']);
@@ -402,7 +388,7 @@ void main() {
     await show(tester, scene, phone);
     await open(tester, S.settings);
     await golden(tester, 'settings_360');
-    expect(tester.widgetList<Toggle>(find.byType(Toggle)).map((t) => t.value), [false, false]);
+    expect(tester.widgetList<Toggle>(find.byType(Toggle)).map((t) => t.value).take(2), [false, false]);
     await tester.tap(find.bySemanticsLabel(S.autoConnect));
     await tester.tap(find.bySemanticsLabel(S.killSwitch));
     await tester.pump();
@@ -410,16 +396,17 @@ void main() {
       '{"id":1,"op":"set","key":"autoConnect","value":true}',
       '{"id":2,"op":"set","key":"killSwitch","value":true}',
     ]);
-    expect(tester.widgetList<Toggle>(find.byType(Toggle)).map((t) => t.value), [false, false]);
+    expect(tester.widgetList<Toggle>(find.byType(Toggle)).map((t) => t.value).take(2), [false, false]);
 
     final on = home(VpnState.idle, settings: {autoConnectKey: true, killSwitchKey: true});
     await show(tester, on, phone);
     await open(tester, S.settings);
     await golden(tester, 'settings_on_360');
-    expect(tester.widgetList<Toggle>(find.byType(Toggle)).map((t) => t.value), [true, true]);
+    expect(tester.widgetList<Toggle>(find.byType(Toggle)).map((t) => t.value).take(2), [true, true]);
     await tester.tap(find.bySemanticsLabel(S.killSwitch));
     await tester.pump();
     expect(on.transport.sent.single, '{"id":1,"op":"set","key":"killSwitch","value":false}');
+    await tester.scrollUntilVisible(find.text(S.version('0.1.0')), 200);
     expect(find.text(S.version('0.1.0')), findsOneWidget);
   });
 
@@ -470,7 +457,10 @@ void main() {
   testWidgets('a link that came before the core answered waits and then asks before replacing', (tester) async {
     const address = 'https://other.example.test/sub/TESTTOKEN0123456789';
     final hello = Transcript.load().exchanges.firstWhere(
-      (e) => e.sent.contains('"hello"') && e.received.last.contains('"subscription":{'),
+      (e) =>
+          e.sent.contains('"hello"') &&
+          e.received.last.contains('"subscription":{') &&
+          e.received.last.contains('"update":null'),
     );
     final transport = ReplayTransport([hello]);
     final model = AppModel(CoreClient(transport));

@@ -12,6 +12,7 @@ abstract final class Ink {
   static const brand = Color(0xFF2563EB);
   static const selected = Color(0x262563EB);
   static const warning = Color(0xFFFBBF24);
+  static const good = Color(0xFF34D399);
   static const danger = Color(0xFFF87171);
   static const logo = Color(0xFFEF4444);
   static const glow = Color(0x332563EB);

@@ -45,7 +45,7 @@ func updates(folder string) app.Updates {
 		Keys:     publicKeys(),
 		Platform: update.Platform(runtime.GOOS, runtime.GOARCH),
 		Dir:      filepath.Join(folder, "updates"),
-		First:    20 * time.Second,
+		First:    5 * time.Second,
 		Every:    6 * time.Hour,
 	}
 }

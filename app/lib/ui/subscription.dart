@@ -27,7 +27,10 @@ class SubscriptionScreen extends StatelessWidget {
               Header(title: S.subscription, onBack: onDone),
               Expanded(
                 child: subscription == null
-                    ? _AddForm(model: model, onDone: onDone)
+                    ? ListView(
+                        padding: const EdgeInsets.fromLTRB(Ink.gutter, 4, Ink.gutter, 16),
+                        children: [_AddForm(model: model, onDone: onDone, first: true)],
+                      )
                     : _Details(model: model, subscription: subscription, now: now),
               ),
             ],
@@ -39,10 +42,11 @@ class SubscriptionScreen extends StatelessWidget {
 }
 
 class _AddForm extends StatefulWidget {
-  const _AddForm({required this.model, required this.onDone});
+  const _AddForm({required this.model, required this.onDone, this.first = false});
 
   final AppModel model;
   final VoidCallback onDone;
+  final bool first;
 
   @override
   State<_AddForm> createState() => _AddFormState();
@@ -56,8 +60,12 @@ class _AddFormState extends State<_AddForm> {
   @override
   void initState() {
     super.initState();
-    widget.model.addListener(_offered);
-    _offered();
+    if (widget.first) {
+      widget.model.addListener(_offered);
+      _offered();
+    } else {
+      _focus.requestFocus();
+    }
   }
 
   @override
@@ -99,11 +107,13 @@ class _AddFormState extends State<_AddForm> {
     final model = widget.model;
     final failure = model.failure;
     final busy = model.running(Task.subscribe);
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(Ink.gutter, 4, Ink.gutter, 16),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Text(_given ? S.offeredHint : S.noSubscriptionHint, style: Ink.note),
-        const SizedBox(height: 16),
+        if (widget.first) ...[
+          Text(_given ? S.offeredHint : S.noSubscriptionHint, style: Ink.note),
+          const SizedBox(height: 16),
+        ],
         Panel(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
           child: Stack(
@@ -128,7 +138,8 @@ class _AddFormState extends State<_AddForm> {
                   textInputAction: TextInputAction.done,
                   autocorrect: false,
                   enableSuggestions: false,
-                  maxLines: 1,
+                  minLines: 1,
+                  maxLines: 5,
                   onSubmitted: (_) => _submit(),
                 ),
               ),
@@ -158,6 +169,7 @@ class _Details extends StatefulWidget {
 
 class _DetailsState extends State<_Details> {
   bool _removing = false;
+  bool _adding = false;
 
   Future<void> _replace() async {
     final target = widget.model.take();
@@ -177,9 +189,33 @@ class _DetailsState extends State<_Details> {
     final offered = model.offered;
     final page = Uri.tryParse(s.webPageUrl);
     final browse = model.browse;
+    final all = model.subscriptions;
+    final active = all.where((b) => b.active).firstOrNull;
+    final switching = model.running(Task.activate);
     return ListView(
       padding: const EdgeInsets.fromLTRB(Ink.gutter, 4, Ink.gutter, 16),
       children: [
+        if (all.length > 1) ...[
+          const SectionTitle(S.subscriptions),
+          for (final b in all) ...[
+            Tile(
+              leading: CountryMark(b.links ? '#' : S.briefTitle(b).characters.first.toUpperCase(), active: b.active),
+              title: S.briefTitle(b),
+              subtitle: S.briefLine(b, now),
+              selected: b.active,
+              arrow: false,
+              wrap: true,
+              onTap: b.active || switching ? null : () => model.activate(b.id),
+            ),
+            const SizedBox(height: 8),
+          ],
+          if (failure?.task == Task.activate) ...[Notice(S.failure(failure!)), const SizedBox(height: 8)],
+          Padding(
+            padding: const EdgeInsets.fromLTRB(4, 0, 4, 4),
+            child: Text(S.switchHint, style: Ink.type(12, 400, Ink.faint)),
+          ),
+          const SectionTitle(S.chosenSubscription),
+        ],
         if (offered != null || model.running(Task.subscribe)) ...[
           Panel(
             child: Column(
@@ -237,8 +273,10 @@ class _DetailsState extends State<_Details> {
           const SizedBox(height: 8),
           PrimaryButton(label: S.pageAction(s), onTap: () => browse(page.toString())),
         ],
-        const SizedBox(height: 8),
-        QuietButton(label: S.refresh, busy: model.running(Task.refresh), onTap: model.refresh),
+        if (active == null || !active.links) ...[
+          const SizedBox(height: 8),
+          QuietButton(label: S.refresh, busy: model.running(Task.refresh), onTap: model.refresh),
+        ],
         const SizedBox(height: 8),
         if (_removing)
           Panel(
@@ -267,6 +305,13 @@ class _DetailsState extends State<_Details> {
           )
         else
           QuietButton(label: S.remove, color: Ink.muted, onTap: () => setState(() => _removing = true)),
+        const SizedBox(height: 16),
+        if (_adding)
+          Panel(
+            child: _AddForm(model: model, onDone: () => setState(() => _adding = false)),
+          )
+        else
+          QuietButton(label: S.addAnother, onTap: () => setState(() => _adding = true)),
       ],
     );
   }

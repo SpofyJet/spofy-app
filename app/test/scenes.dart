@@ -9,6 +9,7 @@ import 'package:spofy/core/protocol.dart';
 import 'package:spofy/state/apps.dart';
 import 'package:spofy/state/model.dart';
 import 'package:spofy/ui/app.dart';
+import 'package:spofy/ui/servers.dart';
 
 class SilentTransport implements Transport {
   final sent = <String>[];
@@ -72,27 +73,29 @@ class FakeApps implements AppList {
 }
 
 const _names = [
-  ('nl', 'Нидерланды', 'NL', 38, 0),
-  ('de', 'Германия', 'DE', 44, 0),
-  ('fi', 'Финляндия', 'FI', 51, 0),
-  ('pl', 'Польша', 'PL', 57, 0),
-  ('lt', 'Литва', 'LT', 63, 0),
-  ('ie', 'Ирландия', 'IE', 74, 0),
-  ('by', 'Беларусь', 'BY', 81, 0),
-  ('us', 'США', 'US', 142, 0),
-  ('sg', 'Сингапур', 'SG', 0, 0),
-  ('bypass1', 'Обход 1', 'RU', 29, 0),
-  ('bypass2', 'Обход 2', 'RU', 0, 0),
+  ('nl', 'Нидерланды', 'NL', 38, 0, 'vless', 'raw', 'reality'),
+  ('de', 'Германия', 'DE', 44, 0, 'vless', 'xhttp', 'reality'),
+  ('fi', 'Финляндия', 'FI', 51, 0, 'trojan', 'ws', 'tls'),
+  ('pl', 'Польша', 'PL', 57, 0, 'hysteria', 'raw', 'tls'),
+  ('lt', 'Литва', 'LT', 63, 0, 'vless', 'grpc', 'tls'),
+  ('ie', 'Ирландия', 'IE', 74, 0, 'vless', 'raw', 'reality'),
+  ('by', 'Беларусь', 'BY', 81, 0, 'vmess', 'ws', 'tls'),
+  ('us', 'США', 'US', 142, 0, 'shadowsocks', 'raw', ''),
+  ('sg', 'Сингапур', 'SG', 0, 0, 'vless', 'xhttp', 'tls'),
+  ('bypass1', 'Обход 1', 'RU', 29, 0, 'vless', 'xhttp', 'tls'),
+  ('bypass2', 'Обход 2', 'RU', 0, 0, 'vless', 'xhttp', 'tls'),
 ];
 
 List<Server> servers({bool measured = true}) => [
-  for (final (id, name, country, delay, tier) in _names)
+  for (final (id, name, country, delay, tier, protocol, transport, security) in _names)
     Server(
       id: id,
       name: name,
       label: name,
       country: country,
-      protocol: 'vless',
+      protocol: protocol,
+      transport: transport,
+      security: security,
       tier: tier,
       delayMs: measured ? delay : 0,
       measuredAt: measured && delay > 0 ? clock.millisecondsSinceEpoch ~/ 1000 - 600 : 0,
@@ -139,14 +142,21 @@ class Scene {
     VoidCallback? always,
     AppList? apps,
     void Function(String address)? browse,
+    Future<bool> Function(String file)? install,
+    List<Brief> briefs = const [],
+    Update? update,
   }) : transport = SilentTransport() {
-    model = AppModel(CoreClient(transport), always: always, apps: apps, browse: browse)
+    model = AppModel(CoreClient(transport), always: always, apps: apps, browse: browse, install: install)
       ..snapshot = Snapshot(
         version: '0.1.0',
         connection: connection,
         subscription: subscription,
+        subscriptions: briefs,
         servers: servers,
         settings: settings,
+        build: 1,
+        engine: 'xray-406c64d',
+        update: update,
       )
       ..ready = ready
       ..traffic = traffic
@@ -170,11 +180,24 @@ Scene home(
   VoidCallback? always,
   AppList? apps,
   void Function(String address)? browse,
+  Future<bool> Function(String file)? install,
+  List<Brief> briefs = const [],
+  Update? update,
 }) => Scene(
   always: always,
   apps: apps,
   browse: browse,
-  connection: Connection(state: state, choice: choice, server: server, delayMs: delay, code: code),
+  install: install,
+  briefs: briefs,
+  update: update,
+  connection: Connection(
+    state: state,
+    choice: choice,
+    server: server,
+    delayMs: delay,
+    code: code,
+    since: state.protecting ? clock.millisecondsSinceEpoch ~/ 1000 - 3725 : 0,
+  ),
   subscription: subscription(),
   servers: servers(),
   settings: settings,
@@ -197,3 +220,32 @@ Future<void> show(WidgetTester tester, Scene scene, Size size, {double textScale
   await tester.pumpWidget(scene.app);
   await tester.pump(const Duration(milliseconds: 300));
 }
+
+const phone = Size(360, 800);
+const small = Size(360, 640);
+const tall = Size(390, 844);
+const desktop = Size(1100, 720);
+
+Future<void> golden(WidgetTester tester, String name) async {
+  await expectLater(find.byType(SpofyApp), matchesGoldenFile('goldens/$name.png'));
+}
+
+Future<void> open(WidgetTester tester, String label) async {
+  final target = find.bySemanticsLabel(RegExp('^$label'));
+  if (target.evaluate().isEmpty) {
+    await tester.scrollUntilVisible(
+      target,
+      200,
+      scrollable: find.byWidgetPredicate((w) => w is Scrollable && w.axisDirection == AxisDirection.down).last,
+    );
+    await tester.pump(const Duration(milliseconds: 300));
+  }
+  await tester.tap(target);
+  await tester.pump();
+  await tester.pump(const Duration(milliseconds: 400));
+}
+
+List<String> rows(WidgetTester tester) => [
+  for (final w in tester.widgetList(find.byWidgetPredicate((w) => w is ServerTile || w is PlaceTile)))
+    if (w is ServerTile) w.title else (w as PlaceTile).place.name,
+];

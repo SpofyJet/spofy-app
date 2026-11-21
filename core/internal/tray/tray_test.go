@@ -22,9 +22,11 @@ func block(t *testing.T, src, head string) string {
 	return rest[:strings.Index(rest, "\n  };")]
 }
 
+var entry = regexp.MustCompile(`(?m)^\s+((?:'\w+'(?: \|\| )?)+|VpnState\.\w+|_) =>\s+(\w+|'[^'$]*'),?$`)
+
 func pairs(text string) map[string]string {
 	out := map[string]string{}
-	for _, m := range regexp.MustCompile(`(?m)^\s+((?:'\w+'(?: \|\| )?)+|VpnState\.\w+|_) => (\w+|'[^'$]*'),?$`).FindAllStringSubmatch(text, -1) {
+	for _, m := range entry.FindAllStringSubmatch(text, -1) {
 		for _, key := range regexp.MustCompile(`\w+`).FindAllString(m[1], -1) {
 			if key != "VpnState" {
 				out[key] = m[2]
@@ -79,6 +81,9 @@ func TestTextMatchesTheWindow(t *testing.T) {
 		t.Error("the window's fallback reasons changed")
 	}
 	window = pairs(reasonBlock)
+	if read, cases := len(entry.FindAllString(reasonBlock, -1)), strings.Count(reasonBlock, "=>")-3; read != cases {
+		t.Errorf("the check reads %d of the window's %d reasons", read, cases)
+	}
 	if len(window) != len(reasons) {
 		t.Errorf("the window explains %d codes, the tray %d", len(window), len(reasons))
 	}

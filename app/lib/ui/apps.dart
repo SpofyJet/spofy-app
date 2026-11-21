@@ -1,11 +1,9 @@
 import 'dart:async';
 
-import 'package:flutter/services.dart' show TextInputAction;
 import 'package:flutter/widgets.dart';
 
 import '../state/apps.dart';
 import '../state/model.dart';
-import 'icons.dart';
 import 'strings.dart';
 import 'theme.dart';
 import 'widgets.dart';
@@ -23,7 +21,6 @@ class AppsScreen extends StatefulWidget {
 class _AppsScreenState extends State<AppsScreen> {
   final _query = TextEditingController();
   final _focus = FocusNode();
-  final _field = GlobalKey<EditableTextState>();
   final _icons = <String, Future<MemoryImage?>>{};
   late AppsMode _mode;
   late final Set<String> _marked;
@@ -108,48 +105,7 @@ class _AppsScreenState extends State<AppsScreen> {
     unawaited(widget.model.set(appsKey, choice.setting));
   }
 
-  Widget _search() {
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      excludeFromSemantics: true,
-      onTap: () => _field.currentState?.requestKeyboard(),
-      child: Panel(
-        padding: const EdgeInsets.fromLTRB(16, 4, 4, 4),
-        child: Row(
-          children: [
-            Expanded(
-              child: Stack(
-                children: [
-                  if (_query.text.isEmpty) Text(S.appsSearch, style: Ink.body.copyWith(color: Ink.faint)),
-                  Semantics(
-                    textField: true,
-                    label: S.appsSearch,
-                    child: EditableText(
-                      key: _field,
-                      controller: _query,
-                      focusNode: _focus,
-                      style: Ink.body,
-                      cursorColor: Ink.accent,
-                      backgroundCursorColor: Ink.faint,
-                      selectionColor: Ink.selected,
-                      textInputAction: TextInputAction.search,
-                      autocorrect: false,
-                      enableSuggestions: false,
-                      maxLines: 1,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            if (_query.text.isEmpty)
-              const SizedBox(height: 44)
-            else
-              RoundButton(glyph: Glyph.close, label: S.appsClear, onTap: _query.clear),
-          ],
-        ),
-      ),
-    );
-  }
+  Widget _search() => SearchField(controller: _query, focus: _focus, hint: S.appsSearch, clear: S.appsClear);
 
   Widget _list(List<InstalledApp>? apps) {
     if (apps == null) {

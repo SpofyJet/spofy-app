@@ -12,7 +12,13 @@ Request? build(Map<String, Object?> sent) {
     'hello' => const Request.hello(),
     'subscribe' => Request.subscribe(sent['url']! as String),
     'refresh' => const Request.refresh(),
-    'unsubscribe' => const Request.unsubscribe(),
+    'unsubscribe' => Request.unsubscribe(sent['subscription'] as String?),
+    'activate' => Request.activate(sent['subscription']! as String),
+    'logs' => const Request.logs(),
+    'clearLogs' => const Request.clearLogs(),
+    'checkUpdate' => const Request.checkUpdate(),
+    'fetchUpdate' => const Request.fetchUpdate(),
+    'installUpdate' => const Request.installUpdate(),
     'connect' => Request.connect(server),
     'disconnect' => const Request.disconnect(),
     'check' => const Request.check(),
@@ -78,7 +84,7 @@ void main() {
 
   test('a message with an unknown or missing field is refused', () {
     const good =
-        '{"ev":"connection","connection":{"state":"idle","choice":"auto","server":"","delayMs":0,"code":"","error":""}}';
+        '{"ev":"connection","connection":{"state":"idle","choice":"auto","server":"","delayMs":0,"code":"","error":"","since":0}}';
     expect(Message.parse(good), isA<ConnectionEvent>());
     for (final bad in [
       'not json',
