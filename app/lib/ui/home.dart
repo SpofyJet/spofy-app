@@ -80,6 +80,15 @@ class HomeScreen extends StatelessWidget {
   }
 }
 
+Server? shownServer(AppModel model) {
+  final subscription = model.subscription;
+  if (subscription == null || subscription.stopped) {
+    return null;
+  }
+  final connection = model.connection;
+  return model.current ?? (connection.auto ? null : model.snapshot.server(connection.choice));
+}
+
 class _Stretch extends StatelessWidget {
   const _Stretch({required this.children});
 
@@ -230,7 +239,7 @@ class _Status extends StatelessWidget {
     final state = connection.state;
     final current = model.current;
     final chosen = connection.auto ? null : model.snapshot.server(connection.choice);
-    final shown = current ?? chosen;
+    final shown = shownServer(model);
     final failure = model.failure;
     final refused = state == VpnState.idle && failure?.task == Task.connect && failure?.code == AppModel.denied;
     final hint = refused ? S.reason(AppModel.denied) : S.hint(connection, traffic: model.traffic);

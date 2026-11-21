@@ -136,12 +136,17 @@ bool Win32Window::Create(const std::wstring& title,
   }
 
   UpdateTheme(window);
+  BOOL cloak = TRUE;
+  DwmSetWindowAttribute(window, DWMWA_CLOAK, &cloak, sizeof(cloak));
+  ShowWindow(window, SW_SHOWNORMAL);
 
   return OnCreate();
 }
 
 bool Win32Window::Show() {
-  return ShowWindow(window_handle_, SW_SHOWNORMAL);
+  DwmFlush();
+  BOOL cloak = FALSE;
+  return SUCCEEDED(DwmSetWindowAttribute(window_handle_, DWMWA_CLOAK, &cloak, sizeof(cloak)));
 }
 
 LRESULT CALLBACK Win32Window::WndProc(HWND const window,

@@ -677,6 +677,11 @@ class RoundButton extends StatelessWidget {
   }
 }
 
+ImageProvider? flagImage(String code) {
+  final flag = code.toLowerCase() == 'uk' ? 'gb' : code.toLowerCase();
+  return flagCodes.contains(flag) ? AssetImage('assets/flags/$flag.webp') : null;
+}
+
 class CountryMark extends StatelessWidget {
   const CountryMark(this.code, {super.key, this.active = false});
 
@@ -685,8 +690,8 @@ class CountryMark extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final flag = code.toLowerCase() == 'uk' ? 'gb' : code.toLowerCase();
-    if (flagCodes.contains(flag)) {
+    final flag = flagImage(code);
+    if (flag != null) {
       return DecoratedBox(
         decoration: BoxDecoration(
           shape: BoxShape.circle,
@@ -698,7 +703,7 @@ class CountryMark extends StatelessWidget {
             decoration: BoxDecoration(
               color: Ink.raised,
               shape: BoxShape.circle,
-              image: DecorationImage(image: AssetImage('assets/flags/$flag.webp'), fit: BoxFit.cover),
+              image: DecorationImage(image: flag, fit: BoxFit.cover),
               border: Border.all(color: Ink.faint.withValues(alpha: 0.5)),
             ),
             child: const SizedBox.square(dimension: 34),

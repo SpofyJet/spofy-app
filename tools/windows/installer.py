@@ -21,6 +21,7 @@ SERVICE = r"SYSTEM\CurrentControlSet\Services\Spofy"
 HOME = os.path.join(os.environ["ProgramFiles"], "Spofy")
 DATA = os.path.join(os.environ["ProgramData"], "Spofy")
 SHORTCUT = os.path.join(os.environ["ProgramData"], r"Microsoft\Windows\Start Menu\Programs\Spofy.lnk")
+DESKTOP = os.path.join(os.environ.get("PUBLIC", r"C:\Users\Public"), "Desktop", "Spofy.lnk")
 RUN = r"Software\Microsoft\Windows\CurrentVersion\Run"
 ENTRY = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\Spofy"
 KEPT = "5f0f5a7e-1d2b-4c3a-9b61-73706f667901"
@@ -65,6 +66,7 @@ def traces():
         "service": subprocess.run(["sc", "query", "Spofy"], capture_output=True).returncode == 0,
         "files": os.path.exists(HOME),
         "shortcut": os.path.exists(SHORTCUT),
+        "desktop": os.path.exists(DESKTOP),
         "run": value(RUN, "Spofy") is not None,
         "entry": value(ENTRY, "DisplayVersion") is not None,
         "state": os.path.exists(DATA),
@@ -221,6 +223,65 @@ def connected(limit=60):
     return bool(until(lambda: away(2), limit, 0.2))
 
 
+def shut(hwnd):
+    pid = owner(hwnd)
+    k = ctypes.windll.kernel32
+    k.OpenProcess.restype = ctypes.c_void_p
+    h = k.OpenProcess(0x00100000, False, pid) if pid else None
+    stand.user32.PostMessageW(hwnd, 0x10, 0, 0)
+    if h:
+        k.WaitForSingleObject(ctypes.c_void_p(h), 15000)
+        k.CloseHandle(ctypes.c_void_p(h))
+
+
+def launches(source, ui, installer):
+    shots = os.path.join(OUT, "launch")
+    runs = []
+    for name in ("first", "second", "third", "idle"):
+        if name == "idle":
+            ui.ask("disconnect", 30)
+        r = stand.launch(lambda: os.startfile(SHORTCUT), name, shots)
+        runs.append(r)
+        if r["hwnd"]:
+            shut(r["hwnd"])
+        if name == "idle":
+            ui.ask("connect", 60)
+    clean = [r for r in runs if r["shown"] is not None and r["content"] is not None and r["frames"] and r["frames"][0][1] < 1]
+    expect("opened from the Start menu, the window shows its final picture in its first frame, with no other window",
+           len(clean) == len(runs) and not any(r["others"] for r in runs),
+           "shown_ms=%s content_ms=%s" % ([r["shown"] for r in runs], [r["content"] for r in runs]))
+    before = stand.service_pid()
+    watch = Watch(source)
+    began = time.time()
+    started = []
+    seen = stand.launch(lambda: started.append(subprocess.Popen([installer])), "setup-again", shots, limit=20.0)
+    code = started[0].wait(120)
+    outage, leaks = watch.stop(began)
+    after = stand.service_pid()
+    expect("the installer of the version that is installed opens the window with no window of its own and leaves the service and the VPN alone",
+           code == 0 and seen["shown"] is not None and not seen["others"] and before == after and outage < 1.0 and leaks == 0,
+           "code=%d s=%.1f shown_ms=%s front_ms=%s content_ms=%s service %d -> %d vpn_down=%.1f s leaks=%d others=%s"
+           % (code, time.time() - began, seen["shown"], seen["front"], seen["content"], before, after, outage, leaks, seen["others"]))
+    if seen["hwnd"]:
+        shut(seen["hwnd"])
+    os.remove(DESKTOP)
+    answer = []
+
+    def person():
+        try:
+            answer.append(stand.as_person([installer], 60))
+        except OSError as e:
+            answer.append("refused %s" % e.winerror)
+    before = stand.service_pid()
+    seen = stand.launch(lambda: threading.Thread(target=person, daemon=True).start(), "setup-person", shots, limit=10.0)
+    until(lambda: answer, 60, 0.1)
+    expect("a person without administrator rights opens Spofy with the installer: no request for rights, the window opens, the service stays",
+           answer == [0] and seen["shown"] is not None and stand.service_pid() == before,
+           "code=%s shown_ms=%s front_ms=%s content_ms=%s others=%s" % (answer, seen["shown"], seen["front"], seen["content"], seen["others"]))
+    if seen["hwnd"]:
+        shut(seen["hwnd"])
+
+
 def scenario():
     uplink = ps("(Get-NetRoute -DestinationPrefix 0.0.0.0/0 | Sort-Object -Property RouteMetric, ifMetric | Select-Object -First 1 | Get-NetAdapter).Name")
     source = ps("(Get-NetIPAddress -InterfaceAlias '%s' -AddressFamily IPv4 | Select-Object -First 1).IPAddress" % uplink)
@@ -246,9 +307,9 @@ def scenario():
     up = until(pipe_open, 30, 0.2)
     size = sum(os.path.getsize(os.path.join(d, f)) for d, _, fs in os.walk(HOME) for f in fs) if os.path.exists(HOME) else 0
     tray = until(stand.tray_window, 30, 0.1)
-    expect("installed silently: the service runs, the tray is up and starts at logon, the window is in the Start menu",
+    expect("installed silently: the service runs, the tray is up and starts at logon, the window is in the Start menu and on the desktop",
            code == 0 and bool(up) and bool(tray) and stand.tray_icon(tray) and value(RUN, "Spofy") == '"%s"' % os.path.join(HOME, "spofy-tray.exe")
-           and os.path.exists(SHORTCUT) and value(ENTRY, "DisplayVersion") == "0.0.0.1",
+           and os.path.exists(SHORTCUT) and os.path.exists(DESKTOP) and value(ENTRY, "DisplayVersion") == "0.0.0.1",
            "code=%d s=%.1f on_disk=%.1f MB run=%s tray=%s" % (code, took, size / 1e6, value(RUN, "Spofy"), bool(tray)))
     if not up:
         return
@@ -262,6 +323,7 @@ def scenario():
            bool(added) and added.get("ok") and bool(on) and on.get("ok") and away() and Site.hits > hits and not past(source),
            "connect=%.2f s %s %s" % (took, str(added)[:200], str(on)[:200]))
     expect("the Wintun driver is in the system while the tunnel is up", traces()["driver"])
+    launches(source, ui, old)
     ui.ask("set", key="killSwitch", value=True)
     ui.ask("set", key="autoConnect", value=False)
     ui.close()
@@ -275,9 +337,11 @@ def scenario():
     back = connected()
     outage, leaks = watch.stop(began)
     tray = until(lambda: owner(stand.tray_window()) not in (0, before), 30, 0.1)
-    expect("upgraded over itself with the kill switch and the window open: no reboot, the window closed, the tray replaced, the service connects by itself, nothing leaks",
-           code == 0 and bool(shown) and window.poll() is not None and bool(tray) and back and leaks == 0 and value(ENTRY, "DisplayVersion") == "0.0.0.2",
-           "code=%d setup=%.1f s vpn_down=%.1f s leaks=%d window=%s tray=%s signed=%s" % (code, took, outage, leaks, window.poll(), bool(tray), signed))
+    front = until(lambda: stand.window() and stand.user32.GetForegroundWindow() == stand.window(), 15, 0.1)
+    expect("upgraded over itself with the kill switch and the window open: no reboot, the window closed, the tray replaced, the service connects by itself, nothing leaks, the desktop shortcut the person removed stays removed",
+           code == 0 and bool(shown) and window.poll() is not None and bool(tray) and back and leaks == 0 and value(ENTRY, "DisplayVersion") == "0.0.0.2"
+           and not os.path.exists(DESKTOP),
+           "code=%d setup=%.1f s vpn_down=%.1f s leaks=%d window=%s tray=%s signed=%s reopened_in_front=%s" % (code, took, outage, leaks, window.poll(), bool(tray), signed, bool(front)))
 
     kept = files(HOME)
     code, took = setup(damaged)

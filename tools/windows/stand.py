@@ -9,11 +9,13 @@ import shutil
 import signal
 import socket
 import ssl
+import struct
 import subprocess
 import sys
 import tempfile
 import threading
 import time
+import zlib
 
 CORE = os.path.abspath(sys.argv[1])
 APP = os.path.abspath(sys.argv[2]) if len(sys.argv) > 2 else ""
@@ -448,6 +450,136 @@ for name, args, result in [
     ("PostMessageW", [ctypes.c_void_p, ctypes.c_uint, ctypes.c_size_t, ctypes.c_ssize_t], ctypes.c_bool),
 ]:
     getattr(user32, name).argtypes, getattr(user32, name).restype = args, result
+
+
+class Header(ctypes.Structure):
+    _fields_ = [("size", ctypes.c_uint32), ("width", ctypes.c_int32), ("height", ctypes.c_int32), ("planes", ctypes.c_uint16), ("bits", ctypes.c_uint16)] + \
+               [(n, ctypes.c_uint32) for n in ("compression", "image", "xppm", "yppm", "used", "important")]
+
+
+gdi32 = ctypes.WinDLL("gdi32")
+for name, args, result in [
+    ("GetDC", [ctypes.c_void_p], ctypes.c_void_p),
+    ("ReleaseDC", [ctypes.c_void_p, ctypes.c_void_p], ctypes.c_int),
+    ("GetWindowRect", [ctypes.c_void_p, ctypes.c_void_p], ctypes.c_bool),
+    ("GetWindowTextW", [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_int], ctypes.c_int),
+    ("GetForegroundWindow", [], ctypes.c_void_p),
+]:
+    getattr(user32, name).argtypes, getattr(user32, name).restype = args, result
+for name, args, result in [
+    ("CreateCompatibleDC", [ctypes.c_void_p], ctypes.c_void_p),
+    ("CreateCompatibleBitmap", [ctypes.c_void_p, ctypes.c_int, ctypes.c_int], ctypes.c_void_p),
+    ("SelectObject", [ctypes.c_void_p, ctypes.c_void_p], ctypes.c_void_p),
+    ("BitBlt", [ctypes.c_void_p] + [ctypes.c_int] * 4 + [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_uint32], ctypes.c_bool),
+    ("GetDIBits", [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint, ctypes.c_uint, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint], ctypes.c_int),
+    ("DeleteObject", [ctypes.c_void_p], ctypes.c_bool),
+    ("DeleteDC", [ctypes.c_void_p], ctypes.c_bool),
+]:
+    getattr(gdi32, name).argtypes, getattr(gdi32, name).restype = args, result
+
+
+def bounds(hwnd):
+    box = ctypes.wintypes.RECT()
+    if ctypes.windll.dwmapi.DwmGetWindowAttribute(ctypes.c_void_p(hwnd), 9, ctypes.byref(box), ctypes.sizeof(box)) != 0:
+        user32.GetWindowRect(hwnd, ctypes.byref(box))
+    return box.left, box.top, box.right - box.left, box.bottom - box.top
+
+
+def grab(box):
+    left, top, w, h = box
+    screen = user32.GetDC(None)
+    dc = gdi32.CreateCompatibleDC(screen)
+    bitmap = gdi32.CreateCompatibleBitmap(screen, w, h)
+    old = gdi32.SelectObject(dc, bitmap)
+    gdi32.BitBlt(dc, 0, 0, w, h, screen, left, top, 0x00CC0020 | 0x40000000)
+    info = Header(ctypes.sizeof(Header), w, -h, 1, 32, 0, 0, 0, 0, 0, 0)
+    data = ctypes.create_string_buffer(w * h * 4)
+    gdi32.GetDIBits(dc, bitmap, 0, h, data, ctypes.byref(info), 0)
+    gdi32.SelectObject(dc, old)
+    gdi32.DeleteObject(bitmap)
+    gdi32.DeleteDC(dc)
+    user32.ReleaseDC(None, screen)
+    return data.raw
+
+
+def png(path, w, h, bgra):
+    rgb = bytearray(w * h * 3)
+    rgb[0::3], rgb[1::3], rgb[2::3] = bgra[2::4], bgra[1::4], bgra[0::4]
+    rows = b"".join(b"\x00" + bytes(rgb[y * w * 3:(y + 1) * w * 3]) for y in range(h))
+
+    def chunk(kind, body):
+        return struct.pack(">I", len(body)) + kind + body + struct.pack(">I", zlib.crc32(kind + body))
+    with open(path, "wb") as f:
+        f.write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(rows, 6)) + chunk(b"IEND", b""))
+
+
+def apart(a, b):
+    if len(a) != len(b):
+        return 1.0
+    pa, pb = a[1::12], b[1::12]
+    return sum(1 for x, y in zip(pa, pb) if abs(x - y) > 40) / max(1, len(pa))
+
+
+def toplevel():
+    seen = {}
+
+    def each(h, _):
+        if user32.IsWindowVisible(h):
+            name, title, pid = ctypes.create_unicode_buffer(64), ctypes.create_unicode_buffer(64), ctypes.c_uint32()
+            user32.GetClassNameW(h, name, 64)
+            user32.GetWindowTextW(h, title, 64)
+            user32.GetWindowThreadProcessId(h, ctypes.byref(pid))
+            seen[h] = (name.value, title.value, pid.value)
+        return True
+    user32.EnumWindows(EnumProc(each), None)
+    return seen
+
+
+def cloaked(hwnd):
+    flag = ctypes.c_uint32()
+    return ctypes.windll.dwmapi.DwmGetWindowAttribute(ctypes.c_void_p(hwnd), 14, ctypes.byref(flag), ctypes.sizeof(flag)) == 0 and flag.value != 0
+
+
+def launch(start, name, out, limit=6.0, watched=2.0):
+    before = toplevel()
+    began = time.perf_counter()
+    start()
+    hwnd, created, shown, front, frames, others, last = 0, None, None, None, [], {}, None
+    while time.perf_counter() - began < limit:
+        t = time.perf_counter() - began
+        if not hwnd:
+            hwnd = window()
+            if hwnd:
+                created = t
+        if hwnd and shown is None and user32.IsWindowVisible(hwnd) and not cloaked(hwnd):
+            shown = t
+        if hwnd and front is None and user32.GetForegroundWindow() == hwnd:
+            front = t
+        if shown is not None:
+            box = bounds(hwnd)
+            if box[2] > 0 and box[3] > 0:
+                data = grab(box)
+                last = (t, box, data)
+                if t - shown <= watched and (not frames or frames[-1][2] != data):
+                    frames.append(last)
+        for h, (kind, title, pid) in toplevel().items():
+            if h not in before and h != hwnd and h not in others:
+                others[h] = (round(t * 1000), kind, title, pid)
+        time.sleep(0.004)
+    os.makedirs(out, exist_ok=True)
+    timeline, content = [], None
+    for t, box, data in frames + ([last] if last and (not frames or last[0] != frames[-1][0]) else []):
+        off = apart(data, last[2])
+        timeline.append((round(t * 1000), round(off * 100, 2)))
+        if off < 0.01 and content is None:
+            content = t
+        elif off >= 0.01:
+            content = None
+        png(os.path.join(out, "%s-%05d.png" % (name, round(t * 1000))), box[2], box[3], data)
+    ms = lambda v: None if v is None else round(v * 1000)
+    print("     launch %s: window made %s ms, shown %s ms, in front %s ms, final picture from %s ms; frames (ms, %% of pixels unlike the final): %s; other windows: %s"
+          % (name, ms(created), ms(shown), ms(front), ms(content), timeline, sorted(others.values())), flush=True)
+    return {"made": ms(created), "shown": ms(shown), "front": ms(front), "content": ms(content), "frames": timeline, "others": sorted(others.values()), "hwnd": hwnd}
 
 
 def menu_of(pid):

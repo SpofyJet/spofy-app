@@ -241,16 +241,26 @@ def installed():
     return int(shell("du -sk %s" % base).split()[0]) / 1024
 
 
+def drawn():
+    text = adb("logcat", "-d", "-s", "ActivityTaskManager:I", "ActivityManager:I", limit=60)
+    return [int(a or 0) * 1000 + int(b) for a, b in re.findall(r"Fully drawn %s/\.MainActivity: \+(?:(\d+)s)?(\d+)ms" % re.escape(PACKAGE), text)]
+
+
 def started_in():
-    times = []
+    adb("logcat", "-G", "16M", limit=60)
+    times, full = [], []
     for _ in range(5):
         shell("am force-stop %s" % PACKAGE)
         time.sleep(1)
+        before = len(drawn())
         m = re.search(r"TotalTime: (\d+)", shell("am start -W -n %s/.MainActivity" % PACKAGE, limit=120))
         if m:
             times.append(int(m.group(1)))
+        now = until(lambda: drawn()[before:], 15)
+        if now:
+            full.append(now[0])
         until(lambda: "core.sock" in shell("ls %s/files" % DATA), 30)
-    return sorted(times)
+    return sorted(times), sorted(full)
 
 
 class Channel:
@@ -903,13 +913,14 @@ def scenario():
         adb("uninstall", PACKAGE, limit=120)
         code, out = run("adb", "install", "-g", RELEASE, limit=300)
         need("the release build installs", code == 0 and "Success" in out, out[-300:])
-        times = started_in()
+        times, full = started_in()
         time.sleep(3)
         screen("9-release")
         usage = memory()
-        expect("the release build starts and its core listens", len(times) == 5 and "core.sock" in shell("ls %s/files" % DATA), "ms=%s" % times)
-        print("release build: apk %.1f MB, installed %.1f MB, cold start %s ms with the device doing a fixed loop in %d ms, memory %s MB"
-              % (os.path.getsize(RELEASE) / 1e6, installed(), times, speed(), usage), flush=True)
+        expect("the release build starts, its core listens and the screen with the core's state is drawn",
+               len(times) == 5 and len(full) == 5 and "core.sock" in shell("ls %s/files" % DATA), "ms=%s drawn_ms=%s" % (times, full))
+        print("release build: apk %.1f MB, installed %.1f MB, cold start %s ms, the core's state on screen at %s ms, with the device doing a fixed loop in %d ms, memory %s MB"
+              % (os.path.getsize(RELEASE) / 1e6, installed(), times, full, speed(), usage), flush=True)
 
 
 began = time.time()

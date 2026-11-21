@@ -34,6 +34,9 @@ class WindowsHost implements Host {
   void Function(bool dark, Color background)? get dress => dressOnWindows;
 
   @override
+  void Function()? get drawn => null;
+
+  @override
   void links(void Function(String link) hear) {}
 }
 
