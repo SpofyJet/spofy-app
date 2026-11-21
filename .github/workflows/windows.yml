@@ -1,113 +1,17 @@
 name: windows
 on:
   push:
-  pull_request:
-  workflow_dispatch:
-    inputs:
-      kills:
-        default: '100'
-      rounds:
-        default: '1'
-      switches:
-        default: '10'
+permissions:
+  actions: read
+  contents: read
 jobs:
-  core:
-    runs-on: windows-latest
-    timeout-minutes: 60
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          path: spofy-app
-      - id: rev
-        run: echo "rev=$(cat spofy-app/core/XRAY_REV)" >> "$GITHUB_OUTPUT"
-      - uses: actions/checkout@v7
-        with:
-          repository: SpofyJet/xray-core
-          ref: ${{ steps.rev.outputs.rev }}
-          path: spofy-xray-core
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: spofy-app/core/go.mod
-          cache-dependency-path: spofy-app/core/go.sum
-      - working-directory: spofy-app/core
-        timeout-minutes: 25
-        run: |
-          go vet ./...
-          mkdir -p ../dist
-          python ../tools/windows/wintun.py amd64 ../dist
-          CGO_ENABLED=1 go test -c -race -o ../dist/host.test.exe ./internal/host/
-          CGO_ENABLED=1 go -C ../../spofy-xray-core test -c -race -o ../spofy-app/dist/tun.test.exe ./proxy/tun/
-      - name: adapter
-        working-directory: spofy-app/core/internal/host
-        timeout-minutes: 20
-        env:
-          SPOFY_ADAPTER_TESTS: '1'
-        run: |
-          ../../../dist/host.test.exe -test.count=${{ inputs.rounds || 1 }} -test.v -test.timeout=15m
-          ../../../dist/tun.test.exe -test.run 'Changes|TheInterfaceComes' -test.count=${{ inputs.rounds || 1 }} -test.v -test.timeout=10m
-      - working-directory: spofy-app/core
-        timeout-minutes: 25
-        run: |
-          CGO_ENABLED=1 go test -race -count=1 $(go list ./... | grep -v -e /internal/guard -e /internal/host)
-          CGO_ENABLED=1 go test -race -gcflags=github.com/tailscale/wf=-d=checkptr=0 -count=1 -v ./internal/guard/
-      - working-directory: spofy-app/core
-        run: |
-          pub=$(sed -n 's/^version: //p' ../app/pubspec.yaml)
-          rev=$(cut -c1-7 XRAY_REV)
-          CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -checklinkname=0 -X main.version=${pub%+*} -X main.build=${pub#*+} -X main.engineRev=xray-$rev -X github.com/xtls/xray-core/core.build=spofy-$rev" -o ../dist/spofy-core.exe ./cmd/spofy-core
-          CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -H windowsgui" -o ../dist/spofy-tray.exe ./cmd/spofy-tray
-          version="$(sed -n 's/^version: \([0-9.]*\).*/\1/p' ../app/pubspec.yaml).$GITHUB_RUN_NUMBER"
-          python ../tools/windows/resources.py cmd/spofy-setup "Spofy Setup" "$version" ../app/windows/runner/resources/app_icon.ico cmd/spofy-setup/setup.manifest
-          CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -H windowsgui -X main.version=$version" -o ../dist/spofy-setup.exe ./cmd/spofy-setup
-          CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o ../dist/spofy-pack.exe ./cmd/spofy-pack
-          CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o ../dist/spofy-release.exe ./cmd/spofy-release
-          ls -l ../dist/*.exe
-      - name: flutter
-        run: |
-          read -r version sum < spofy-app/tools/windows/flutter.sha256
-          [ "$version" = "$(sed -n 's/^ARG FLUTTER_VERSION=//p' spofy-app/tools/flutter/Dockerfile)" ] || { echo "tools/windows/flutter.sha256 is for another Flutter"; exit 1; }
-          curl -fsSL -o "$RUNNER_TEMP/flutter.zip" "https://storage.googleapis.com/flutter_infra_release/releases/stable/windows/flutter_windows_${version}-stable.zip"
-          echo "$sum  $RUNNER_TEMP/flutter.zip" | sha256sum -c -
-          7z x -y -bd -o"$RUNNER_TEMP" "$RUNNER_TEMP/flutter.zip" > /dev/null
-          rm "$RUNNER_TEMP/flutter.zip"
-          echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
-      - working-directory: spofy-app/app
-        timeout-minutes: 25
-        run: |
-          flutter config --no-analytics --no-cli-animations
-          flutter pub get --enforce-lockfile
-          SPOFY_CORE="$GITHUB_WORKSPACE/spofy-app/dist/spofy-core.exe" flutter test --reporter expanded test/pipe_transport_test.dart
-          flutter build windows --release
-          bundle=build/windows/x64/runner/Release
-          cp ../dist/wintun.dll "$bundle/"
-          cp ../dist/spofy-core.exe "$bundle/"
-          cp ../dist/spofy-tray.exe "$bundle/"
-          cp ../dist/spofy-setup.exe "$bundle/uninstall.exe"
-          ls -l "$bundle"
-          du -sh "$bundle"
-      - working-directory: spofy-app
-        timeout-minutes: 25
-        run: |
-          mkdir -p dist/shots
-          SPOFY_KILLS=${{ inputs.kills }} SPOFY_SWITCHES=${{ inputs.switches }} python tools/windows/stand.py dist/spofy-core.exe app/build/windows/x64/runner/Release/spofy.exe dist/shots app/build/windows/x64/runner/Release/spofy-tray.exe
-      - if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: windows
-          path: |
-            spofy-app/dist/shots
-            spofy-app/dist/spofy-setup.exe
-            spofy-app/dist/spofy-pack.exe
-            spofy-app/dist/spofy-release.exe
-            spofy-app/app/build/windows/x64/runner/Release
-          retention-days: 7
   installer:
-    needs: core
     runs-on: windows-latest
-    timeout-minutes: 40
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        skip: ["none", "person", "again", "again,person", "all"]
     defaults:
       run:
         shell: bash
@@ -119,21 +23,18 @@ jobs:
         with:
           name: windows
           path: built
+          run-id: 44924839398
+          github-token: ${{ github.token }}
       - working-directory: spofy-app
-        timeout-minutes: 30
+        timeout-minutes: 14
+        env:
+          STAND_SKIP: ${{ matrix.skip }}
         run: |
           mkdir -p dist/installer dist/stand
           bundle=../built/app/build/windows/x64/runner/Release
           cp "$bundle/spofy-core.exe" dist/stand/
           version="$(sed -n 's/^version: \([0-9.]*\).*/\1/p' app/pubspec.yaml).$GITHUB_RUN_NUMBER"
           code=0
-          timeout 15m python -u tools/windows/installer.py dist/stand/spofy-core.exe ../built/dist/spofy-pack.exe ../built/dist/spofy-setup.exe "$bundle" dist/installer "$version" ../built/dist/spofy-release.exe > dist/installer/stand.log 2>&1 < /dev/null || code=$?
+          timeout 12m python -u tools/windows/installer.py dist/stand/spofy-core.exe ../built/dist/spofy-pack.exe ../built/dist/spofy-setup.exe "$bundle" dist/installer "$version" ../built/dist/spofy-release.exe > dist/installer/stand.log 2>&1 < /dev/null || code=$?
           cat dist/installer/stand.log
-          tasklist //v > dist/installer/tasks-after.txt 2>&1 || true
           exit $code
-      - if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: installer
-          path: spofy-app/dist/installer
-          retention-days: 7
