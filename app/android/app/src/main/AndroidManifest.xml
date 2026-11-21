@@ -85,9 +85,11 @@
             android:value="2"/>
         <receiver
             android:name=".ReminderReceiver"
+            android:process=":core"
             android:exported="false"/>
         <receiver
             android:name=".RearmReceiver"
+            android:process=":core"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED"/>

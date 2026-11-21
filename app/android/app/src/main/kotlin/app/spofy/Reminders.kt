@@ -8,6 +8,7 @@ import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.net.VpnService
 import android.os.Build
 import java.util.Calendar
 import kotlin.math.roundToLong
@@ -136,8 +137,26 @@ class ReminderReceiver : BroadcastReceiver() {
 class RearmReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         when (intent.action) {
-            Intent.ACTION_BOOT_COMPLETED, Intent.ACTION_MY_PACKAGE_REPLACED, Intent.ACTION_TIME_CHANGED, Intent.ACTION_TIMEZONE_CHANGED ->
+            Intent.ACTION_BOOT_COMPLETED, Intent.ACTION_TIME_CHANGED, Intent.ACTION_TIMEZONE_CHANGED -> Reminders.arm(context)
+            Intent.ACTION_MY_PACKAGE_REPLACED -> {
                 Reminders.arm(context)
+                resume(context)
+            }
+        }
+    }
+
+    private fun resume(context: Context) {
+        if (!CoreService.resumed(context).isFile || VpnService.prepare(context) != null) {
+            return
+        }
+        val start = Intent(VpnService.SERVICE_INTERFACE).setClass(context, CoreService::class.java)
+        try {
+            if (Build.VERSION.SDK_INT >= 26) {
+                context.startForegroundService(start)
+            } else {
+                context.startService(start)
+            }
+        } catch (e: Exception) {
         }
     }
 }

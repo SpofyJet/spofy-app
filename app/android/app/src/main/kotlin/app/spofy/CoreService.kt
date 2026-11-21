@@ -179,6 +179,14 @@ class CoreService : VpnService() {
         }
         var added = resources.openRawResource(R.raw.roots).use { it.readBytes() }
         if (BuildConfig.DEBUG) {
+            val stand = File(filesDir, "test-update")
+            if (stand.isFile) {
+                val lines = stand.readLines()
+                if (lines.size >= 2) {
+                    env["SPOFY_UPDATE_SOURCE"] = lines[0].trim()
+                    env["SPOFY_UPDATE_KEY"] = lines[1].trim()
+                }
+            }
             val extra = File(filesDir, "test-ca.pem")
             if (extra.isFile) {
                 added += extra.readBytes()
@@ -294,6 +302,9 @@ class CoreService : VpnService() {
                 }
                 if (state == "connected") {
                     getSystemService(NotificationManager::class.java).cancel(REFUSED)
+                    resumed(this).createNewFile()
+                } else if (state == "idle") {
+                    resumed(this).delete()
                 }
             } else if (message.has("re") && !message.optBoolean("ok")) {
                 note("request ${message.optInt("re")} failed: ${message.optString("code")}")
@@ -662,6 +673,8 @@ class CoreService : VpnService() {
             private set
 
         fun socket(context: Context) = File(context.filesDir, "core.sock")
+
+        fun resumed(context: Context) = File(context.filesDir, "resume")
 
         fun title(state: String): Int? = when (state) {
             "connected" -> R.string.state_connected
