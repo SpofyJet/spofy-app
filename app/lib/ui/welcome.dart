@@ -56,30 +56,33 @@ class _WelcomeState extends State<Welcome> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    const Spacer(flex: 2),
-                    Semantics(
-                      header: true,
-                      child: Text(S.noSubscriptionTitle, style: Ink.title, textAlign: TextAlign.center),
-                    ),
-                    const SizedBox(height: 8),
-                    ConstrainedBox(
-                      constraints: BoxConstraints(minHeight: slot),
-                      child: Semantics(
-                        liveRegion: true,
-                        child: problem.isEmpty
-                            ? Text(S.copyLink, style: Ink.note, textAlign: TextAlign.center)
-                            : _Problem(problem),
+                    const Spacer(),
+                    Semantics(header: true, child: Balanced(S.noSubscriptionTitle, style: Ink.title)),
+                    Expanded(
+                      flex: 2,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          const SizedBox(height: 8),
+                          ConstrainedBox(
+                            constraints: BoxConstraints(minHeight: slot),
+                            child: Semantics(
+                              liveRegion: true,
+                              child: problem.isEmpty ? Balanced(S.copyLink, style: Ink.note) : _Problem(problem),
+                            ),
+                          ),
+                          if (model.browse case final browse?) ...[
+                            const SizedBox(height: 8),
+                            _Ask(
+                              ask: problem.isEmpty ? S.buyAsk : S.stuckAsk,
+                              action: problem.isEmpty ? S.buy : S.stuck,
+                              onTap: () => browse(shopAddress),
+                            ),
+                          ],
+                          const SizedBox(height: 16),
+                        ],
                       ),
                     ),
-                    if (model.browse case final browse?) ...[
-                      const SizedBox(height: 8),
-                      _Ask(
-                        ask: problem.isEmpty ? S.buyAsk : S.stuckAsk,
-                        action: problem.isEmpty ? S.buy : S.stuck,
-                        onTap: () => browse(shopAddress),
-                      ),
-                    ],
-                    const Spacer(flex: 3),
                     QuietButton(label: S.manual, onTap: widget.onManual),
                     const SizedBox(height: 8),
                     PrimaryButton(label: S.pasteLink, busy: model.running(Task.subscribe), onTap: _paste),
@@ -101,21 +104,23 @@ class _Problem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Text.rich(
-      TextSpan(
-        children: [
-          WidgetSpan(
-            alignment: PlaceholderAlignment.middle,
-            child: Padding(
-              padding: const EdgeInsets.only(right: 6),
-              child: GlyphIcon(Glyph.warning, color: Ink.warning, size: 16),
+    return Balance(
+      child: Text.rich(
+        TextSpan(
+          children: [
+            WidgetSpan(
+              alignment: PlaceholderAlignment.middle,
+              child: Padding(
+                padding: const EdgeInsets.only(right: 6),
+                child: GlyphIcon(Glyph.warning, color: Ink.warning, size: 16),
+              ),
             ),
-          ),
-          TextSpan(text: text),
-        ],
+            TextSpan(text: text),
+          ],
+        ),
+        style: Ink.note.copyWith(color: Ink.text),
+        textAlign: TextAlign.center,
       ),
-      style: Ink.note.copyWith(color: Ink.text),
-      textAlign: TextAlign.center,
     );
   }
 }

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:ui' show AppExitResponse;
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
@@ -203,6 +204,19 @@ class _SpofyAppState extends State<SpofyApp> with WidgetsBindingObserver {
     );
   }
 
+  bool _back() {
+    if (widget.model.pending != null) {
+      widget.model.keep();
+      return true;
+    }
+    final navigator = _navigator.currentState;
+    if (navigator == null || !navigator.canPop()) {
+      return false;
+    }
+    navigator.maybePop();
+    return true;
+  }
+
   static PageRoute<T> _route<T>(WidgetBuilder builder, [RouteSettings? settings]) {
     return PageRouteBuilder<T>(
       settings: settings,
@@ -239,11 +253,25 @@ class _SpofyAppState extends State<SpofyApp> with WidgetsBindingObserver {
         debugShowCheckedModeBanner: false,
         textStyle: Ink.body,
         pageRouteBuilder: <T>(RouteSettings settings, WidgetBuilder builder) => _route<T>(builder, settings),
-        builder: (context, child) => Stack(
-          children: [
-            child!,
-            ReconnectAsk(model: model),
-          ],
+        builder: (context, child) => Focus(
+          canRequestFocus: false,
+          skipTraversal: true,
+          onKeyEvent: (node, event) => event is KeyDownEvent && event.logicalKey == LogicalKeyboardKey.escape && _back()
+              ? KeyEventResult.handled
+              : KeyEventResult.ignored,
+          child: Listener(
+            onPointerDown: (event) {
+              if (event.buttons & kBackMouseButton != 0) {
+                _back();
+              }
+            },
+            child: Stack(
+              children: [
+                child!,
+                ReconnectAsk(model: model),
+              ],
+            ),
+          ),
         ),
         home: HomeScreen(
           model: model,

@@ -50,6 +50,11 @@ class HomeScreen extends StatelessWidget {
                     color: Ink.danger,
                   ),
                 ),
+              if (model.fault == AppModel.coreClosed && model.reopen != null)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(Ink.gutter, 8, Ink.gutter, 0),
+                  child: QuietButton(label: S.tryAgain, busy: model.reviving, onTap: model.revive),
+                ),
               Expanded(child: _body()),
             ],
           );
@@ -144,7 +149,7 @@ class _Loading extends StatelessWidget {
           ),
         ),
         SizedBox(height: Speed.slot(context)),
-        const Spacer(),
+        const Expanded(child: _Notices([])),
         tile,
         const SizedBox(height: 8),
         tile,
@@ -187,14 +192,13 @@ class _Stopped extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Text(S.stopTitle(subscription), style: Ink.title, textAlign: TextAlign.center),
+              Balanced(S.stopTitle(subscription), style: Ink.title),
               const SizedBox(height: 8),
-              Text(S.stopHint(subscription), style: Ink.note, textAlign: TextAlign.center),
+              Balanced(S.stopHint(subscription), style: Ink.note),
             ],
           ),
         ),
-        const Spacer(flex: 3),
-        if (failure?.task == Task.refresh) ...[Notice(S.failure(failure!)), const SizedBox(height: 8)],
+        Expanded(flex: 3, child: _Notices([if (failure?.task == Task.refresh) Notice(S.failure(failure!))])),
         _SubscriptionTile(model: model, subscription: subscription, now: now, onTap: onSubscription),
         const SizedBox(height: 8),
         QuietButton(label: S.checkAgain, busy: model.running(Task.refresh), onTap: model.refresh),
@@ -257,14 +261,7 @@ class _Status extends StatelessWidget {
               SizedBox(
                 height: MediaQuery.textScalerOf(context).scale(Ink.note.fontSize!) * Ink.note.height! * 2,
                 child: _Swap(
-                  child: Text(
-                    hint,
-                    key: ValueKey<String?>(totals ? null : hint),
-                    style: Ink.note,
-                    textAlign: TextAlign.center,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                  ),
+                  child: Balanced(hint, key: ValueKey<String?>(totals ? null : hint), style: Ink.note, maxLines: 2),
                 ),
               ),
             ],
@@ -275,7 +272,17 @@ class _Status extends StatelessWidget {
           child: Center(
             child: _Swap(
               alignment: Alignment.center,
-              child: state.protecting && connection.since > 0 ? Uptime(since: connection.since, now: now) : null,
+              child: state.protecting && connection.since > 0
+                  ? Uptime(
+                      since: connection.since,
+                      now: now,
+                      tone: switch (state) {
+                        VpnState.connected => Ink.good,
+                        VpnState.switching => Ink.faint,
+                        _ => Ink.warning,
+                      },
+                    )
+                  : null,
             ),
           ),
         ),
@@ -286,30 +293,51 @@ class _Status extends StatelessWidget {
           height: Speed.slot(context),
           child: _Swap(child: state == VpnState.connected ? Speed(rate: model.speed) : null),
         ),
-        const Spacer(),
-        if (failure != null && failure.task != Task.connect) ...[Notice(S.failure(failure)), const SizedBox(height: 8)],
-        if (model.update case final update? when onUpdate != null) ...[
-          Pressable(
-            label: S.updateBanner(update),
-            onTap: onUpdate,
-            child: Notice(S.updateBanner(update), color: Ink.accent, glyph: Glyph.refresh),
-          ),
-          const SizedBox(height: 8),
-        ],
+        Expanded(
+          child: _Notices([
+            if (failure?.task == Task.disconnect) Notice(S.failure(failure!)),
+            if (model.update case final update? when onUpdate != null)
+              Pressable(
+                label: S.updateBanner(update),
+                onTap: onUpdate,
+                child: Notice(S.updateBanner(update), color: Ink.accent, glyph: Glyph.refresh),
+              ),
+          ]),
+        ),
         Tile(
           leading: shown == null
               ? GlyphMark(Glyph.bolt, color: Ink.accent)
               : CountryMark(shown.country.isEmpty ? '—' : shown.country, active: state == VpnState.connected),
-          title: connection.auto ? S.auto : (chosen == null ? connection.choice : S.serverName(chosen)),
-          subtitle: connection.auto ? (current == null ? S.autoHint : S.serverName(current)) : S.pinned,
+          title: connection.auto ? S.auto : (chosen == null ? connection.choice : S.place(chosen)),
+          subtitle: connection.auto ? (current == null ? S.autoHint : S.place(current)) : S.pinned,
           trailing: delay > 0 ? S.delay(delay) : '',
           onTap: onServers,
-          semantic:
-              '${S.server}: ${connection.auto ? S.auto : (chosen == null ? connection.choice : S.serverName(chosen))}',
+          semantic: '${S.server}: ${connection.auto ? S.auto : (chosen == null ? connection.choice : S.place(chosen))}',
         ),
         const SizedBox(height: 8),
         _SubscriptionTile(model: model, subscription: subscription, now: now, onTap: onSubscription),
       ],
+    );
+  }
+}
+
+class _Notices extends StatelessWidget {
+  const _Notices(this.children);
+
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: Alignment.bottomCenter,
+      child: Padding(
+        padding: const EdgeInsets.only(top: 16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [for (final child in children) Padding(padding: const EdgeInsets.only(bottom: 8), child: child)],
+        ),
+      ),
     );
   }
 }
@@ -495,12 +523,13 @@ class Speed extends StatelessWidget {
 }
 
 class Uptime extends StatefulWidget {
-  const Uptime({super.key, required this.since, required this.now});
+  const Uptime({super.key, required this.since, required this.now, this.tone});
 
   static const slot = 68.0;
 
   final int since;
   final DateTime Function() now;
+  final Color? tone;
 
   @override
   State<Uptime> createState() => _UptimeState();
@@ -538,6 +567,7 @@ class _UptimeState extends State<Uptime> {
     final text = S.uptime(elapsed);
     final still = MediaQuery.disableAnimationsOf(context);
     final style = Ink.type(17, 600, Ink.text, height: 1.2).copyWith(fontFeatures: const [FontFeature.tabularFigures()]);
+    final tone = widget.tone ?? Ink.good;
     return Semantics(
       label: '${S.uptimeLabel} $text',
       excludeSemantics: true,
@@ -546,7 +576,7 @@ class _UptimeState extends State<Uptime> {
           decoration: BoxDecoration(
             color: Ink.surface,
             borderRadius: const BorderRadius.all(Radius.circular(999)),
-            border: Border.all(color: Ink.good.withValues(alpha: 0.28)),
+            border: Border.all(color: tone.withValues(alpha: 0.28)),
           ),
           child: Padding(
             padding: const EdgeInsets.fromLTRB(12, 7, 14, 7),
@@ -555,9 +585,9 @@ class _UptimeState extends State<Uptime> {
               children: [
                 DecoratedBox(
                   decoration: BoxDecoration(
-                    color: Ink.good,
+                    color: tone,
                     shape: BoxShape.circle,
-                    boxShadow: [BoxShadow(color: Ink.good.withValues(alpha: 0.55), blurRadius: 8)],
+                    boxShadow: [BoxShadow(color: tone.withValues(alpha: 0.55), blurRadius: 8)],
                   ),
                   child: const SizedBox.square(dimension: 8),
                 ),
