@@ -10,6 +10,7 @@ import 'package:spofy/core/protocol.dart';
 import 'package:spofy/state/apps.dart';
 import 'package:spofy/state/model.dart';
 import 'package:spofy/ui/app.dart';
+import 'package:spofy/ui/flags.dart';
 import 'package:spofy/ui/servers.dart';
 
 class SilentTransport implements Transport {
@@ -205,10 +206,13 @@ Scene home(
   traffic: state.protecting ? const Traffic(up: 83 * 1024 * 1024, down: 1288490188) : const Traffic(),
 );
 
-Future<void> loadFonts() async {
+Future<void> loadAssets() async {
   final bytes = File('fonts/Geologica.ttf').readAsBytesSync();
   final loader = FontLoader('Geologica')..addFont(Future.value(ByteData.sublistView(bytes)));
   await loader.load();
+  for (final code in flagCodes) {
+    await precacheTestImage(AssetImage('assets/flags/$code.webp'));
+  }
 }
 
 Future<void> show(WidgetTester tester, Scene scene, Size size, {double textScale = 1}) async {

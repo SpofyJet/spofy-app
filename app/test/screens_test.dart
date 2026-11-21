@@ -21,7 +21,7 @@ import 'scenes.dart';
 import 'transcript.dart';
 
 void main() {
-  setUpAll(loadFonts);
+  setUpAll(loadAssets);
 
   final homes = <String, Scene Function()>{
     'home_loading': () => Scene(ready: false),
