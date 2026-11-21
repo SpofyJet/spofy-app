@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/SpofyJet/spofy-app/core/internal/session"
@@ -197,6 +198,53 @@ func TestSwitchingTheModeWhileConnected(t *testing.T) {
 type refusing struct{ pointer }
 
 func (r *refusing) Set(string) error { return errors.New("no session") }
+
+type once struct {
+	pointer
+	refused atomic.Bool
+}
+
+func (o *once) Set(address string) error {
+	if o.refused.CompareAndSwap(false, true) {
+		return errors.New("the helper did not finish in 10000 ms")
+	}
+	return o.pointer.Set(address)
+}
+
+func TestASystemThatRefusedOnceIsPointedAgainWithoutAnotherChange(t *testing.T) {
+	o := &once{}
+	b := newBench(t, func(c *Config) { c.System = o })
+	o.tunnel = b.tunnel.Config
+	b.subscribed()
+	b.app.Set(KeyMode, json.RawMessage(`"proxy"`))
+	if err := b.app.Connect(Auto); err != nil {
+		t.Fatal(err)
+	}
+	address := "127.0.0.1:" + strconv.Itoa(listening(t, b.tunnel.Config()))
+	b.until("pointed after the refusal, with nothing else happening", func() bool { return slices.Contains(o.seen(), "set "+address) })
+}
+
+func TestTheSystemIsPointedAtWhatTheRunningCoreListensOn(t *testing.T) {
+	b, p := proxied(t, nil)
+	b.app.Set(KeyMode, json.RawMessage(`"proxy"`))
+	if err := b.app.Connect(Auto); err != nil {
+		t.Fatal(err)
+	}
+	address := "127.0.0.1:" + strconv.Itoa(listening(t, b.tunnel.Config()))
+	b.until("pointed", func() bool { return slices.Contains(p.seen(), "set "+address) })
+	b.app.mu.Lock()
+	b.app.bound = 0
+	b.app.mu.Unlock()
+	b.app.aim()
+	b.until("a forgotten port number does not take the proxy away while the core still listens", func() bool {
+		b.app.mu.Lock()
+		defer b.app.mu.Unlock()
+		return b.app.want == address
+	})
+	if got := p.seen(); got[len(got)-1] != "set "+address {
+		t.Fatalf("calls %v", got)
+	}
+}
 
 func TestASystemThatRefusesIsTriedAgainOnTheNextChange(t *testing.T) {
 	r := &refusing{}

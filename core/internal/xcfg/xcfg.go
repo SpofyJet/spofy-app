@@ -3,7 +3,9 @@ package xcfg
 import (
 	"encoding/json"
 	"errors"
+	"net"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -125,12 +127,21 @@ func Build(server json.RawMessage, o Options) ([]byte, error) {
 }
 
 func Local(cfg []byte) bool {
+	return Listen(cfg) != ""
+}
+
+func Listen(cfg []byte) string {
 	var c struct {
 		Inbounds []struct {
 			Protocol string `json:"protocol"`
+			Listen   string `json:"listen"`
+			Port     int    `json:"port"`
 		} `json:"inbounds"`
 	}
-	return json.Unmarshal(cfg, &c) == nil && len(c.Inbounds) == 1 && c.Inbounds[0].Protocol == "mixed"
+	if json.Unmarshal(cfg, &c) != nil || len(c.Inbounds) != 1 || c.Inbounds[0].Protocol != "mixed" || c.Inbounds[0].Listen != Loopback || c.Inbounds[0].Port <= 0 {
+		return ""
+	}
+	return net.JoinHostPort(Loopback, strconv.Itoa(c.Inbounds[0].Port))
 }
 
 func MainTag(server json.RawMessage) string {

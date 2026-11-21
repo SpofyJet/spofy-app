@@ -426,7 +426,7 @@ type App struct {
 	cancel context.CancelFunc
 	online atomic.Bool
 	due    atomic.Int64
-	local  atomic.Bool
+	listen atomic.Pointer[string]
 
 	mu      sync.Mutex
 	conn    Connection
@@ -486,7 +486,7 @@ func New(cfg Config) *App {
 	a.conn = Connection{State: session.Idle, Choice: a.choice(cfg.Store.Get())}
 	address, limit := probe(cfg.Store.Get())
 	a.sess = session.New(session.Options{
-		Tunnel:    steered{cfg.Tunnel, &a.local},
+		Tunnel:    steered{cfg.Tunnel, &a.listen},
 		OnEvent:   a.onState,
 		OnMeasure: a.onMeasure,
 		Online:    a.online.Load,
@@ -512,16 +512,24 @@ func New(cfg Config) *App {
 
 type steered struct {
 	Tunnel
-	local *atomic.Bool
+	listen *atomic.Pointer[string]
 }
 
 func (s steered) Start(cfg []byte) (time.Duration, error) {
-	s.local.Store(xcfg.Local(cfg))
+	address := xcfg.Listen(cfg)
+	s.listen.Store(&address)
 	return s.Tunnel.Start(cfg)
 }
 
+func (a *App) listening() string {
+	if p := a.listen.Load(); p != nil {
+		return *p
+	}
+	return ""
+}
+
 func (a *App) Local() bool {
-	return a.local.Load()
+	return a.listening() != ""
 }
 
 func (a *App) proxied(st store.State) bool {
@@ -546,8 +554,8 @@ func (a *App) aim() {
 	switch {
 	case !a.proxied(st) || a.conn.State == session.Idle || a.conn.State == session.Failed:
 		a.want = ""
-	case protects(a.conn.State) && a.local.Load() && a.bound != 0:
-		a.want = net.JoinHostPort(xcfg.Loopback, strconv.Itoa(a.bound))
+	case protects(a.conn.State) && a.listening() != "":
+		a.want = a.listening()
 	}
 	a.mu.Unlock()
 	a.nudge()
@@ -560,6 +568,7 @@ func (a *App) steer() {
 			return
 		case <-a.kick:
 		}
+		wait := time.Second
 		for a.ctx.Err() == nil {
 			a.mu.Lock()
 			want, have, known := a.want, a.have, a.known
@@ -567,9 +576,16 @@ func (a *App) steer() {
 			if known && want == have {
 				break
 			}
-			if !a.point(want) {
-				break
+			if a.point(want) {
+				wait = time.Second
+				continue
 			}
+			select {
+			case <-a.ctx.Done():
+			case <-a.kick:
+			case <-time.After(wait):
+			}
+			wait = min(wait*2, 30*time.Second)
 		}
 	}
 }
