@@ -135,10 +135,10 @@ class _Loading extends StatelessWidget {
           child: const Align(alignment: Alignment.topCenter, child: Skeleton(width: 170, height: 16)),
         ),
         const SizedBox(height: Uptime.slot),
-        const Center(
+        Center(
           child: DecoratedBox(
             decoration: BoxDecoration(color: Ink.raised, shape: BoxShape.circle),
-            child: SizedBox.square(dimension: PowerControl.size),
+            child: const SizedBox.square(dimension: PowerControl.size),
           ),
         ),
         const Spacer(flex: 3),
@@ -212,10 +212,10 @@ class _EmptyState extends State<_Empty> {
                 : Text.rich(
                     TextSpan(
                       children: [
-                        const WidgetSpan(
+                        WidgetSpan(
                           alignment: PlaceholderAlignment.middle,
                           child: Padding(
-                            padding: EdgeInsets.only(right: 6),
+                            padding: const EdgeInsets.only(right: 6),
                             child: GlyphIcon(Glyph.warning, color: Ink.warning, size: 16),
                           ),
                         ),
@@ -244,7 +244,7 @@ class _EmptyState extends State<_Empty> {
                       children: [
                         TextSpan(
                           text: problem.isEmpty ? S.buy : S.stuck,
-                          style: const TextStyle(color: Ink.accent, fontWeight: FontWeight.w600),
+                          style: TextStyle(color: Ink.accent, fontWeight: FontWeight.w600),
                         ),
                       ],
                     ),
@@ -280,7 +280,7 @@ class _Stopped extends StatelessWidget {
     return _Stretch(
       children: [
         const Spacer(flex: 2),
-        const Center(child: GlyphIcon(Glyph.warning, color: Ink.warning, size: 40, stroke: 1.9)),
+        Center(child: GlyphIcon(Glyph.warning, color: Ink.warning, size: 40, stroke: 1.9)),
         const SizedBox(height: 16),
         Semantics(
           liveRegion: true,
@@ -450,7 +450,7 @@ class PowerControl extends StatelessWidget {
               decoration: BoxDecoration(color: fill, shape: BoxShape.circle),
             ),
             Center(child: GlyphIcon(troubled ? Glyph.warning : Glyph.power, color: ink, size: 56, stroke: 1.9)),
-            if (state.busy) const Spinner(size: size, color: Ink.accent, stroke: 4),
+            if (state.busy) Spinner(size: size, color: Ink.accent, stroke: 4),
           ],
         ),
       ),

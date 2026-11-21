@@ -211,11 +211,30 @@ Future<void> loadFonts() async {
   await loader.load();
 }
 
-Future<void> show(WidgetTester tester, Scene scene, Size size, {double textScale = 1}) async {
+void system(
+  WidgetTester tester, {
+  Brightness brightness = Brightness.dark,
+  List<Locale> locales = const [Locale('ru', 'RU')],
+}) {
+  tester.platformDispatcher.platformBrightnessTestValue = brightness;
+  tester.platformDispatcher.localesTestValue = locales;
+  addTearDown(tester.platformDispatcher.clearPlatformBrightnessTestValue);
+  addTearDown(tester.platformDispatcher.clearLocalesTestValue);
+}
+
+Future<void> show(
+  WidgetTester tester,
+  Scene scene,
+  Size size, {
+  double textScale = 1,
+  Brightness brightness = Brightness.dark,
+  List<Locale> locales = const [Locale('ru', 'RU')],
+}) async {
   const ratio = 1.0;
   tester.view.devicePixelRatio = ratio;
   tester.view.physicalSize = size * ratio;
   tester.platformDispatcher.textScaleFactorTestValue = textScale;
+  system(tester, brightness: brightness, locales: locales);
   addTearDown(tester.view.reset);
   addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
   await tester.pumpWidget(scene.app);

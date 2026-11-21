@@ -467,6 +467,7 @@ void main() {
     tester.view.devicePixelRatio = 1;
     tester.view.physicalSize = phone;
     addTearDown(tester.view.reset);
+    system(tester);
     await tester.pumpWidget(SpofyApp(model: model, now: () => clock));
     model.offer('spofy://add/$address');
     await tester.pump();

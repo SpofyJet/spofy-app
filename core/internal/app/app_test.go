@@ -882,19 +882,55 @@ func TestSettings(t *testing.T) {
 	if err := b.app.Set("killSwitch", json.RawMessage(`true`)); err != nil {
 		t.Fatal(err)
 	}
-	if err := b.app.Set("theme", json.RawMessage(`["a.b","c.d"]`)); err != nil {
+	if err := b.app.Set("window", json.RawMessage(`["a.b","c.d"]`)); err != nil {
 		t.Fatal(err)
 	}
 	same(t, b.seen(), []string{EvSettings, EvSettings})
 	b.open(nil)
-	if s := b.app.Snapshot().Settings; string(s["killSwitch"]) != "true" || string(s["theme"]) != `["a.b","c.d"]` {
+	if s := b.app.Snapshot().Settings; string(s["killSwitch"]) != "true" || string(s["window"]) != `["a.b","c.d"]` {
 		t.Fatalf("settings = %v", s)
 	}
-	if err := b.app.Set("theme", json.RawMessage(`null`)); err != nil {
+	if err := b.app.Set("window", json.RawMessage(`null`)); err != nil {
 		t.Fatal(err)
 	}
 	if s := b.app.Snapshot().Settings; len(s) != 1 {
 		t.Fatalf("settings = %v", s)
+	}
+}
+
+func TestThemeAndLanguageTakeOnlyKnownValues(t *testing.T) {
+	b := newBench(t, nil)
+	for key, bads := range map[string][]string{
+		KeyTheme:    {`"system"`, `"Light"`, `""`, `true`, `1`, `["dark"]`, `{"theme":"dark"}`},
+		KeyLanguage: {`"system"`, `"RU"`, `"de"`, `"en-US"`, `""`, `false`, `["ru"]`},
+	} {
+		for _, bad := range bads {
+			if err := b.app.Set(key, json.RawMessage(bad)); code(err) != CodeValue {
+				t.Fatalf("%s = %s: %v", key, bad, err)
+			}
+		}
+	}
+	if s := b.app.Snapshot().Settings; len(s) != 0 {
+		t.Fatalf("a refused value was kept: %s", s)
+	}
+	for key, goods := range map[string][]string{KeyTheme: {`"light"`, `"dark"`}, KeyLanguage: {`"en"`, `"ru"`}} {
+		for _, good := range goods {
+			if err := b.app.Set(key, json.RawMessage(good)); err != nil {
+				t.Fatalf("%s = %s: %v", key, good, err)
+			}
+		}
+	}
+	b.open(nil)
+	if s := b.app.Snapshot().Settings; string(s[KeyTheme]) != `"dark"` || string(s[KeyLanguage]) != `"ru"` {
+		t.Fatalf("settings after restart: %s", s)
+	}
+	for _, key := range []string{KeyTheme, KeyLanguage} {
+		if err := b.app.Set(key, json.RawMessage(`null`)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if s := b.app.Snapshot().Settings; len(s) != 0 {
+		t.Fatalf("null did not bring the default back: %s", s)
 	}
 }
 

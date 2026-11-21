@@ -187,6 +187,7 @@ func run() int {
 	defer windows.CloseHandle(single)
 	registerApplicationRestart.Call(0, 1|2|8)
 	s := &shell{}
+	s.model.System, _ = windows.GetUserPreferredUILanguages(windows.MUI_LANGUAGE_NAME)
 	if err := s.create(); err != nil {
 		return 1
 	}
@@ -227,7 +228,7 @@ func (s *shell) create() error {
 	if r, _, err := registerClassEx.Call(uintptr(unsafe.Pointer(&wc))); r == 0 {
 		return err
 	}
-	title, _ := windows.UTF16PtrFromString(tray.TextOpen)
+	title, _ := windows.UTF16PtrFromString(tray.App)
 	h, _, err := createWindowEx.Call(0, uintptr(unsafe.Pointer(class)), uintptr(unsafe.Pointer(title)), 0, 0, 0, 0, 0, 0, 0, uintptr(inst), 0)
 	if h == 0 {
 		return err
@@ -445,7 +446,7 @@ func (s *shell) menu(x, y int32) {
 		toggle |= mfGrayed
 	}
 	item(toggle, cmdToggle, v.Toggle.Label)
-	item(mfString, cmdOpen, tray.TextOpen)
+	item(mfString, cmdOpen, v.Open)
 	appendMenu.Call(m, mfSeparator, 0, 0)
 	item(mfString, cmdQuit, v.Quit.Label)
 	setMenuDefaultItem.Call(m, cmdOpen, 0)

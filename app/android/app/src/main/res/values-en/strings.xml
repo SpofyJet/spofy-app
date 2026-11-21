@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="channel">VPN status</string>
+    <string name="state_connected">VPN is on</string>
+    <string name="tile_on">On</string>
+    <string name="tile_off">Off</string>
+    <string name="tile_starting">Starting…</string>
+    <string name="tile_trouble">No connection</string>
+    <string name="state_connecting">Connecting</string>
+    <string name="state_switching">Switching server</string>
+    <string name="state_stalled">Server not responding</string>
+    <string name="state_offline">No internet</string>
+    <string name="state_failed">Servers aren’t responding</string>
+    <string name="failed_hint">We’ll try again when the network changes</string>
+    <string name="stalled_hint">Nothing leaks past the VPN</string>
+    <string name="disconnect">Disconnect</string>
+    <string name="refused_ended">Subscription has ended</string>
+    <string name="refused_spent">Out of data</string>
+    <string name="refused_devices">All device slots are taken</string>
+    <string name="refused_none">No subscription yet</string>
+    <string name="refused_other">Subscription isn’t working</string>
+    <string name="refused">VPN isn’t on</string>
+    <string name="refused_hint">Open Spofy</string>
+</resources>

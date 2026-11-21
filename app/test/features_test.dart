@@ -219,7 +219,7 @@ void main() {
     final scene = home(VpnState.idle, settings: {probeTimeoutKey: 6});
     await show(tester, scene, phone);
     await open(tester, S.settings);
-    await scrollTo(tester, find.text(S.seconds(10)));
+    await scrollTo(tester, find.text(S.checking.toUpperCase()));
     await golden(tester, 'settings_checking_360');
     await tester.tap(find.text(S.seconds(4)));
     await tester.pump();

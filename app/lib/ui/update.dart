@@ -59,7 +59,7 @@ class UpdatePanel extends StatelessWidget {
             ],
           ),
         ),
-        if (update.required) ...[const SizedBox(height: 8), const Notice(S.updateRequired)],
+        if (update.required) ...[const SizedBox(height: 8), Notice(S.updateRequired)],
         if (failed) ...[const SizedBox(height: 8), Notice(S.failure(failure))],
         if (model.connection.state.protecting) ...[
           const SizedBox(height: 8),
@@ -100,7 +100,7 @@ class UpdateScreen extends StatelessWidget {
                     padding: const EdgeInsets.fromLTRB(Ink.gutter, 4, Ink.gutter, 16),
                     children: [
                       if (update == null)
-                        const Notice(S.updateLatest, color: Ink.good, glyph: Glyph.check)
+                        Notice(S.updateLatest, color: Ink.good, glyph: Glyph.check)
                       else
                         UpdatePanel(model: model, update: update),
                       if (!required) ...[

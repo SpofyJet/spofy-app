@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app">Spofy</string>
+    <string name="app" translatable="false">Spofy</string>
     <string name="channel">Состояние VPN</string>
     <string name="state_connected">VPN работает</string>
     <string name="tile_on">Включён</string>
