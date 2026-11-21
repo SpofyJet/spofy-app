@@ -163,6 +163,39 @@ func TestFetchStatus(t *testing.T) {
 	}
 }
 
+func TestAPermanentMoveIsReportedAndATemporaryOneIsNot(t *testing.T) {
+	body, h := fixture(t)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/new", func(w http.ResponseWriter, r *http.Request) {
+		for k, v := range h {
+			w.Header()[k] = v
+		}
+		w.Write(body)
+	})
+	mux.Handle("/gone", http.RedirectHandler("/new", http.StatusPermanentRedirect))
+	mux.Handle("/old", http.RedirectHandler("/gone", http.StatusMovedPermanently))
+	mux.Handle("/away", http.RedirectHandler("/new", http.StatusFound))
+	mux.Handle("/mixed", http.RedirectHandler("/away", http.StatusMovedPermanently))
+	srv := httptest.NewTLSServer(mux)
+	defer srv.Close()
+	for path, want := range map[string]string{"/new": "", "/old": srv.URL + "/new", "/away": "", "/mixed": ""} {
+		p, err := Fetch(context.Background(), srv.Client(), srv.URL+path, Device{}, "")
+		if err != nil {
+			t.Fatalf("%s: %v", path, err)
+		}
+		if len(p.Servers) != 19 || p.Moved != want {
+			t.Fatalf("%s: moved %q, want %q", path, p.Moved, want)
+		}
+	}
+	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write(body) }))
+	defer plain.Close()
+	down := httptest.NewTLSServer(http.RedirectHandler(plain.URL, http.StatusMovedPermanently))
+	defer down.Close()
+	if _, err := Fetch(context.Background(), down.Client(), down.URL, Device{}, ""); !errors.Is(err, ErrDowngrade) {
+		t.Fatalf("a move from https to plain http was followed: err = %v", err)
+	}
+}
+
 func notice(remarks, address string) string {
 	b, _ := json.Marshal(remarks)
 	return `{"remarks":` + string(b) + `,"outbounds":[{"tag":"proxy","protocol":"vless","settings":{"vnext":[{"address":"` + address + `","port":1,"users":[{"id":"00000000-0000-0000-0000-000000000000","encryption":"none"}]}]},"streamSettings":{"network":"tcp"}},{"tag":"direct","protocol":"freedom"}]}`

@@ -2,6 +2,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:spofy/core/protocol.dart';
+import 'package:spofy/state/model.dart';
 import 'package:spofy/ui/home.dart';
 import 'package:spofy/ui/servers.dart';
 import 'package:spofy/ui/settings.dart';
@@ -126,6 +127,33 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
     expect(scene.transport.sent.single, '{"id":1,"op":"connect","server":"bypass2"}');
+  });
+
+  test('a server that did not answer is told apart from one not yet checked and goes last', () {
+    final list = servers();
+    final sg = list.firstWhere((s) => s.id == 'sg');
+    final unchecked = list.firstWhere((s) => s.id == 'bypass2');
+    expect([sg.silent, sg.measured, S.answer(sg)], [true, false, S.silent]);
+    expect([unchecked.silent, S.answer(unchecked)], [false, S.noDelay]);
+    expect(ordered(list).last.id, 'sg');
+    expect(places(list, sort: sortSpeed).last.name, 'Сингапур');
+  });
+
+  testWidgets('with no subscription the empty screen leads to the shop, and after a failure to help', (tester) async {
+    final opened = <String>[];
+    final scene = Scene(subscription: null, browse: opened.add);
+    await show(tester, scene, phone);
+    await press(tester, find.bySemanticsLabel('${S.buyAsk} ${S.buy}'));
+    expect(opened, [shopAddress]);
+    await show(
+      tester,
+      Scene(subscription: null, browse: opened.add, failure: const Failure(Task.subscribe, 'sub_unreachable', '')),
+      phone,
+    );
+    expect(find.bySemanticsLabel('${S.buyAsk} ${S.buy}'), findsNothing);
+    await press(tester, find.bySemanticsLabel('${S.stuckAsk} ${S.stuck}'));
+    expect(opened, [shopAddress, shopAddress]);
+    await golden(tester, 'empty_stuck_360');
   });
 
   testWidgets('search narrows the places, the order can be by name and is kept by the core', (tester) async {

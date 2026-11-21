@@ -159,6 +159,8 @@ class _Hidden extends StatelessWidget {
   Widget build(BuildContext context) => ExcludeSemantics(child: Opacity(opacity: 0, child: child));
 }
 
+const shopAddress = 'https://t.me/spofyvpnbot';
+
 class _Empty extends StatefulWidget {
   const _Empty({required this.model, required this.onManual});
 
@@ -228,6 +230,32 @@ class _EmptyState extends State<_Empty> {
           ),
         ),
         const Spacer(flex: 3),
+        if (widget.model.browse case final browse?)
+          Pressable(
+            label: problem.isEmpty ? '${S.buyAsk} ${S.buy}' : '${S.stuckAsk} ${S.stuck}',
+            onTap: () => browse(shopAddress),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(minHeight: 44),
+              child: Center(
+                child: ExcludeSemantics(
+                  child: Text.rich(
+                    TextSpan(
+                      text: '${problem.isEmpty ? S.buyAsk : S.stuckAsk} ',
+                      children: [
+                        TextSpan(
+                          text: problem.isEmpty ? S.buy : S.stuck,
+                          style: const TextStyle(color: Ink.accent, fontWeight: FontWeight.w600),
+                        ),
+                      ],
+                    ),
+                    style: Ink.note,
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        const SizedBox(height: 4),
         QuietButton(label: S.manual, onTap: widget.onManual),
         const SizedBox(height: 8),
         PrimaryButton(label: S.pasteLink, busy: widget.model.running(Task.subscribe), onTap: _paste),

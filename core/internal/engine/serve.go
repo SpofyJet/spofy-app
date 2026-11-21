@@ -11,16 +11,17 @@ import (
 )
 
 type Request struct {
-	ID      uint64          `json:"id"`
-	Op      string          `json:"op"`
-	Config  json.RawMessage `json:"config,omitempty"`
-	Tag     string          `json:"tag,omitempty"`
-	URL     string          `json:"url,omitempty"`
-	Timeout int64           `json:"timeout,omitempty"`
-	Tun     bool            `json:"tun,omitempty"`
-	Owners  bool            `json:"owners,omitempty"`
-	Ask     uint64          `json:"ask,omitempty"`
-	In      bool            `json:"in,omitempty"`
+	ID      uint64            `json:"id"`
+	Op      string            `json:"op"`
+	Config  json.RawMessage   `json:"config,omitempty"`
+	Tag     string            `json:"tag,omitempty"`
+	URL     string            `json:"url,omitempty"`
+	Timeout int64             `json:"timeout,omitempty"`
+	Tun     bool              `json:"tun,omitempty"`
+	Owners  bool              `json:"owners,omitempty"`
+	Ask     uint64            `json:"ask,omitempty"`
+	In      bool              `json:"in,omitempty"`
+	Head    map[string]string `json:"head,omitempty"`
 }
 
 type Reply struct {
@@ -34,6 +35,7 @@ type Reply struct {
 	Line    string   `json:"line,omitempty"`
 	Ask     uint64   `json:"ask,omitempty"`
 	Flow    *Flow    `json:"flow,omitempty"`
+	Fetched *Fetched `json:"fetched,omitempty"`
 }
 
 const (
@@ -145,6 +147,23 @@ func Serve(r io.Reader, w io.Writer) error {
 				defer done()
 				took, err := i.Probe(ctx, req.URL, req.Tag)
 				answer(req.ID, took, err)
+			}(inst, live, req)
+		case "fetch":
+			if inst == nil {
+				send(Reply{Re: req.ID, Code: CodeIdle, Error: "not started"})
+				continue
+			}
+			probes.Add(1)
+			go func(i *Instance, parent context.Context, req Request) {
+				defer probes.Done()
+				ctx, done := timed(parent, req.Timeout)
+				defer done()
+				f, err := i.Fetch(ctx, req.URL, req.Tag, req.Head)
+				if err != nil {
+					send(failure(req.ID, err))
+					return
+				}
+				send(Reply{Re: req.ID, OK: true, Fetched: f})
 			}(inst, live, req)
 		case "measure":
 			ctx, done := timed(context.Background(), req.Timeout)

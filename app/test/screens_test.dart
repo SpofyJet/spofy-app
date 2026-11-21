@@ -860,8 +860,8 @@ void main() {
     expect(S.usage(subscription(used: 96000)), '93,8 из 100 ГБ');
     expect(S.usage(subscription(used: 1100)), '1,1 из 100 ГБ');
     expect(S.usage(subscription(used: 1100, total: 0)), 'Без ограничений');
-    expect(S.expiry(subscription(days: 42), clock), 'До 31 декабря');
-    expect(S.expiry(subscription(days: 60), clock), 'До 18 января 2027');
+    expect(S.expiry(subscription(days: 42), clock), 'Ещё 42 дня · до 31 декабря');
+    expect(S.expiry(subscription(days: 60), clock), 'Ещё 60 дней · до 18 января 2027');
     expect(S.expiry(subscription(days: 3), clock), 'Ещё 3 дня');
     expect(S.expiry(subscription(days: 0), clock), 'Заканчивается сегодня');
     expect(S.expiry(subscription(days: -2), clock), 'Закончилась 17 ноября');

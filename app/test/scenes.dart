@@ -1,3 +1,4 @@
+import 'dart:math';
 import 'dart:async';
 import 'dart:io';
 
@@ -81,7 +82,7 @@ const _names = [
   ('ie', 'Ирландия', 'IE', 74, 0, 'vless', 'raw', 'reality'),
   ('by', 'Беларусь', 'BY', 81, 0, 'vmess', 'ws', 'tls'),
   ('us', 'США', 'US', 142, 0, 'shadowsocks', 'raw', ''),
-  ('sg', 'Сингапур', 'SG', 0, 0, 'vless', 'xhttp', 'tls'),
+  ('sg', 'Сингапур', 'SG', -1, 0, 'vless', 'xhttp', 'tls'),
   ('bypass1', 'Обход 1', 'RU', 29, 0, 'vless', 'xhttp', 'tls'),
   ('bypass2', 'Обход 2', 'RU', 0, 0, 'vless', 'xhttp', 'tls'),
 ];
@@ -97,8 +98,8 @@ List<Server> servers({bool measured = true}) => [
       transport: transport,
       security: security,
       tier: tier,
-      delayMs: measured ? delay : 0,
-      measuredAt: measured && delay > 0 ? clock.millisecondsSinceEpoch ~/ 1000 - 600 : 0,
+      delayMs: measured ? max(delay, 0) : 0,
+      measuredAt: measured && delay != 0 ? clock.millisecondsSinceEpoch ~/ 1000 - 600 : 0,
     ),
 ];
 

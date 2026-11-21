@@ -162,6 +162,8 @@ class Server {
 
   bool get measured => delayMs > 0;
 
+  bool get silent => delayMs <= 0 && measuredAt > 0;
+
   Map<String, Object?> toJson() => {
     'id': id,
     'name': name,

@@ -126,6 +126,10 @@ func (p *Panel) serve(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (p *Panel) Handler() http.Handler {
+	return http.HandlerFunc(p.serve)
+}
+
 func (p *Panel) Client() *http.Client {
 	addr := p.srv.Listener.Addr().String()
 	pool := p.srv.Client().Transport.(*http.Transport).TLSClientConfig.RootCAs
@@ -241,6 +245,40 @@ type Tunnel struct {
 	slow     chan struct{}
 	config   []byte
 	url      string
+	carry    http.Handler
+	carried  []string
+}
+
+func (t *Tunnel) Carry(h http.Handler) {
+	t.mu.Lock()
+	t.carry = h
+	t.mu.Unlock()
+}
+
+func (t *Tunnel) Carried() []string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return append([]string(nil), t.carried...)
+}
+
+func (t *Tunnel) Fetch(ctx context.Context, tag, url string, head map[string]string, _ time.Duration) (*engine.Fetched, error) {
+	t.mu.Lock()
+	running, dead, h := t.running, t.dead[t.running], t.carry
+	t.carried = append(t.carried, tag)
+	t.mu.Unlock()
+	switch {
+	case running == "":
+		return nil, &engine.Error{Code: supervisor.CodeUnavailable, Err: errors.New("engine is not running")}
+	case dead || h == nil:
+		return nil, &engine.Error{Code: engine.CodeFetch, Err: errors.New("no answer")}
+	}
+	req := httptest.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	for k, v := range head {
+		req.Header.Set(k, v)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return &engine.Fetched{Status: rec.Code, Header: rec.Header(), Body: rec.Body.Bytes()}, nil
 }
 
 func (t *Tunnel) Config() []byte {

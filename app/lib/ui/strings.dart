@@ -46,6 +46,10 @@ abstract final class S {
   static const noSubscriptionHint = 'Скопируйте ссылку в боте или в кабинете Spofy и вставьте её здесь';
   static const pasteLink = 'Вставить ссылку';
   static const manual = 'Ввести вручную';
+  static const buyAsk = 'Нет подписки?';
+  static const buy = 'Купить в боте Spofy';
+  static const stuckAsk = 'Не получается?';
+  static const stuck = 'Напишите в поддержку';
   static const pinned = 'Выбран вручную';
   static const removeShort = 'Удалить';
   static const noLink = 'В буфере нет ссылки. Скопируйте её в боте или в кабинете Spofy';
@@ -361,6 +365,7 @@ abstract final class S {
   static const updated = 'Обновлено';
   static const back = 'Назад';
   static const noDelay = '—';
+  static const silent = 'Не отвечает';
   static const connect = 'Включить VPN';
   static const disconnect = 'Выключить VPN';
   static const stop = 'Остановить подключение';
@@ -400,6 +405,7 @@ abstract final class S {
   static String days(int n) => '$n ${plural(n, 'день', 'дня', 'дней')}';
 
   static String delay(int ms) => ms > 0 ? '$ms мс' : noDelay;
+  static String answer(Server s) => s.silent ? silent : delay(s.delayMs);
 
   static String bytes(int value) {
     const units = ['Б', 'КБ', 'МБ', 'ГБ', 'ТБ'];
@@ -442,7 +448,7 @@ abstract final class S {
     if (left == 0) {
       return 'Заканчивается сегодня';
     }
-    return left <= 7 ? 'Ещё ${days(left)}' : 'До $until';
+    return left <= 7 ? 'Ещё ${days(left)}' : 'Ещё ${days(left)} · до $until';
   }
 
   static double remainder(Subscription s, DateTime now) {

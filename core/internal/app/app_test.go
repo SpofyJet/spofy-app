@@ -18,6 +18,7 @@ import (
 
 	"github.com/SpofyJet/spofy-app/core/internal/app/apptest"
 	"github.com/SpofyJet/spofy-app/core/internal/engine"
+	"github.com/SpofyJet/spofy-app/core/internal/logbook"
 	"github.com/SpofyJet/spofy-app/core/internal/session"
 	"github.com/SpofyJet/spofy-app/core/internal/store"
 	"github.com/SpofyJet/spofy-app/core/internal/sub"
@@ -636,9 +637,26 @@ func TestMeasure(t *testing.T) {
 	}
 	b.tunnel.Kill("us")
 	b.app.Measure(context.Background())
-	if s := find(b.app.Snapshot().Servers, "us"); s.DelayMs != 0 || s.MeasuredAt != 0 {
-		t.Fatalf("a silent server kept its old delay: %+v", s)
+	if s := find(b.app.Snapshot().Servers, "us"); s.DelayMs != 0 || s.MeasuredAt != b.clock.Now().Unix() {
+		t.Fatalf("a silent server is not told apart from one never checked: %+v", s)
 	}
+	b.tunnel.Kill("de", "nl", "fl", "pl", "by")
+	b.app.Measure(context.Background())
+	if s := find(b.app.Snapshot().Servers, "us"); s.DelayMs != 120 {
+		t.Fatalf("a server back again is still marked silent: %+v", s)
+	}
+	every := []string{}
+	for _, s := range b.app.Snapshot().Servers {
+		every = append(every, s.ID)
+	}
+	b.tunnel.Kill(every...)
+	b.app.Measure(context.Background())
+	for _, s := range b.app.Snapshot().Servers {
+		if s.MeasuredAt != 0 {
+			t.Fatalf("with nothing answering the fault is the network, yet a server is marked silent: %+v", s)
+		}
+	}
+	b.tunnel.Kill()
 	if err := b.app.Connect("de"); err != nil {
 		t.Fatal(err)
 	}
@@ -1597,5 +1615,96 @@ func TestTheConnectionKnowsSinceWhenItProtects(t *testing.T) {
 	}
 	if s := b.app.Snapshot().Connection.Since; s != 0 {
 		t.Fatalf("after turning off: %d", s)
+	}
+}
+
+type roadblock struct {
+	shut atomic.Bool
+	next http.RoundTripper
+}
+
+func (r *roadblock) RoundTrip(req *http.Request) (*http.Response, error) {
+	if r.shut.Load() {
+		return nil, errors.New("the way to the subscription server is blocked")
+	}
+	return r.next.RoundTrip(req)
+}
+
+func TestABlockedSubscriptionServerIsReachedThroughTheRunningTunnel(t *testing.T) {
+	road := &roadblock{}
+	b := newBench(t, func(c *Config) {
+		road.next = c.HTTP.Transport
+		c.HTTP = &http.Client{Transport: road, Timeout: 10 * time.Second}
+	})
+	b.subscribed()
+	b.tunnel.Carry(b.panel.Handler())
+	road.shut.Store(true)
+	b.panel.Usage("upload=5; download=7; total=100; expire=1798761600")
+	if _, err := b.app.Refresh(context.Background()); code(err) != CodeUnreachable {
+		t.Fatalf("with no tunnel up: err = %v", err)
+	}
+	if n := len(b.tunnel.Carried()); n != 0 {
+		t.Fatalf("the tunnel was asked while it was down: %d", n)
+	}
+	if err := b.app.Connect("de"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.app.Refresh(context.Background()); err != nil {
+		t.Fatalf("through the tunnel: %v", err)
+	}
+	if s := b.app.Snapshot().Subscription; s.Download != 7 || s.Total != 100 {
+		t.Fatalf("subscription = %+v", s)
+	}
+	if h := b.panel.Last(); h.Get("X-Hwid") != "hw-1" || h.Get("If-None-Match") == "" {
+		t.Fatalf("the carried request lost its headers: %v", h)
+	}
+	if got := b.tunnel.Carried(); len(got) != 1 || got[0] != "proxy" {
+		t.Fatalf("carried through %v", got)
+	}
+	if !slices.ContainsFunc(b.app.Logs(), func(l logbook.Line) bool { return strings.Contains(l.Text, "through the tunnel") }) {
+		t.Fatal("the log does not say the subscription came through the tunnel")
+	}
+	b.panel.Status(http.StatusForbidden)
+	road.shut.Store(false)
+	if _, err := b.app.Refresh(context.Background()); code(err) != CodeStatus || len(b.tunnel.Carried()) != 1 {
+		t.Fatalf("an answer from the server itself must not be carried again: err = %v, carried %d", err, len(b.tunnel.Carried()))
+	}
+}
+
+func TestAMovedSubscriptionKeepsItsPlaceAndANewOneTakesTheNewAddress(t *testing.T) {
+	b := newBench(t, nil)
+	const old = "https://old.example.test/sub/TESTTOKEN0123456789"
+	b.panel.Route("old.example.test", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Host = "sub.example.test"
+		b.panel.Handler().ServeHTTP(w, r)
+	}))
+	if err := b.app.Subscribe(context.Background(), old); err != nil {
+		t.Fatal(err)
+	}
+	before := b.app.cfg.Store.Get()
+	b.panel.Route("old.example.test", http.RedirectHandler(apptest.Address, http.StatusPermanentRedirect))
+	b.clock.Advance(time.Hour)
+	if _, err := b.app.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	after := b.app.cfg.Store.Get()
+	if after.URL != apptest.Address || after.ID != before.ID || len(after.Others) != 0 {
+		t.Fatalf("moved: url %q id %q (was %q), others %d", after.URL, after.ID, before.ID, len(after.Others))
+	}
+	b2 := newBench(t, nil)
+	b2.panel.Route("old.example.test", http.RedirectHandler(apptest.Address, http.StatusMovedPermanently))
+	if err := b2.app.Subscribe(context.Background(), old); err != nil {
+		t.Fatal(err)
+	}
+	if u := b2.app.cfg.Store.Get().URL; u != apptest.Address {
+		t.Fatalf("added at %q", u)
+	}
+	b3 := newBench(t, nil)
+	b3.panel.Route("old.example.test", http.RedirectHandler(apptest.Address, http.StatusFound))
+	if err := b3.app.Subscribe(context.Background(), old); err != nil {
+		t.Fatal(err)
+	}
+	if u := b3.app.cfg.Store.Get().URL; u != old {
+		t.Fatalf("a temporary redirect replaced the address: %q", u)
 	}
 }

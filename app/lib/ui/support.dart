@@ -44,7 +44,7 @@ String supportReport(Snapshot snapshot, Report? report, DateTime now) {
       if (c.code.isNotEmpty) c.code,
     ].join(' · '),
     if (snapshot.servers.isNotEmpty) '${S.servers}:',
-    for (final server in snapshot.servers) '${S.serverName(server)}: ${S.delay(server.delayMs)}',
+    for (final server in snapshot.servers) '${S.serverName(server)}: ${S.answer(server)}',
     if (report != null && report.journal.isNotEmpty) '${S.reportJournal}:',
     if (report != null)
       for (final e in report.journal)

@@ -49,6 +49,24 @@ func (s *Supervisor) Probe(ctx context.Context, tag, url string, timeout time.Du
 	return time.Duration(r.Ms) * time.Millisecond, nil
 }
 
+func (s *Supervisor) Fetch(ctx context.Context, tag, url string, head map[string]string, timeout time.Duration) (*engine.Fetched, error) {
+	p := s.current()
+	if p == nil || p.dead() {
+		return nil, &engine.Error{Code: CodeUnavailable, Err: errors.New("engine is not running")}
+	}
+	r, err := p.callContext(ctx, engine.Request{Op: "fetch", Tag: tag, URL: url, Head: head, Timeout: timeout.Milliseconds()}, timeout+2*time.Second)
+	if ctx.Err() != nil {
+		return nil, &engine.Error{Code: CodeCanceled, Err: ctx.Err()}
+	}
+	if err != nil {
+		return nil, &engine.Error{Code: CodeUnavailable, Err: err}
+	}
+	if !r.OK || r.Fetched == nil {
+		return nil, &engine.Error{Code: r.Code, Err: errors.New(r.Error)}
+	}
+	return r.Fetched, nil
+}
+
 func (s *Supervisor) Measure(ctx context.Context, targets []Target, o MeasureOptions, each func(int, Measurement)) {
 	if o.Timeout <= 0 {
 		o.Timeout = 5 * time.Second
