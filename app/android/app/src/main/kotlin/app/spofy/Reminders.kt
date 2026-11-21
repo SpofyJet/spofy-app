@@ -27,6 +27,7 @@ object Reminders {
     private const val NOTICE = 3
     private const val DAY = 86_400_000L
     private const val LIFETIME = 4_070_908_800L
+    private const val LATE = 3 * DAY
 
     fun plan(context: Context, expire: Long, days: Int) {
         val store = context.getSharedPreferences(STORE, Context.MODE_PRIVATE)
@@ -50,12 +51,11 @@ object Reminders {
         }
         val now = System.currentTimeMillis()
         val end = expire * 1000
-        val soon = noon(end - days * DAY)
-        if (soon > now) {
-            alarms.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, soon, pending(context, SOON, expire))
-        }
         if (end > now) {
+            alarms.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, maxOf(noon(end - days * DAY), now), pending(context, SOON, expire))
             alarms.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, end, pending(context, ENDED, expire))
+        } else if (now - end < LATE) {
+            alarms.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, now, pending(context, ENDED, expire))
         }
     }
 
@@ -72,6 +72,7 @@ object Reminders {
         val left = between(System.currentTimeMillis(), expire * 1000)
         val title = when {
             kind == ENDED -> res.getString(R.string.remind_ended)
+            kind == SOON && left == 0L -> res.getString(R.string.remind_today)
             kind == SOON && left == 1L -> res.getString(R.string.remind_tomorrow)
             kind == SOON && left > 1L -> res.getQuantityString(R.plurals.remind_soon, left.toInt(), left.toInt())
             else -> return

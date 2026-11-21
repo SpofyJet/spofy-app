@@ -29,6 +29,7 @@
         <item quantity="many">Подписка закончится через %d дней</item>
         <item quantity="other">Подписка закончится через %d дня</item>
     </plurals>
+    <string name="remind_today">Подписка закончится сегодня</string>
     <string name="remind_tomorrow">Подписка закончится завтра</string>
     <string name="remind_soon_hint">Продлите её, чтобы VPN работал без перерыва</string>
     <string name="remind_ended">Подписка закончилась</string>
