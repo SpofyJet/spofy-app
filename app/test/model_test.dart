@@ -251,6 +251,32 @@ void main() {
     expect(absent.fault, AppModel.coreClosed);
   });
 
+  test('opened while connected: the totals come with the first ready state and are not asked for twice', () async {
+    final hello = jsonDecode(
+      Transcript.load().exchanges.first.received.firstWhere((line) => line.contains('"snapshot"')),
+    ) as Map<String, Object?>;
+    final snapshot = hello['snapshot']! as Map<String, Object?>;
+    snapshot['connection'] = {...(snapshot['connection']! as Map<String, Object?>), 'state': 'connected', 'since': 1};
+    final transport = SilentTransport();
+    final model = AppModel(CoreClient(transport));
+    final seen = <Traffic>[];
+    model.addListener(() {
+      if (model.ready) {
+        seen.add(model.traffic);
+      }
+    });
+    final started = model.start();
+    transport.answer(jsonEncode({...hello, 're': 1}));
+    await pumpEventQueue();
+    expect(model.ready, isFalse);
+    expect(transport.sent, ['{"id":1,"op":"hello"}', '{"id":2,"op":"traffic"}']);
+    transport.answer('{"re":2,"ok":true,"traffic":{"up":512,"down":2048}}');
+    await started;
+    expect(model.ready, isTrue);
+    expect(seen.first.toJson(), {'up': 512, 'down': 2048});
+    expect(model.sampled, isTrue);
+  });
+
   test('an app link offers a subscription address and never adds it by itself', () async {
     const address = 'https://sub.example.test/sub/TESTTOKEN0123456789';
     expect(offeredAddress('spofy://add/$address'), address);

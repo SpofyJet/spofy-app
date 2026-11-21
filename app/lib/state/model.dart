@@ -148,6 +148,14 @@ class AppModel extends ChangeNotifier {
       fault = coreProtocol;
     }
     snapshot = seen;
+    if (seen.connection.state.protecting) {
+      final series = _samples;
+      final counted = (await _ask(const Request.traffic()))?.traffic;
+      if (counted != null && series == _samples) {
+        traffic = counted;
+        _sample = (counted, clock());
+      }
+    }
     ready = true;
     _changed();
   }
@@ -277,6 +285,8 @@ class AppModel extends ChangeNotifier {
   Future<void> clearLogs() async {
     await _ask(const Request.clearLogs());
   }
+
+  bool get sampled => _sample != null;
 
   Future<void> poll() async {
     final series = _samples;

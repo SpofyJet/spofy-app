@@ -1046,6 +1046,20 @@ void main() {
     expect(connected.transport.sent.first, contains('"op":"check"'));
   });
 
+  testWidgets('a window that only lost focus keeps counting and does not check the connection when focused again', (
+    tester,
+  ) async {
+    final connected = home(VpnState.connected, server: 'nl', delay: 38);
+    await show(tester, connected, phone);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    connected.transport.sent.clear();
+    await tester.pump(const Duration(seconds: 4));
+    expect(connected.transport.sent.where((line) => line.contains('"traffic"')), isNotEmpty);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pump(const Duration(seconds: 1));
+    expect(connected.transport.sent.where((line) => line.contains('"check"')), isEmpty);
+  });
+
   test('numbers and dates read naturally', () {
     expect(S.bytes(0), '0 Б');
     expect(S.bytes(1536), '1,5 КБ');

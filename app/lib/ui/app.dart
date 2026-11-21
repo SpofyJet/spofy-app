@@ -126,7 +126,7 @@ class _SpofyAppState extends State<SpofyApp> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    final visible = state == AppLifecycleState.resumed;
+    final visible = state == AppLifecycleState.resumed || state == AppLifecycleState.inactive;
     if (visible && !_visible) {
       widget.model.check();
       if (widget.model.subscription?.stopped ?? false) {
@@ -160,7 +160,9 @@ class _SpofyAppState extends State<SpofyApp> with WidgetsBindingObserver {
     }
     final wanted = _visible && widget.model.connection.state.protecting;
     if (wanted && _poll == null) {
-      widget.model.poll();
+      if (!widget.model.sampled) {
+        widget.model.poll();
+      }
       _poll = Timer.periodic(const Duration(seconds: 2), (_) => widget.model.poll());
     } else if (!wanted && _poll != null) {
       _poll!.cancel();
