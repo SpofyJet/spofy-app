@@ -1,20 +1,66 @@
 import 'package:flutter/widgets.dart';
 
 import '../state/model.dart';
+import 'choice.dart';
 import 'strings.dart';
 import 'theme.dart';
 import 'widgets.dart';
 
 const autoConnectKey = 'autoConnect';
 const killSwitchKey = 'killSwitch';
+const probeUrlKey = 'probeUrl';
+const probeTimeoutKey = 'probeTimeout';
+const fragmentKey = 'fragment';
+const dnsKey = 'dns';
+const ipv6Key = 'ipv6';
+const lanKey = 'lan';
+const logLevelKey = 'logLevel';
+
+const probeGoogle = 'http://www.gstatic.com/generate_204';
+const probeCloudflare = 'http://cp.cloudflare.com/generate_204';
+
+const probeChoices = [
+  Choice(null, S.probeAuto, S.probeAutoHint),
+  Choice(probeGoogle, 'Google', 'www.gstatic.com'),
+  Choice(probeCloudflare, 'Cloudflare', 'cp.cloudflare.com'),
+];
+
+const dnsChoices = [
+  Choice(null, S.dnsDefault, S.dnsDefaultHint),
+  Choice('cloudflare', 'Cloudflare', '1.1.1.1'),
+  Choice('google', 'Google', '8.8.8.8'),
+  Choice('quad9', 'Quad9', '9.9.9.9 · без вредоносных сайтов'),
+  Choice('adguard', 'AdGuard', '94.140.14.14 · без рекламы'),
+];
+
+String chosen(List<Choice> choices, Object? value) {
+  for (final c in choices) {
+    if (c.value == value) {
+      return c.title;
+    }
+  }
+  return value is String ? value : choices.first.title;
+}
 
 class SettingsScreen extends StatelessWidget {
-  const SettingsScreen({super.key, required this.model, required this.onDone, this.onApps, this.onSupport});
+  const SettingsScreen({
+    super.key,
+    required this.model,
+    required this.onDone,
+    required this.open,
+    this.onApps,
+    this.onSupport,
+    this.onLogs,
+    this.onAbout,
+  });
 
   final AppModel model;
   final VoidCallback onDone;
+  final void Function(Widget Function(VoidCallback done) screen) open;
   final VoidCallback? onApps;
   final VoidCallback? onSupport;
+  final VoidCallback? onLogs;
+  final VoidCallback? onAbout;
 
   @override
   Widget build(BuildContext context) {
@@ -23,21 +69,24 @@ class SettingsScreen extends StatelessWidget {
         listenable: model,
         builder: (context, _) {
           final settings = model.snapshot.settings;
+          final wait = settings[probeTimeoutKey] is int ? settings[probeTimeoutKey]! as int : 4;
+          const gap = SizedBox(height: 8);
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Header(title: S.settings, onBack: onDone),
               Expanded(
                 child: ListView(
-                  padding: const EdgeInsets.fromLTRB(Ink.gutter, 4, Ink.gutter, 16),
+                  padding: const EdgeInsets.fromLTRB(Ink.gutter, 0, Ink.gutter, 16),
                   children: [
+                    const SectionTitle(S.connection),
                     SwitchTile(
                       title: S.autoConnect,
                       subtitle: S.autoConnectHint,
                       value: settings[autoConnectKey] == true,
                       onChanged: (value) => model.set(autoConnectKey, value),
                     ),
-                    const SizedBox(height: 8),
+                    gap,
                     SwitchTile(
                       title: S.killSwitch,
                       subtitle: S.killSwitchHint,
@@ -45,16 +94,97 @@ class SettingsScreen extends StatelessWidget {
                       onChanged: (value) => model.set(killSwitchKey, value),
                     ),
                     if (model.apps != null && onApps != null) ...[
-                      const SizedBox(height: 8),
+                      gap,
                       Tile(title: S.apps, subtitle: S.appsSummary(model.chosenApps), onTap: onApps),
                     ],
                     if (model.always != null) ...[
-                      const SizedBox(height: 8),
+                      gap,
                       Tile(title: S.alwaysOn, subtitle: S.alwaysOnHint, wrap: true, onTap: model.always),
                     ],
-                    if (onSupport != null) ...[const SizedBox(height: 8), Tile(title: S.support, onTap: onSupport)],
-                    const SizedBox(height: 20),
-                    Text(S.version(model.snapshot.version), style: Ink.label, textAlign: TextAlign.center),
+                    const SectionTitle(S.tunnel),
+                    SwitchTile(
+                      title: S.fragment,
+                      subtitle: S.fragmentHint,
+                      value: settings[fragmentKey] == true,
+                      onChanged: (value) => model.set(fragmentKey, value ? true : null),
+                    ),
+                    gap,
+                    Tile(
+                      title: S.dns,
+                      subtitle: chosen(dnsChoices, settings[dnsKey]),
+                      onTap: () => open(
+                        (done) => ChoiceScreen(
+                          model: model,
+                          title: S.dns,
+                          setting: dnsKey,
+                          choices: dnsChoices,
+                          own: S.dnsOwn,
+                          ownHint: S.dnsOwnHint,
+                          onDone: done,
+                        ),
+                      ),
+                    ),
+                    gap,
+                    SwitchTile(
+                      title: S.ipv6,
+                      subtitle: S.ipv6Hint,
+                      value: settings[ipv6Key] != false,
+                      onChanged: (value) => model.set(ipv6Key, value ? null : false),
+                    ),
+                    gap,
+                    SwitchTile(
+                      title: S.lan,
+                      subtitle: S.lanHint,
+                      value: settings[lanKey] == true,
+                      onChanged: (value) => model.set(lanKey, value ? true : null),
+                    ),
+                    const SectionTitle(S.checking),
+                    Tile(
+                      title: S.probeTarget,
+                      subtitle: chosen(probeChoices, settings[probeUrlKey]),
+                      onTap: () => open(
+                        (done) => ChoiceScreen(
+                          model: model,
+                          title: S.probeTarget,
+                          setting: probeUrlKey,
+                          choices: probeChoices,
+                          own: S.probeOwn,
+                          ownHint: S.probeOwnHint,
+                          onDone: done,
+                        ),
+                      ),
+                    ),
+                    gap,
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(4, 4, 4, 8),
+                      child: Text(S.probeWaitHint, style: Ink.note),
+                    ),
+                    Segments<int>(
+                      options: [
+                        for (final n in const [2, 3, 4, 6, 10]) (n, S.seconds(n)),
+                      ],
+                      value: wait,
+                      onChanged: (value) => model.set(probeTimeoutKey, value == 4 ? null : value),
+                    ),
+                    const SectionTitle(S.logs),
+                    SwitchTile(
+                      title: S.logsDetailed,
+                      subtitle: S.logsDetailedHint,
+                      value: settings[logLevelKey] == 'detailed',
+                      onChanged: (value) => model.set(logLevelKey, value ? 'detailed' : null),
+                    ),
+                    if (onLogs != null) ...[gap, Tile(title: S.logs, subtitle: S.logsHint, wrap: true, onTap: onLogs)],
+                    const SectionTitle(S.about),
+                    if (onSupport != null) ...[Tile(title: S.support, onTap: onSupport), gap],
+                    if (onAbout != null)
+                      Tile(
+                        title: S.about,
+                        subtitle: model.update == null
+                            ? S.version(model.snapshot.version)
+                            : S.updateBanner(model.update!),
+                        trailingColor: Ink.accent,
+                        onTap: onAbout,
+                      ),
                   ],
                 ),
               ),

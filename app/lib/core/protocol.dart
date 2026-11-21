@@ -69,11 +69,12 @@ class Connection {
     this.delayMs = 0,
     this.code = '',
     this.error = '',
+    this.since = 0,
   });
 
   factory Connection.fromJson(Object? json) {
     const what = 'connection';
-    final m = _object(json, what, const ['state', 'choice', 'server', 'delayMs', 'code', 'error']);
+    final m = _object(json, what, const ['state', 'choice', 'server', 'delayMs', 'code', 'error', 'since']);
     return Connection(
       state: VpnState.parse(_get<String>(m, 'state', what)),
       choice: _get<String>(m, 'choice', what),
@@ -81,6 +82,7 @@ class Connection {
       delayMs: _get<int>(m, 'delayMs', what),
       code: _get<String>(m, 'code', what),
       error: _get<String>(m, 'error', what),
+      since: _get<int>(m, 'since', what),
     );
   }
 
@@ -90,6 +92,7 @@ class Connection {
   final int delayMs;
   final String code;
   final String error;
+  final int since;
 
   bool get auto => choice == autoChoice;
 
@@ -100,6 +103,7 @@ class Connection {
     'delayMs': delayMs,
     'code': code,
     'error': error,
+    'since': since,
   };
 }
 
@@ -113,6 +117,8 @@ class Server {
     required this.tier,
     required this.delayMs,
     required this.measuredAt,
+    this.transport = '',
+    this.security = '',
   });
 
   factory Server.fromJson(Object? json) {
@@ -123,6 +129,8 @@ class Server {
       'label',
       'country',
       'protocol',
+      'transport',
+      'security',
       'tier',
       'delayMs',
       'measuredAt',
@@ -133,6 +141,8 @@ class Server {
       label: _get<String>(m, 'label', what),
       country: _get<String>(m, 'country', what),
       protocol: _get<String>(m, 'protocol', what),
+      transport: _get<String>(m, 'transport', what),
+      security: _get<String>(m, 'security', what),
       tier: _get<int>(m, 'tier', what),
       delayMs: _get<int>(m, 'delayMs', what),
       measuredAt: _get<int>(m, 'measuredAt', what),
@@ -144,6 +154,8 @@ class Server {
   final String label;
   final String country;
   final String protocol;
+  final String transport;
+  final String security;
   final int tier;
   final int delayMs;
   final int measuredAt;
@@ -156,6 +168,8 @@ class Server {
     'label': label,
     'country': country,
     'protocol': protocol,
+    'transport': transport,
+    'security': security,
     'tier': tier,
     'delayMs': delayMs,
     'measuredAt': measuredAt,
@@ -324,6 +338,145 @@ class Report {
   };
 }
 
+class Brief {
+  const Brief({
+    required this.id,
+    required this.title,
+    required this.kind,
+    required this.active,
+    required this.servers,
+    required this.used,
+    required this.total,
+    required this.expire,
+    this.stop = '',
+  });
+
+  factory Brief.fromJson(Object? json) {
+    const what = 'subscriptions item';
+    final m = _object(json, what, const [
+      'id',
+      'title',
+      'kind',
+      'active',
+      'servers',
+      'used',
+      'total',
+      'expire',
+      'stop',
+    ]);
+    return Brief(
+      id: _get<String>(m, 'id', what),
+      title: _get<String>(m, 'title', what),
+      kind: _get<String>(m, 'kind', what),
+      active: _get<bool>(m, 'active', what),
+      servers: _get<int>(m, 'servers', what),
+      used: _get<int>(m, 'used', what),
+      total: _get<int>(m, 'total', what),
+      expire: _get<int>(m, 'expire', what),
+      stop: _get<String>(m, 'stop', what),
+    );
+  }
+
+  final String id;
+  final String title;
+  final String kind;
+  final bool active;
+  final int servers;
+  final int used;
+  final int total;
+  final int expire;
+  final String stop;
+
+  bool get links => kind == 'links';
+
+  Map<String, Object?> toJson() => {
+    'id': id,
+    'title': title,
+    'kind': kind,
+    'active': active,
+    'servers': servers,
+    'used': used,
+    'total': total,
+    'expire': expire,
+    'stop': stop,
+  };
+}
+
+class Update {
+  const Update({
+    required this.version,
+    required this.build,
+    this.notes = '',
+    this.required = false,
+    this.size = 0,
+    this.done = 0,
+    this.file = '',
+  });
+
+  factory Update.fromJson(Object? json) {
+    const what = 'update';
+    final m = _object(json, what, const ['version', 'build', 'notes', 'required', 'size', 'done', 'file']);
+    return Update(
+      version: _get<String>(m, 'version', what),
+      build: _get<int>(m, 'build', what),
+      notes: _get<String>(m, 'notes', what),
+      required: _get<bool>(m, 'required', what),
+      size: _get<int>(m, 'size', what),
+      done: _get<int>(m, 'done', what),
+      file: _get<String>(m, 'file', what),
+    );
+  }
+
+  final String version;
+  final int build;
+  final String notes;
+  final bool required;
+  final int size;
+  final int done;
+  final String file;
+
+  bool get ready => file.isNotEmpty;
+
+  double get share => size <= 0 ? 0 : (done / size).clamp(0, 1).toDouble();
+
+  Map<String, Object?> toJson() => {
+    'version': version,
+    'build': build,
+    'notes': notes,
+    'required': required,
+    'size': size,
+    'done': done,
+    'file': file,
+  };
+}
+
+class LogLine {
+  const LogLine({required this.at, required this.source, required this.text});
+
+  factory LogLine.fromJson(Object? json) {
+    const what = 'log line';
+    final m = _object(json, what, const ['at', 'source', 'text']);
+    return LogLine(
+      at: _get<int>(m, 'at', what),
+      source: _get<String>(m, 'source', what),
+      text: _get<String>(m, 'text', what),
+    );
+  }
+
+  final int at;
+  final String source;
+  final String text;
+
+  Map<String, Object?> toJson() => {'at': at, 'source': source, 'text': text};
+}
+
+List<Brief> _briefs(Object? json) {
+  if (json is! List<Object?>) {
+    throw const ProtocolError('subscriptions is not a list');
+  }
+  return List<Brief>.unmodifiable(json.map(Brief.fromJson));
+}
+
 List<Server> _servers(Object? json) {
   if (json is! List<Object?>) {
     throw const ProtocolError('servers is not a list');
@@ -344,20 +497,39 @@ class Snapshot {
     this.protocol = protocolVersion,
     this.connection = const Connection(),
     this.subscription,
+    this.subscriptions = const [],
     this.servers = const [],
     this.settings = const {},
+    this.build = 0,
+    this.engine = '',
+    this.update,
   });
 
   factory Snapshot.fromJson(Object? json) {
     const what = 'snapshot';
-    final m = _object(json, what, const ['version', 'protocol', 'connection', 'subscription', 'servers', 'settings']);
+    final m = _object(json, what, const [
+      'version',
+      'protocol',
+      'connection',
+      'subscription',
+      'subscriptions',
+      'servers',
+      'settings',
+      'build',
+      'engine',
+      'update',
+    ]);
     return Snapshot(
       version: _get<String>(m, 'version', what),
       protocol: _get<int>(m, 'protocol', what),
       connection: Connection.fromJson(m['connection']),
       subscription: m['subscription'] == null ? null : Subscription.fromJson(m['subscription']),
+      subscriptions: _briefs(m['subscriptions']),
       servers: _servers(m['servers']),
       settings: _settings(m['settings']),
+      build: _get<int>(m, 'build', what),
+      engine: _get<String>(m, 'engine', what),
+      update: m['update'] == null ? null : Update.fromJson(m['update']),
     );
   }
 
@@ -365,8 +537,12 @@ class Snapshot {
   final int protocol;
   final Connection connection;
   final Subscription? subscription;
+  final List<Brief> subscriptions;
   final List<Server> servers;
   final Map<String, Object?> settings;
+  final int build;
+  final String engine;
+  final Update? update;
 
   Server? server(String id) {
     for (final s in servers) {
@@ -384,20 +560,46 @@ class Snapshot {
       protocol: protocol,
       connection: connection,
       subscription: e.subscription,
+      subscriptions: subscriptions,
       servers: servers,
       settings: settings,
+      build: build,
+      engine: engine,
+      update: update,
     ),
+    UpdateEvent e => Snapshot(
+      version: version,
+      protocol: protocol,
+      connection: connection,
+      subscription: subscription,
+      subscriptions: subscriptions,
+      servers: servers,
+      settings: settings,
+      build: build,
+      engine: engine,
+      update: e.update,
+    ),
+    SubscriptionsEvent e => _copy(subscriptions: e.subscriptions),
     ServersEvent e => _copy(servers: e.servers),
     SettingsEvent e => _copy(settings: e.settings),
   };
 
-  Snapshot _copy({Connection? connection, List<Server>? servers, Map<String, Object?>? settings}) => Snapshot(
+  Snapshot _copy({
+    Connection? connection,
+    List<Brief>? subscriptions,
+    List<Server>? servers,
+    Map<String, Object?>? settings,
+  }) => Snapshot(
     version: version,
     protocol: protocol,
     connection: connection ?? this.connection,
     subscription: subscription,
+    subscriptions: subscriptions ?? this.subscriptions,
     servers: servers ?? this.servers,
     settings: settings ?? this.settings,
+    build: build,
+    engine: engine,
+    update: update,
   );
 
   Map<String, Object?> toJson() => {
@@ -405,8 +607,12 @@ class Snapshot {
     'protocol': protocol,
     'connection': connection.toJson(),
     'subscription': subscription?.toJson(),
+    'subscriptions': [for (final b in subscriptions) b.toJson()],
     'servers': [for (final s in servers) s.toJson()],
     'settings': settings,
+    'build': build,
+    'engine': engine,
+    'update': update?.toJson(),
   };
 }
 
@@ -445,6 +651,7 @@ class Reply extends Message {
     this.changed,
     this.traffic,
     this.report,
+    this.logs,
   });
 
   factory Reply.fromJson(Object? json) {
@@ -453,7 +660,7 @@ class Reply extends Message {
       json,
       what,
       const ['re', 'ok'],
-      const ['code', 'error', 'snapshot', 'changed', 'traffic', 'report'],
+      const ['code', 'error', 'snapshot', 'changed', 'traffic', 'report', 'logs'],
     );
     return Reply(
       re: _get<int>(m, 're', what),
@@ -464,6 +671,9 @@ class Reply extends Message {
       changed: _get<bool?>(m, 'changed', what),
       traffic: m['traffic'] == null ? null : Traffic.fromJson(m['traffic']),
       report: m['report'] == null ? null : Report.fromJson(m['report']),
+      logs: m['logs'] == null
+          ? null
+          : List<LogLine>.unmodifiable(_get<List<Object?>>(m, 'logs', what).map(LogLine.fromJson)),
     );
   }
 
@@ -475,6 +685,7 @@ class Reply extends Message {
   final bool? changed;
   final Traffic? traffic;
   final Report? report;
+  final List<LogLine>? logs;
 
   @override
   Map<String, Object?> toJson() => {
@@ -486,6 +697,7 @@ class Reply extends Message {
     if (changed != null) 'changed': changed,
     if (traffic != null) 'traffic': traffic!.toJson(),
     if (report != null) 'report': report!.toJson(),
+    if (logs != null) 'logs': [for (final l in logs!) l.toJson()],
   };
 }
 
@@ -504,6 +716,8 @@ sealed class Event extends Message {
     return switch (kind) {
       'connection' => ConnectionEvent(Connection.fromJson(m[kind])),
       'subscription' => SubscriptionEvent(m[kind] == null ? null : Subscription.fromJson(m[kind])),
+      'subscriptions' => SubscriptionsEvent(_briefs(m[kind])),
+      'update' => UpdateEvent(m[kind] == null ? null : Update.fromJson(m[kind])),
       'servers' => ServersEvent(_servers(m[kind])),
       'settings' => SettingsEvent(_settings(m[kind])),
       _ => throw ProtocolError('unknown event "$kind"'),
@@ -527,6 +741,27 @@ class SubscriptionEvent extends Event {
 
   @override
   Map<String, Object?> toJson() => {'ev': 'subscription', 'subscription': subscription?.toJson()};
+}
+
+class UpdateEvent extends Event {
+  const UpdateEvent(this.update);
+
+  final Update? update;
+
+  @override
+  Map<String, Object?> toJson() => {'ev': 'update', 'update': update?.toJson()};
+}
+
+class SubscriptionsEvent extends Event {
+  const SubscriptionsEvent(this.subscriptions);
+
+  final List<Brief> subscriptions;
+
+  @override
+  Map<String, Object?> toJson() => {
+    'ev': 'subscriptions',
+    'subscriptions': [for (final b in subscriptions) b.toJson()],
+  };
 }
 
 class ServersEvent extends Event {
@@ -559,7 +794,9 @@ class Request {
 
   const Request.refresh() : this._('refresh');
 
-  const Request.unsubscribe() : this._('unsubscribe');
+  Request.unsubscribe([String? subscription]) : this._('unsubscribe', {'subscription': ?subscription});
+
+  Request.activate(String subscription) : this._('activate', {'subscription': subscription});
 
   Request.connect([String? server]) : this._('connect', {'server': ?server});
 
@@ -576,6 +813,16 @@ class Request {
   const Request.traffic() : this._('traffic');
 
   const Request.report() : this._('report');
+
+  const Request.logs() : this._('logs');
+
+  const Request.clearLogs() : this._('clearLogs');
+
+  const Request.checkUpdate() : this._('checkUpdate');
+
+  const Request.fetchUpdate() : this._('fetchUpdate');
+
+  const Request.installUpdate() : this._('installUpdate');
 
   final String op;
   final Map<String, Object?> _fields;

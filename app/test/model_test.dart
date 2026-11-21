@@ -44,7 +44,18 @@ void main() {
         case 'refresh':
           expect(await model.refresh(), reply.ok);
         case 'unsubscribe':
-          expect(await model.unsubscribe(), reply.ok);
+          expect(await model.unsubscribe(sent['subscription'] as String?), reply.ok);
+        case 'checkUpdate':
+          expect(await model.checkUpdate(), reply.ok);
+        case 'fetchUpdate':
+          expect(await model.fetchUpdate(), reply.ok);
+          expect(model.update?.ready, isTrue);
+        case 'installUpdate':
+          expect(await model.installUpdate(), reply.ok);
+        case 'activate':
+          expect(await model.activate(sent['subscription']! as String), reply.ok);
+        case 'logs':
+          expect([for (final l in (await model.logs())!) l.toJson()], [for (final l in reply.logs!) l.toJson()]);
         case 'connect':
           expect(await model.connect(server), reply.ok);
         case 'disconnect':
@@ -56,7 +67,7 @@ void main() {
         case 'online':
           await model.online(online: sent['online']! as bool);
         case 'set':
-          await model.set(sent['key']! as String, sent['value']);
+          expect(await model.set(sent['key']! as String, sent['value']), reply.ok);
         case 'traffic':
           await model.poll();
           expect(normal(model.traffic.toJson()), normal(reply.traffic!.toJson()));
@@ -64,7 +75,17 @@ void main() {
           transport.skip();
           continue;
       }
-      if (!reply.ok && const {'subscribe', 'refresh', 'connect', 'measure'}.contains(sent['op'])) {
+      if (!reply.ok &&
+          const {
+            'subscribe',
+            'refresh',
+            'connect',
+            'measure',
+            'activate',
+            'checkUpdate',
+            'fetchUpdate',
+            'installUpdate',
+          }.contains(sent['op'])) {
         expect(model.failure?.code, reply.code, reason: exchange.sent);
         failures++;
       }
@@ -89,7 +110,7 @@ void main() {
     final reply = await client.call(Request.subscribe('https://sub.example.test/sub/TESTTOKEN0123456789'));
     order.add('reply');
     expect(reply.ok, isTrue);
-    expect(order, ['SubscriptionEvent', 'ServersEvent', 'reply']);
+    expect(order, ['SubscriptionEvent', 'ServersEvent', 'SubscriptionsEvent', 'reply']);
   });
 
   test('a broken line from the core is reported and does not stop the session', () async {

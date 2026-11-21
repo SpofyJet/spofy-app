@@ -30,6 +30,7 @@ void main() {
     always: platform.always,
     apps: platform.apps,
     browse: platform.browse,
+    install: platform.install,
   );
   platform.links(model.offer);
   runApp(SpofyApp(model: model));

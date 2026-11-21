@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/widgets.dart';
 
 import '../core/protocol.dart';
@@ -15,6 +17,7 @@ class HomeScreen extends StatelessWidget {
     required this.onServers,
     required this.onSubscription,
     required this.onSettings,
+    this.onUpdate,
   });
 
   final AppModel model;
@@ -22,6 +25,7 @@ class HomeScreen extends StatelessWidget {
   final VoidCallback onServers;
   final VoidCallback onSubscription;
   final VoidCallback onSettings;
+  final VoidCallback? onUpdate;
 
   @override
   Widget build(BuildContext context) {
@@ -63,7 +67,7 @@ class HomeScreen extends StatelessWidget {
     if (subscription.stopped) {
       return _Stopped(model: model, subscription: subscription, now: now, onSubscription: onSubscription);
     }
-    return _Status(model: model, now: now, onServers: onServers, onSubscription: onSubscription);
+    return _Status(model: model, now: now, onServers: onServers, onSubscription: onSubscription, onUpdate: onUpdate);
   }
 }
 
@@ -130,7 +134,7 @@ class _Loading extends StatelessWidget {
           height: MediaQuery.textScalerOf(context).scale(Ink.note.fontSize!) * Ink.note.height! * 2,
           child: const Align(alignment: Alignment.topCenter, child: Skeleton(width: 170, height: 16)),
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: Uptime.slot),
         const Center(
           child: DecoratedBox(
             decoration: BoxDecoration(color: Ink.raised, shape: BoxShape.circle),
@@ -283,12 +287,19 @@ class _Stopped extends StatelessWidget {
 }
 
 class _Status extends StatelessWidget {
-  const _Status({required this.model, required this.now, required this.onServers, required this.onSubscription});
+  const _Status({
+    required this.model,
+    required this.now,
+    required this.onServers,
+    required this.onSubscription,
+    this.onUpdate,
+  });
 
   final AppModel model;
   final DateTime Function() now;
   final VoidCallback onServers;
   final VoidCallback onSubscription;
+  final VoidCallback? onUpdate;
 
   @override
   Widget build(BuildContext context) {
@@ -330,12 +341,25 @@ class _Status extends StatelessWidget {
             ],
           ),
         ),
-        const SizedBox(height: 16),
+        SizedBox(
+          height: Uptime.slot,
+          child: Center(
+            child: state.protecting && connection.since > 0 ? Uptime(since: connection.since, now: now) : null,
+          ),
+        ),
         Center(
           child: PowerControl(state: state, onTap: model.running(Task.disconnect) ? null : model.toggle),
         ),
         const Spacer(flex: 3),
         if (failure != null && failure.task != Task.connect) ...[Notice(S.failure(failure)), const SizedBox(height: 8)],
+        if (model.update case final update? when onUpdate != null) ...[
+          Pressable(
+            label: S.updateBanner(update),
+            onTap: onUpdate,
+            child: Notice(S.updateBanner(update), color: Ink.accent, glyph: Glyph.refresh),
+          ),
+          const SizedBox(height: 8),
+        ],
         Tile(
           leading: CountryMark(
             shown == null ? 'A' : (shown.country.isEmpty ? '—' : shown.country),
@@ -401,6 +425,125 @@ class PowerControl extends StatelessWidget {
             if (state.busy) const Spinner(size: size, color: Ink.accent, stroke: 4),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class Uptime extends StatefulWidget {
+  const Uptime({super.key, required this.since, required this.now});
+
+  static const slot = 68.0;
+
+  final int since;
+  final DateTime Function() now;
+
+  @override
+  State<Uptime> createState() => _UptimeState();
+}
+
+class _UptimeState extends State<Uptime> {
+  Timer? _tick;
+
+  @override
+  void initState() {
+    super.initState();
+    _schedule();
+  }
+
+  @override
+  void dispose() {
+    _tick?.cancel();
+    super.dispose();
+  }
+
+  Duration get _elapsed => widget.now().difference(DateTime.fromMillisecondsSinceEpoch(widget.since * 1000));
+
+  void _schedule() {
+    final left = 1000 - _elapsed.inMilliseconds % 1000;
+    _tick = Timer(Duration(milliseconds: left <= 0 ? 1000 : left), () {
+      if (mounted) {
+        setState(_schedule);
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final elapsed = _elapsed;
+    final text = S.uptime(elapsed);
+    final still = MediaQuery.disableAnimationsOf(context);
+    final style = Ink.type(17, 600, Ink.text, height: 1.2).copyWith(fontFeatures: const [FontFeature.tabularFigures()]);
+    return Semantics(
+      label: '${S.uptimeLabel} $text',
+      excludeSemantics: true,
+      child: RepaintBoundary(
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: Ink.surface,
+            borderRadius: const BorderRadius.all(Radius.circular(999)),
+            border: Border.all(color: Ink.good.withValues(alpha: 0.28)),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 7, 14, 7),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: Ink.good,
+                    shape: BoxShape.circle,
+                    boxShadow: [BoxShadow(color: Ink.good.withValues(alpha: 0.55), blurRadius: 8)],
+                  ),
+                  child: const SizedBox.square(dimension: 8),
+                ),
+                const SizedBox(width: 10),
+                for (var i = 0; i < text.length; i++)
+                  _Digit(text[i], key: ValueKey(text.length - i), style: style, still: still),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _Digit extends StatelessWidget {
+  const _Digit(this.char, {super.key, required this.style, required this.still});
+
+  final String char;
+  final TextStyle style;
+  final bool still;
+
+  @override
+  Widget build(BuildContext context) {
+    final glyph = Text(
+      char,
+      key: ValueKey(char),
+      style: char == ':' ? style.copyWith(color: Ink.faint) : style,
+    );
+    if (still || !RegExp(r'\d').hasMatch(char)) {
+      return glyph;
+    }
+    return ClipRect(
+      child: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 260),
+        switchInCurve: Curves.easeOutCubic,
+        switchOutCurve: Curves.easeInCubic,
+        layoutBuilder: (current, previous) => Stack(alignment: Alignment.center, children: [...previous, ?current]),
+        transitionBuilder: (child, animation) {
+          final entering = child.key == ValueKey(char);
+          final offset = Tween<Offset>(
+            begin: entering ? const Offset(0, 0.6) : const Offset(0, -0.6),
+            end: Offset.zero,
+          ).animate(animation);
+          return FadeTransition(
+            opacity: animation,
+            child: SlideTransition(position: offset, child: child),
+          );
+        },
+        child: glyph,
       ),
     );
   }

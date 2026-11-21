@@ -40,6 +40,7 @@ class _PressableState extends State<Pressable> {
   Widget build(BuildContext context) {
     final enabled = widget.onTap != null;
     return Semantics(
+      container: true,
       button: true,
       enabled: enabled,
       label: widget.label,
@@ -517,9 +518,10 @@ class Skeleton extends StatelessWidget {
 }
 
 class Meter extends StatelessWidget {
-  const Meter(this.share, {super.key});
+  const Meter(this.share, {super.key, this.color});
 
   final double share;
+  final Color? color;
 
   @override
   Widget build(BuildContext context) {
@@ -534,7 +536,7 @@ class Meter extends StatelessWidget {
           child: FractionallySizedBox(
             alignment: Alignment.centerLeft,
             widthFactor: value,
-            child: ColoredBox(color: value >= 0.9 ? Ink.warning : Ink.accent),
+            child: ColoredBox(color: color ?? (value >= 0.9 ? Ink.warning : Ink.accent)),
           ),
         ),
       ),
@@ -687,10 +689,11 @@ class Header extends StatelessWidget {
 }
 
 class Notice extends StatelessWidget {
-  const Notice(this.text, {super.key, this.color = Ink.warning});
+  const Notice(this.text, {super.key, this.color = Ink.warning, this.glyph = Glyph.warning});
 
   final String text;
   final Color color;
+  final Glyph glyph;
 
   @override
   Widget build(BuildContext context) {
@@ -704,7 +707,7 @@ class Notice extends StatelessWidget {
           children: [
             Padding(
               padding: const EdgeInsets.only(top: 1),
-              child: GlyphIcon(Glyph.warning, color: color, size: 20),
+              child: GlyphIcon(glyph, color: color, size: 20),
             ),
             const SizedBox(width: 10),
             Expanded(
@@ -716,3 +719,100 @@ class Notice extends StatelessWidget {
     );
   }
 }
+
+class SearchField extends StatefulWidget {
+  const SearchField({super.key, required this.controller, required this.hint, required this.clear, this.focus});
+
+  final TextEditingController controller;
+  final String hint;
+  final String clear;
+  final FocusNode? focus;
+
+  @override
+  State<SearchField> createState() => _SearchFieldState();
+}
+
+class _SearchFieldState extends State<SearchField> {
+  final _field = GlobalKey<EditableTextState>();
+  FocusNode? _own;
+
+  FocusNode get _focus => widget.focus ?? (_own ??= FocusNode());
+
+  @override
+  void dispose() {
+    _own?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      excludeFromSemantics: true,
+      onTap: () => _field.currentState?.requestKeyboard(),
+      child: Panel(
+        padding: const EdgeInsets.fromLTRB(16, 4, 4, 4),
+        child: ValueListenableBuilder<TextEditingValue>(
+          valueListenable: widget.controller,
+          builder: (context, value, _) => Row(
+            children: [
+              Expanded(
+                child: Stack(
+                  children: [
+                    if (value.text.isEmpty) Text(widget.hint, style: Ink.body.copyWith(color: Ink.faint), maxLines: 1),
+                    Semantics(
+                      textField: true,
+                      label: widget.hint,
+                      child: EditableText(
+                        key: _field,
+                        controller: widget.controller,
+                        focusNode: _focus,
+                        style: Ink.body,
+                        cursorColor: Ink.accent,
+                        backgroundCursorColor: Ink.faint,
+                        selectionColor: Ink.selected,
+                        textInputAction: TextInputAction.search,
+                        autocorrect: false,
+                        enableSuggestions: false,
+                        maxLines: 1,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (value.text.isEmpty)
+                const SizedBox(height: 44)
+              else
+                RoundButton(glyph: Glyph.close, label: widget.clear, onTap: widget.controller.clear),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class SectionTitle extends StatelessWidget {
+  const SectionTitle(this.text, {super.key});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      header: true,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(4, 20, 4, 8),
+        child: Text(text.toUpperCase(), style: Ink.type(12, 600, Ink.faint, spacing: 0.8)),
+      ),
+    );
+  }
+}
+
+Color delayColor(int ms) => ms <= 0
+    ? Ink.faint
+    : ms <= 200
+    ? Ink.good
+    : ms <= 500
+    ? Ink.muted
+    : Ink.warning;

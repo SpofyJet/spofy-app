@@ -27,6 +27,9 @@ class WindowsHost implements Host {
   void Function(String address)? get browse => browseOnWindows;
 
   @override
+  Future<bool> Function(String file)? get install => null;
+
+  @override
   void links(void Function(String link) hear) {}
 }
 

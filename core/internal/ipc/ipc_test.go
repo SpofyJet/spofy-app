@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -21,21 +22,23 @@ import (
 	"github.com/SpofyJet/spofy-app/core/internal/xcfg"
 )
 
-var update = flag.Bool("update", false, "rewrite proto/samples/session.jsonl")
+var rewrite = flag.Bool("update", false, "rewrite proto/samples/session.jsonl")
 
 const samples = "../../../proto/samples/session.jsonl"
 
 type rig struct {
-	t      *testing.T
-	panel  *apptest.Panel
-	tunnel *apptest.Tunnel
-	clock  *apptest.Clock
-	app    *app.App
-	in     *io.PipeWriter
-	lines  chan string
-	done   chan error
-	next   uint64
-	log    []string
+	t        *testing.T
+	panel    *apptest.Panel
+	tunnel   *apptest.Tunnel
+	clock    *apptest.Clock
+	app      *app.App
+	in       *io.PipeWriter
+	lines    chan string
+	done     chan error
+	next     uint64
+	log      []string
+	releases *apptest.Releases
+	updates  string
 }
 
 func ms(n int) time.Duration { return time.Duration(n) * time.Millisecond }
@@ -47,6 +50,8 @@ func newRig(t *testing.T) *rig {
 	if err != nil {
 		t.Fatal(err)
 	}
+	r.releases = apptest.NewReleases(t, r.panel)
+	r.updates = filepath.Join(t.TempDir(), "updates")
 	r.app = app.New(app.Config{
 		Store:   st,
 		Tunnel:  r.tunnel,
@@ -55,6 +60,9 @@ func newRig(t *testing.T) *rig {
 		Run:     xcfg.Options{Mode: xcfg.ModeProbe},
 		Now:     r.clock.Now,
 		Version: "0.1.0",
+		Build:   1,
+		Engine:  "xray-test",
+		Updates: app.Updates{Sources: []string{apptest.ReleasesURL}, Keys: []ed25519.PublicKey{r.releases.Public()}, Platform: apptest.Platform, Dir: r.updates, Every: -1},
 		Retries: []time.Duration{0},
 	})
 	t.Cleanup(r.app.Close)
@@ -160,17 +168,34 @@ func TestSessionTranscript(t *testing.T) {
 	step("measure", "", "connected")
 	step("disconnect", "", "")
 	step("report", "", "")
+	step("logs", "", "")
+	step("clearLogs", "", "")
+	step("logs", "", "")
 	step("refresh", "", "")
 	step("set", `"key":"apps","value":null`, "")
+	step("set", `"key":"probeTimeout","value":3`, "")
+	step("set", `"key":"dns","value":"10.0.0.1"`, "bad_value")
+	first := r.app.Snapshot().List[0].ID
+	step("subscribe", `"url":"https://sub.example.test/sub/SECOND0123456789"`, "")
+	step("activate", fmt.Sprintf(`"subscription":%q`, first), "")
+	second := r.app.Snapshot().List[1].ID
+	step("activate", `"subscription":"000000000000"`, "sub_unknown")
 	step("hello", "", "")
 	step("teleport", "", "unknown_op")
+	step("unsubscribe", fmt.Sprintf(`"subscription":%q`, second), "")
 	step("unsubscribe", "", "")
 	step("hello", "", "")
-	got := strings.Join(r.log, "\n") + "\n"
+	step("checkUpdate", "", "update_unreachable")
+	r.releases.Publish(2, 100, []byte("spofy update"), []byte("spofy update"))
+	step("checkUpdate", "", "")
+	step("fetchUpdate", "", "")
+	step("installUpdate", "", "update_off")
+	folder, _ := json.Marshal(r.updates + string(os.PathSeparator))
+	got := strings.ReplaceAll(strings.Join(r.log, "\n")+"\n", strings.Trim(string(folder), `"`), "/state/updates/")
 	if strings.Contains(got, "TESTTOKEN") && strings.Count(got, "TESTTOKEN") != 1 {
 		t.Fatal("the subscription address appears outside the subscribe request")
 	}
-	if *update {
+	if *rewrite {
 		if err := os.MkdirAll(filepath.Dir(samples), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -232,7 +257,7 @@ func TestSamplesDecodeStrictly(t *testing.T) {
 
 func TestBadLines(t *testing.T) {
 	r := newRig(t)
-	for _, line := range []string{`not json`, `{"id":1}`, `{"op":"hello"}`, `{"id":2,"op":"hello","extra":1}`, `{"id":3,"op":"online"}`, `[1,2]`} {
+	for _, line := range []string{`not json`, `{"id":1}`, `{"op":"hello"}`, `{"id":2,"op":"hello","extra":1}`, `{"id":3,"op":"online"}`, `{"id":4,"op":"activate"}`, `[1,2]`} {
 		r.write(line)
 		if _, m := r.read(); m["ok"] != false || m["code"] != "bad_request" {
 			t.Fatalf("%s -> %v", line, m)

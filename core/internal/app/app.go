@@ -2,22 +2,31 @@ package app
 
 import (
 	"bytes"
+	"cmp"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/SpofyJet/spofy-app/core/internal/engine"
+	"github.com/SpofyJet/spofy-app/core/internal/logbook"
 	"github.com/SpofyJet/spofy-app/core/internal/session"
 	"github.com/SpofyJet/spofy-app/core/internal/store"
 	"github.com/SpofyJet/spofy-app/core/internal/sub"
 	"github.com/SpofyJet/spofy-app/core/internal/supervisor"
+	"github.com/SpofyJet/spofy-app/core/internal/update"
 	"github.com/SpofyJet/spofy-app/core/internal/xcfg"
 )
 
@@ -31,13 +40,74 @@ const (
 	EvSubscription = "subscription"
 	EvServers      = "servers"
 	EvSettings     = "settings"
+	EvList         = "subscriptions"
 )
 
 const (
-	KeyKillSwitch  = "killSwitch"
-	KeyAutoConnect = "autoConnect"
-	KeyApps        = "apps"
+	KeyKillSwitch   = "killSwitch"
+	KeyAutoConnect  = "autoConnect"
+	KeyApps         = "apps"
+	KeyProbeURL     = "probeUrl"
+	KeyProbeTimeout = "probeTimeout"
+	KeyFragment     = "fragment"
+	KeyDNS          = "dns"
+	KeyIPv6         = "ipv6"
+	KeyLAN          = "lan"
+	KeyLogLevel     = "logLevel"
 )
+
+var Resolvers = map[string][]string{
+	"cloudflare": {"1.1.1.1", "1.0.0.1"},
+	"google":     {"8.8.8.8", "8.8.4.4"},
+	"quad9":      {"9.9.9.9", "149.112.112.112"},
+	"adguard":    {"94.140.14.14", "94.140.15.15"},
+}
+
+var checks = map[string]func(json.RawMessage) bool{
+	KeyKillSwitch:   flag,
+	KeyAutoConnect:  flag,
+	KeyFragment:     flag,
+	KeyIPv6:         flag,
+	KeyLAN:          flag,
+	KeyLogLevel:     validLevel,
+	KeyProbeTimeout: validSeconds,
+	KeyProbeURL:     validURL,
+	KeyDNS:          validDNS,
+}
+
+func validLevel(v json.RawMessage) bool {
+	t, ok := text(v)
+	return ok && (t == "normal" || t == "detailed")
+}
+
+func validSeconds(v json.RawMessage) bool {
+	var n int
+	return json.Unmarshal(v, &n) == nil && n >= 2 && n <= 10 && string(v) == strconv.Itoa(n)
+}
+
+func validURL(v json.RawMessage) bool {
+	t, ok := text(v)
+	u, err := url.Parse(t)
+	return ok && len(t) <= 256 && err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != "" && u.User == nil
+}
+
+func validDNS(v json.RawMessage) bool {
+	t, ok := text(v)
+	if _, preset := Resolvers[t]; !ok || preset {
+		return ok
+	}
+	ip, err := netip.ParseAddr(t)
+	return err == nil && ip.Zone() == "" && ip.IsGlobalUnicast() && !ip.IsPrivate()
+}
+
+func flag(v json.RawMessage) bool {
+	return string(v) == "true" || string(v) == "false"
+}
+
+func text(v json.RawMessage) (string, bool) {
+	var t string
+	return t, json.Unmarshal(v, &t) == nil && t != ""
+}
 
 const (
 	CodeNoSubscription engine.Code = "no_subscription"
@@ -48,6 +118,13 @@ const (
 	CodeStore          engine.Code = "store_failed"
 	CodeConnected      engine.Code = "connected"
 	CodeValue          engine.Code = "bad_value"
+	CodeUnknown        engine.Code = "sub_unknown"
+)
+
+const (
+	KindURL          = "url"
+	KindLinks        = "links"
+	maxSubscriptions = 20
 )
 
 type Tunnel interface {
@@ -79,6 +156,10 @@ type Config struct {
 	Retune   func() (bool, error)
 	Keep     func(on bool)
 	Held     bool
+	Build    int
+	Engine   string
+	Updates  Updates
+	Install  func(path string) error
 }
 
 type Apps struct {
@@ -143,6 +224,7 @@ type Connection struct {
 	DelayMs int64         `json:"delayMs"`
 	Code    engine.Code   `json:"code"`
 	Error   string        `json:"error"`
+	Since   int64         `json:"since"`
 }
 
 type Server struct {
@@ -151,6 +233,8 @@ type Server struct {
 	Label      string `json:"label"`
 	Country    string `json:"country"`
 	Protocol   string `json:"protocol"`
+	Transport  string `json:"transport"`
+	Security   string `json:"security"`
 	Tier       int    `json:"tier"`
 	DelayMs    int64  `json:"delayMs"`
 	MeasuredAt int64  `json:"measuredAt"`
@@ -198,6 +282,18 @@ func stop(p *sub.Profile, now time.Time) Stop {
 	return StopOther
 }
 
+type Brief struct {
+	ID      string `json:"id"`
+	Title   string `json:"title"`
+	Kind    string `json:"kind"`
+	Active  bool   `json:"active"`
+	Servers int    `json:"servers"`
+	Used    int64  `json:"used"`
+	Total   int64  `json:"total"`
+	Expire  int64  `json:"expire"`
+	Stop    Stop   `json:"stop"`
+}
+
 type Entry struct {
 	At     int64         `json:"at"`
 	State  session.State `json:"state"`
@@ -214,23 +310,32 @@ type Report struct {
 	Journal   []Entry `json:"journal"`
 }
 
-const journalSize = 40
+const (
+	journalSize = 40
+	logSize     = 400
+)
 
 type Snapshot struct {
 	Version      string                     `json:"version"`
 	Protocol     int                        `json:"protocol"`
 	Connection   Connection                 `json:"connection"`
 	Subscription *Subscription              `json:"subscription"`
+	List         []Brief                    `json:"subscriptions"`
 	Servers      []Server                   `json:"servers"`
 	Settings     map[string]json.RawMessage `json:"settings"`
+	Build        int                        `json:"build"`
+	Engine       string                     `json:"engine"`
+	Update       *Update                    `json:"update"`
 }
 
 type Event struct {
 	Ev           string
 	Connection   Connection
 	Subscription *Subscription
+	List         []Brief
 	Servers      []Server
 	Settings     map[string]json.RawMessage
+	Update       *Update
 }
 
 func (e Event) MarshalJSON() ([]byte, error) {
@@ -244,6 +349,10 @@ func (e Event) MarshalJSON() ([]byte, error) {
 		part = e.Servers
 	case EvSettings:
 		part = e.Settings
+	case EvList:
+		part = e.List
+	case EvUpdate:
+		part = e.Update
 	default:
 		return nil, errors.New("app: unknown event")
 	}
@@ -272,9 +381,15 @@ type App struct {
 	closed  bool
 	tasks   sync.WaitGroup
 	journal []Entry
-	started int64
-	renews  bool
-	tried   time.Time
+	book    *logbook.Book
+
+	umu      sync.Mutex
+	offer    *update.Offer
+	upd      *Update
+	fetching bool
+	started  int64
+	renews   bool
+	tried    time.Time
 }
 
 func New(cfg Config) *App {
@@ -300,11 +415,14 @@ func New(cfg Config) *App {
 		cfg.Settle = 10 * time.Second
 	}
 	a := &App{cfg: cfg, hearers: map[int]func(Event){}}
+	a.book = logbook.New(logSize, a.now)
+	a.conceal(cfg.Store.Get())
 	a.started = a.now().Unix()
 	a.ctx, a.cancel = context.WithCancel(context.Background())
 	a.online.Store(true)
 	a.plan(cfg.Store.Get(), false)
 	a.conn = Connection{State: session.Idle, Choice: a.choice(cfg.Store.Get())}
+	address, limit := probe(cfg.Store.Get())
 	a.sess = session.New(session.Options{
 		Tunnel:    cfg.Tunnel,
 		OnEvent:   a.onState,
@@ -312,13 +430,16 @@ func New(cfg Config) *App {
 		Online:    a.online.Load,
 		Strict:    cfg.Strict || on(cfg.Store.Get(), KeyKillSwitch),
 		Bypass:    cfg.Bypass,
-		URL:       cfg.URL,
-		Timeout:   cfg.Timeout,
+		URL:       cmp.Or(address, cfg.URL),
+		Timeout:   cmp.Or(limit, cfg.Timeout),
 		Retries:   cfg.Retries,
 		Parallel:  cfg.Parallel,
 	})
 	if cfg.Watch > 0 {
 		a.spawn(a.watch)
+	}
+	if a.updatesOn() && cfg.Updates.Every >= 0 {
+		a.spawn(a.watchUpdates)
 	}
 	return a
 }
@@ -384,38 +505,56 @@ func (a *App) Snapshot() Snapshot {
 	a.mu.Lock()
 	conn := a.conn
 	a.mu.Unlock()
+	a.umu.Lock()
+	upd := a.updateNow()
+	a.umu.Unlock()
 	return Snapshot{
 		Version:      a.cfg.Version,
 		Protocol:     Protocol,
 		Connection:   conn,
 		Subscription: subscription(st, a.now()),
+		List:         list(st, a.now()),
 		Servers:      a.servers(st),
 		Settings:     settings(st),
+		Build:        a.cfg.Build,
+		Engine:       a.cfg.Engine,
+		Update:       upd,
 	}
 }
 
 func (a *App) Subscribe(ctx context.Context, address string) error {
-	u, err := url.Parse(strings.TrimSpace(address))
+	text := strings.TrimSpace(address)
+	if !strings.Contains(text, "://") || !strings.HasPrefix(strings.ToLower(text), "http") {
+		if p, err := sub.ParseLinks(text); err == nil {
+			return a.adopt("", p)
+		}
+	}
+	u, err := url.Parse(text)
 	if err != nil || u.Scheme != "https" || u.Host == "" {
-		return fail(CodeBadURL, "the address must start with https://")
+		return fail(CodeBadURL, "the address must start with https://, a key with its scheme")
 	}
 	p, err := sub.Fetch(ctx, a.cfg.HTTP, u.String(), a.cfg.Device, "")
-	if errors.Is(err, sub.ErrFormat) {
+	if errors.Is(err, sub.ErrFormat) || (err == nil && p.Format == sub.FormatLinks) {
 		named := u.JoinPath("json")
-		if again, failed := sub.Fetch(ctx, a.cfg.HTTP, named.String(), a.cfg.Device, ""); failed == nil {
+		if again, failed := sub.Fetch(ctx, a.cfg.HTTP, named.String(), a.cfg.Device, ""); failed == nil && again.Format == sub.FormatJSON {
 			u, p, err = named, again, nil
 		}
 	}
 	if err != nil {
-		return fetchError(err)
+		err = fetchError(err)
+		a.Note("app", "subscription not added: "+err.Error())
+		return err
 	}
 	return a.adopt(u.String(), p)
 }
 
 func (a *App) Refresh(ctx context.Context) (bool, error) {
 	st := a.cfg.Store.Get()
-	if st.URL == "" || st.Profile == nil {
+	if st.Profile == nil {
 		return false, fail(CodeNoSubscription, "no subscription")
+	}
+	if st.URL == "" {
+		return false, nil
 	}
 	p, err := sub.Fetch(ctx, a.cfg.HTTP, st.URL, a.cfg.Device, st.Profile.ETag)
 	if errors.Is(err, sub.ErrNotModified) {
@@ -437,7 +576,9 @@ func (a *App) Refresh(ctx context.Context) (bool, error) {
 	}
 	if err != nil {
 		a.plan(st, true)
-		return false, fetchError(err)
+		err = fetchError(err)
+		a.Note("app", "subscription not refreshed: "+err.Error())
+		return false, err
 	}
 	return true, a.adopt(st.URL, p)
 }
@@ -501,19 +642,143 @@ func (a *App) renew() {
 	}
 }
 
-func (a *App) Unsubscribe() error {
+func (a *App) Unsubscribe(id string) error {
+	before := a.cfg.Store.Get()
+	if id != "" && (before.Profile == nil || current(before) != id) {
+		removed := false
+		err := a.save(func(s *store.State) {
+			n := len(s.Others)
+			s.Others = slices.DeleteFunc(s.Others, func(o store.Saved) bool { return parked(o) == id })
+			removed = len(s.Others) != n
+		})
+		if err != nil {
+			return err
+		}
+		if !removed {
+			return fail(CodeUnknown, "no such subscription")
+		}
+		a.listed(before)
+		return nil
+	}
 	a.sess.Disconnect()
 	err := a.save(func(s *store.State) {
-		s.URL, s.Profile, s.Server, s.Delays, s.FetchedAt = "", nil, "", nil, time.Time{}
+		s.ID, s.URL, s.Profile, s.Server, s.Delays, s.FetchedAt = "", "", nil, "", nil, time.Time{}
+		if len(s.Others) > 0 {
+			bring(s, s.Others[0])
+			s.Others = s.Others[1:]
+		}
 	})
 	if err != nil {
 		return err
 	}
-	a.plan(a.cfg.Store.Get(), false)
-	a.setChoice(Auto)
-	a.emit(Event{Ev: EvSubscription})
-	a.emit(Event{Ev: EvServers, Servers: []Server{}})
+	st := a.cfg.Store.Get()
+	a.plan(st, false)
+	a.setChoice(a.choice(st))
+	a.emit(Event{Ev: EvSubscription, Subscription: subscription(st, a.now())})
+	a.emit(Event{Ev: EvServers, Servers: a.servers(st)})
+	a.listed(before)
+	a.conceal(st)
 	return nil
+}
+
+func (a *App) Activate(id string) error {
+	before := a.cfg.Store.Get()
+	if before.Profile != nil && current(before) == id {
+		return nil
+	}
+	found := false
+	err := a.save(func(s *store.State) {
+		i := slices.IndexFunc(s.Others, func(o store.Saved) bool { return parked(o) == id })
+		if i < 0 {
+			return
+		}
+		found = true
+		next := s.Others[i]
+		s.Others = slices.Delete(s.Others, i, i+1)
+		if s.Profile != nil {
+			s.Others = slices.Insert(s.Others, 0, park(s))
+		}
+		bring(s, next)
+	})
+	if err != nil {
+		return err
+	}
+	if !found {
+		return fail(CodeUnknown, "no such subscription")
+	}
+	st := a.cfg.Store.Get()
+	a.plan(st, false)
+	a.setChoice(a.choice(st))
+	a.emit(Event{Ev: EvSubscription, Subscription: subscription(st, a.now())})
+	a.emit(Event{Ev: EvServers, Servers: a.servers(st)})
+	a.listed(before)
+	a.follow(st)
+	a.spawn(func() { a.freshen(false) })
+	return nil
+}
+
+func (a *App) follow(st store.State) {
+	switch {
+	case a.sess.State() == session.Idle:
+	case len(st.Profile.Servers) == 0:
+		a.sess.Disconnect()
+	case a.sess.Rebase(a.candidates(st)):
+		a.spawn(a.renew)
+	}
+}
+
+func (a *App) listed(before store.State) {
+	st := a.cfg.Store.Get()
+	if !slices.Equal(ids(before), ids(st)) {
+		a.emit(Event{Ev: EvList, List: list(st, a.now())})
+	}
+}
+
+func ids(st store.State) []string {
+	var out []string
+	if st.Profile != nil {
+		out = append(out, current(st))
+	}
+	for _, o := range st.Others {
+		out = append(out, parked(o))
+	}
+	return out
+}
+
+func ident(address string, p *sub.Profile) string {
+	h := sha256.New()
+	if address != "" {
+		h.Write([]byte("url\n" + address))
+	} else {
+		h.Write([]byte("links"))
+		for _, s := range p.Servers {
+			h.Write([]byte("\n"))
+			h.Write(s.Config)
+		}
+	}
+	return hex.EncodeToString(h.Sum(nil)[:6])
+}
+
+func current(st store.State) string {
+	if st.ID != "" {
+		return st.ID
+	}
+	return ident(st.URL, st.Profile)
+}
+
+func parked(o store.Saved) string {
+	if o.ID != "" {
+		return o.ID
+	}
+	return ident(o.URL, o.Profile)
+}
+
+func park(s *store.State) store.Saved {
+	return store.Saved{ID: current(*s), URL: s.URL, Profile: s.Profile, FetchedAt: s.FetchedAt, Server: s.Server, Delays: s.Delays}
+}
+
+func bring(s *store.State, o store.Saved) {
+	s.ID, s.URL, s.Profile, s.FetchedAt, s.Server, s.Delays = parked(o), o.URL, o.Profile, o.FetchedAt, o.Server, o.Delays
 }
 
 func (a *App) Connect(server string) error {
@@ -648,7 +913,7 @@ func (a *App) Set(key string, value json.RawMessage) error {
 	if key == "" || len(key) > 64 || len(value) > limit || (len(value) > 0 && !json.Valid(value)) {
 		return fail(CodeValue, "bad setting")
 	}
-	if v := string(value); (key == KeyKillSwitch || key == KeyAutoConnect) && v != "" && v != "null" && v != "true" && v != "false" {
+	if check, ok := checks[key]; ok && len(value) > 0 && string(value) != "null" && !check(value) {
 		return fail(CodeValue, "bad setting")
 	}
 	var applied *Apps
@@ -676,6 +941,7 @@ func (a *App) Set(key string, value json.RawMessage) error {
 	if err != nil {
 		return err
 	}
+	a.Note("app", "setting "+key+" = "+shown(key, value))
 	if key == KeyKillSwitch {
 		strict := a.cfg.Strict || on(a.cfg.Store.Get(), KeyKillSwitch)
 		a.sess.SetStrict(strict)
@@ -683,7 +949,16 @@ func (a *App) Set(key string, value json.RawMessage) error {
 			a.cfg.Keep(strict)
 		}
 	}
-	a.emit(Event{Ev: EvSettings, Settings: settings(a.cfg.Store.Get())})
+	now := a.cfg.Store.Get()
+	a.emit(Event{Ev: EvSettings, Settings: settings(now)})
+	switch key {
+	case KeyProbeURL, KeyProbeTimeout:
+		a.sess.SetProbe(probe(now))
+	case KeyFragment, KeyDNS, KeyIPv6, KeyLAN, KeyLogLevel:
+		if now.Profile != nil {
+			a.follow(now)
+		}
+	}
 	if key == KeyApps && a.cfg.Retune != nil && a.sess.State() != session.Idle && !sameApps(applied, a.Apps()) {
 		a.spawn(func() {
 			if again, err := a.cfg.Retune(); again && err == nil {
@@ -716,6 +991,29 @@ func on(st store.State, key string) bool {
 	return string(st.Settings[key]) == "true"
 }
 
+func probe(st store.State) (string, time.Duration) {
+	address, _ := text(st.Settings[KeyProbeURL])
+	var seconds int
+	json.Unmarshal(st.Settings[KeyProbeTimeout], &seconds)
+	return address, time.Duration(seconds) * time.Second
+}
+
+func (a *App) options(st store.State) (run, probe xcfg.Options) {
+	t := xcfg.Tweaks{Fragment: on(st, KeyFragment), NoIPv6: string(st.Settings[KeyIPv6]) == "false", LAN: on(st, KeyLAN)}
+	if name, ok := text(st.Settings[KeyDNS]); ok {
+		t.DNS = Resolvers[name]
+		if t.DNS == nil {
+			t.DNS = []string{name}
+		}
+	}
+	run = a.cfg.Run
+	run.Tweaks = t
+	if level, _ := text(st.Settings[KeyLogLevel]); level == "detailed" {
+		run.LogLevel = "info"
+	}
+	return run, xcfg.Options{Mode: xcfg.ModeProbe, LogLevel: "none", Tweaks: xcfg.Tweaks{Fragment: t.Fragment}}
+}
+
 func (a *App) Report() Report {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -743,8 +1041,22 @@ func (a *App) Close() {
 }
 
 func (a *App) adopt(address string, p *sub.Profile) error {
+	before := a.cfg.Store.Get()
+	key := ident(address, p)
 	err := a.save(func(s *store.State) {
-		s.URL, s.Profile, s.FetchedAt = address, p, a.now()
+		moved := s.Profile != nil && current(*s) != key
+		if moved {
+			s.Others = slices.Insert(s.Others, 0, park(s))
+			s.Server, s.Delays = "", nil
+		}
+		if i := slices.IndexFunc(s.Others, func(o store.Saved) bool { return parked(o) == key }); i >= 0 {
+			if moved || s.Profile == nil {
+				s.Server, s.Delays = s.Others[i].Server, s.Others[i].Delays
+			}
+			s.Others = slices.Delete(s.Others, i, i+1)
+		}
+		s.Others = s.Others[:min(len(s.Others), maxSubscriptions-1)]
+		s.ID, s.URL, s.Profile, s.FetchedAt = key, address, p, a.now()
 		for id := range s.Delays {
 			if !has(p, id) {
 				delete(s.Delays, id)
@@ -762,12 +1074,13 @@ func (a *App) adopt(address string, p *sub.Profile) error {
 	a.setChoice(a.choice(st))
 	a.emit(Event{Ev: EvSubscription, Subscription: subscription(st, a.now())})
 	a.emit(Event{Ev: EvServers, Servers: a.servers(st)})
-	switch {
-	case len(p.Servers) == 0:
+	a.listed(before)
+	a.conceal(st)
+	if len(p.Servers) == 0 {
 		a.sess.Disconnect()
-	case a.sess.State() != session.Idle && a.sess.Rebase(a.candidates(st)):
-		a.spawn(a.renew)
+		return nil
 	}
+	a.follow(st)
 	return nil
 }
 
@@ -802,16 +1115,27 @@ func (a *App) setChoice(choice string) {
 
 func (a *App) onState(e session.Event) {
 	a.mu.Lock()
-	conn := Connection{State: e.State, Choice: a.conn.Choice, Server: e.Server, DelayMs: e.Delay.Milliseconds(), Code: e.Code, Error: e.Error}
+	conn := Connection{State: e.State, Choice: a.conn.Choice, Server: e.Server, DelayMs: e.Delay.Milliseconds(), Code: e.Code, Error: e.Error, Since: a.conn.Since}
+	switch {
+	case !protects(e.State):
+		conn.Since = 0
+	case !protects(a.conn.State):
+		conn.Since = a.now().Unix()
+	}
 	same := conn == a.conn
 	arrived := e.State == session.Connected && a.conn.State != session.Connected
-	if conn.State != a.conn.State || conn.Server != a.conn.Server || conn.Code != a.conn.Code {
+	moved := conn.State != a.conn.State || conn.Server != a.conn.Server || conn.Code != a.conn.Code
+	if moved {
 		a.journal = append(a.journal, Entry{At: a.now().Unix(), State: conn.State, Server: conn.Server, Code: conn.Code})
 		a.journal = a.journal[max(len(a.journal)-journalSize, 0):]
 	}
 	a.conn = conn
 	hush := a.hush
 	a.mu.Unlock()
+	if moved {
+		parts := slices.DeleteFunc([]string{string(conn.State), a.named(conn.Server), string(conn.Code), conn.Error}, func(p string) bool { return p == "" })
+		a.Note("app", strings.Join(parts, " "))
+	}
 	if !same {
 		a.emit(Event{Ev: EvConnection, Connection: conn})
 	}
@@ -870,6 +1194,7 @@ func (a *App) servers(st store.State) []Server {
 	}
 	for _, s := range st.Profile.Servers {
 		v := Server{ID: s.ID, Name: s.Name, Label: s.Label, Country: s.Country, Protocol: s.Protocol, Tier: a.cfg.Tier(s)}
+		v.Transport, v.Security = sub.Transport(s.Config)
 		if d, ok := st.Delays[s.ID]; ok {
 			v.DelayMs, v.MeasuredAt = d.Ms, d.At.Unix()
 		}
@@ -881,12 +1206,13 @@ func (a *App) servers(st store.State) []Server {
 func (a *App) candidates(st store.State) []session.Candidate {
 	var out []session.Candidate
 	now := a.cfg.Now()
+	running, probing := a.options(st)
 	for _, s := range st.Profile.Servers {
-		run, err := xcfg.Build(s.Config, a.cfg.Run)
+		run, err := xcfg.Build(s.Config, running)
 		if err != nil {
 			continue
 		}
-		probe, err := xcfg.Build(s.Config, xcfg.Options{Mode: xcfg.ModeProbe, LogLevel: "none"})
+		probe, err := xcfg.Build(s.Config, probing)
 		if err != nil {
 			continue
 		}
@@ -923,6 +1249,29 @@ func subscription(st store.State, now time.Time) *Subscription {
 		s.FetchedAt = st.FetchedAt.Unix()
 	}
 	return s
+}
+
+func list(st store.State, now time.Time) []Brief {
+	out := []Brief{}
+	add := func(id, address string, p *sub.Profile, active bool) {
+		b := Brief{ID: id, Title: p.Title, Kind: KindURL, Active: active, Servers: len(p.Servers), Used: p.Usage.Upload + p.Usage.Download, Total: p.Usage.Total, Stop: stop(p, now)}
+		if address == "" {
+			b.Kind = KindLinks
+		}
+		if !p.Usage.Expire.IsZero() {
+			b.Expire = p.Usage.Expire.Unix()
+		}
+		out = append(out, b)
+	}
+	if st.Profile != nil {
+		add(current(st), st.URL, st.Profile, true)
+	}
+	for _, o := range st.Others {
+		if o.Profile != nil {
+			add(parked(o), o.URL, o.Profile, false)
+		}
+	}
+	return out
 }
 
 func settings(st store.State) map[string]json.RawMessage {
@@ -970,4 +1319,95 @@ func fetchError(err error) error {
 		return fail(CodeUnreachable, ue.Err.Error())
 	}
 	return fail(CodeUnreachable, "the subscription server did not answer")
+}
+
+func (a *App) Note(source, text string) {
+	a.book.Add(source, text)
+}
+
+func (a *App) Logs() []logbook.Line {
+	return a.book.Lines()
+}
+
+func (a *App) ClearLogs() {
+	a.book.Clear()
+}
+
+func (a *App) named(id string) string {
+	if id == "" {
+		return ""
+	}
+	if p := a.cfg.Store.Get().Profile; p != nil {
+		for _, s := range p.Servers {
+			if s.ID == id {
+				return s.Name
+			}
+		}
+	}
+	return id
+}
+
+func shown(key string, value json.RawMessage) string {
+	if key != KeyApps || len(value) == 0 {
+		return cmp.Or(string(value), "null")
+	}
+	var chosen Apps
+	json.Unmarshal(value, &chosen)
+	return fmt.Sprintf("%s, %d apps", chosen.Mode, len(chosen.List))
+}
+
+var secretKeys = map[string]bool{"address": true, "serverName": true, "id": true, "password": true, "publicKey": true, "shortId": true, "host": true, "path": true, "serviceName": true, "auth": true, "seed": true, "user": true, "pass": true, "spiderX": true}
+
+func (a *App) conceal(st store.State) {
+	var words []string
+	add := func(address string, p *sub.Profile) {
+		if address != "" {
+			words = append(words, address)
+			if u, err := url.Parse(address); err == nil {
+				words = append(words, u.Host, u.Hostname(), u.Path)
+			}
+		}
+		if p == nil {
+			return
+		}
+		words = append(words, p.SupportURL, p.WebPageURL)
+		for _, s := range p.Servers {
+			if host, _, err := net.SplitHostPort(s.Endpoint); err == nil {
+				words = append(words, host)
+			}
+			words = append(words, s.Endpoint)
+			var walk func(any)
+			walk = func(v any) {
+				switch t := v.(type) {
+				case map[string]any:
+					for k, inner := range t {
+						if text, ok := inner.(string); ok && secretKeys[k] {
+							words = append(words, text, strings.Trim(text, "/"))
+							continue
+						}
+						walk(inner)
+					}
+				case []any:
+					for _, inner := range t {
+						walk(inner)
+					}
+				}
+			}
+			var cfg struct {
+				Outbounds []any `json:"outbounds"`
+			}
+			if json.Unmarshal(s.Config, &cfg) == nil {
+				walk(cfg.Outbounds)
+			}
+		}
+	}
+	add(st.URL, st.Profile)
+	for _, o := range st.Others {
+		add(o.URL, o.Profile)
+	}
+	a.book.Hide(words)
+}
+
+func protects(s session.State) bool {
+	return s == session.Connected || s == session.Switching || s == session.Stalled || s == session.Offline
 }

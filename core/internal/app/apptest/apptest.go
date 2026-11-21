@@ -51,6 +51,7 @@ type Panel struct {
 	srv *httptest.Server
 
 	mu      sync.Mutex
+	routes  map[string]http.Handler
 	body    []byte
 	header  http.Header
 	status  int
@@ -58,7 +59,8 @@ type Panel struct {
 	last    http.Header
 	usage   string
 	holding chan struct{}
-	links   bool
+	links   []byte
+	noJSON  bool
 	paths   []string
 }
 
@@ -71,14 +73,33 @@ func NewPanel(t testing.TB) *Panel {
 	return p
 }
 
+func (p *Panel) Route(host string, h http.Handler) {
+	p.mu.Lock()
+	if p.routes == nil {
+		p.routes = map[string]http.Handler{}
+	}
+	p.routes[host] = h
+	p.mu.Unlock()
+}
+
 func (p *Panel) serve(w http.ResponseWriter, r *http.Request) {
 	p.mu.Lock()
+	if h, ok := p.routes[r.Host]; ok {
+		p.mu.Unlock()
+		h.ServeHTTP(w, r)
+		return
+	}
 	p.hits++
 	p.last = r.Header.Clone()
 	p.paths = append(p.paths, r.URL.Path)
 	body, header, status, usage, holding := p.body, p.header.Clone(), p.status, p.usage, p.holding
-	if p.links && !strings.HasSuffix(r.URL.Path, "/json") {
-		body, header = []byte("dmxlc3M6Ly9saW5rcy5leGFtcGxl"), http.Header{"Content-Type": {"text/plain; charset=utf-8"}}
+	named := strings.HasSuffix(r.URL.Path, "/json")
+	if p.links != nil && !named {
+		body = p.links
+		header.Set("Content-Type", "text/plain; charset=utf-8")
+	}
+	if p.noJSON && named && status == 0 {
+		status = http.StatusNotFound
 	}
 	p.mu.Unlock()
 	if holding != nil {
@@ -150,9 +171,15 @@ func (p *Panel) Hold() (release func()) {
 	}
 }
 
-func (p *Panel) Links() {
+func (p *Panel) Links(list string) {
 	p.mu.Lock()
-	p.links = true
+	p.links = []byte(list)
+	p.mu.Unlock()
+}
+
+func (p *Panel) WithoutJSON() {
+	p.mu.Lock()
+	p.noJSON = true
 	p.mu.Unlock()
 }
 
@@ -212,6 +239,20 @@ type Tunnel struct {
 	traffic  engine.Traffic
 	gate     chan struct{}
 	slow     chan struct{}
+	config   []byte
+	url      string
+}
+
+func (t *Tunnel) Config() []byte {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.config
+}
+
+func (t *Tunnel) LastURL() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.url
 }
 
 func NewTunnel(t testing.TB) *Tunnel {
@@ -234,14 +275,25 @@ func NewTunnel(t testing.TB) *Tunnel {
 
 func key(cfg []byte) string {
 	var c struct {
-		Outbounds []any `json:"outbounds"`
+		Outbounds []map[string]any `json:"outbounds"`
 	}
 	if json.Unmarshal(cfg, &c) != nil || len(c.Outbounds) == 0 {
 		return ""
 	}
+	if stream, ok := c.Outbounds[0]["streamSettings"].(map[string]any); ok {
+		delete(stream, "sockopt")
+	}
 	b, _ := json.Marshal(c.Outbounds[0])
 	sum := sha256.Sum256(b)
 	return string(sum[:])
+}
+
+func (t *Tunnel) Know(servers []sub.Server) {
+	t.mu.Lock()
+	for _, s := range servers {
+		t.ids[key(s.Config)] = s.ID
+	}
+	t.mu.Unlock()
 }
 
 func (t *Tunnel) Answer(delays map[string]time.Duration) {
@@ -316,7 +368,7 @@ func (t *Tunnel) Start(cfg []byte) (time.Duration, error) {
 		t.running = ""
 		return 0, &engine.Error{Code: engine.CodeConfig, Err: errors.New("unknown config")}
 	}
-	t.running = id
+	t.running, t.config = id, cfg
 	t.starts = append(t.starts, id)
 	return time.Millisecond, nil
 }
@@ -342,8 +394,9 @@ func (t *Tunnel) Hold() (release func()) {
 	}
 }
 
-func (t *Tunnel) Probe(ctx context.Context, _, _ string, _ time.Duration) (time.Duration, error) {
+func (t *Tunnel) Probe(ctx context.Context, _, url string, _ time.Duration) (time.Duration, error) {
 	t.mu.Lock()
+	t.url = url
 	gate := t.gate
 	t.mu.Unlock()
 	if gate != nil {

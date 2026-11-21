@@ -13,6 +13,7 @@ import (
 	"github.com/SpofyJet/spofy-app/core/internal/app"
 	"github.com/SpofyJet/spofy-app/core/internal/engine"
 	"github.com/SpofyJet/spofy-app/core/internal/host"
+	"github.com/SpofyJet/spofy-app/core/internal/logbook"
 )
 
 const (
@@ -27,6 +28,7 @@ type Request struct {
 	Op     string          `json:"op"`
 	URL    string          `json:"url,omitempty"`
 	Server string          `json:"server,omitempty"`
+	Sub    string          `json:"subscription,omitempty"`
 	Key    string          `json:"key,omitempty"`
 	Value  json.RawMessage `json:"value,omitempty"`
 	Online *bool           `json:"online,omitempty"`
@@ -47,6 +49,7 @@ type Reply struct {
 	Changed  *bool           `json:"changed,omitempty"`
 	Traffic  *engine.Traffic `json:"traffic,omitempty"`
 	Report   *app.Report     `json:"report,omitempty"`
+	Logs     *[]logbook.Line `json:"logs,omitempty"`
 }
 
 func Serve(ctx context.Context, r io.Reader, w io.Writer, a *app.App, p *host.Platform) error {
@@ -148,7 +151,13 @@ func Serve(ctx context.Context, r io.Reader, w io.Writer, a *app.App, p *host.Pl
 				send(Reply{Re: req.ID, OK: true, Changed: &changed})
 			}()
 		case "unsubscribe":
-			answer(req.ID, a.Unsubscribe())
+			answer(req.ID, a.Unsubscribe(req.Sub))
+		case "activate":
+			if req.Sub == "" {
+				send(Reply{Re: req.ID, Code: CodeRequest, Error: "bad request"})
+				continue
+			}
+			answer(req.ID, a.Activate(req.Sub))
 		case "connect":
 			later(req.ID, func() error { return a.Connect(req.Server) })
 		case "disconnect":
@@ -171,6 +180,18 @@ func Serve(ctx context.Context, r io.Reader, w io.Writer, a *app.App, p *host.Pl
 		case "report":
 			r := a.Report()
 			send(Reply{Re: req.ID, OK: true, Report: &r})
+		case "checkUpdate":
+			later(req.ID, func() error { return a.CheckUpdate(ctx) })
+		case "fetchUpdate":
+			later(req.ID, a.FetchUpdate)
+		case "installUpdate":
+			answer(req.ID, a.InstallUpdate())
+		case "logs":
+			lines := a.Logs()
+			send(Reply{Re: req.ID, OK: true, Logs: &lines})
+		case "clearLogs":
+			a.ClearLogs()
+			send(Reply{Re: req.ID, OK: true})
 		default:
 			send(Reply{Re: req.ID, Code: CodeOp, Error: "unknown operation"})
 		}

@@ -55,7 +55,9 @@ jobs:
           CGO_ENABLED=1 go test -race -gcflags=github.com/tailscale/wf=-d=checkptr=0 -count=1 -v ./internal/guard/
       - working-directory: spofy-app/core
         run: |
-          CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -checklinkname=0" -o ../dist/spofy-core.exe ./cmd/spofy-core
+          pub=$(sed -n 's/^version: //p' ../app/pubspec.yaml)
+          rev=$(cut -c1-7 XRAY_REV)
+          CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -checklinkname=0 -X main.version=${pub%+*} -X main.build=${pub#*+} -X main.engineRev=xray-$rev -X github.com/xtls/xray-core/core.build=spofy-$rev" -o ../dist/spofy-core.exe ./cmd/spofy-core
           CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -H windowsgui" -o ../dist/spofy-tray.exe ./cmd/spofy-tray
           version="$(sed -n 's/^version: \([0-9.]*\).*/\1/p' ../app/pubspec.yaml).$GITHUB_RUN_NUMBER"
           python ../tools/windows/resources.py cmd/spofy-setup "Spofy Setup" "$version" ../app/windows/runner/resources/app_icon.ico cmd/spofy-setup/setup.manifest

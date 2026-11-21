@@ -87,6 +87,12 @@ type Session struct {
 	last    time.Duration
 	halt    context.CancelFunc
 	net     atomic.Uint64
+	probing atomic.Pointer[probing]
+}
+
+type probing struct {
+	url     string
+	timeout time.Duration
 }
 
 func New(o Options) *Session {
@@ -99,7 +105,24 @@ func New(o Options) *Session {
 	if o.Parallel == 0 {
 		o.Parallel = 4
 	}
-	return &Session{opts: o, active: -1, state: Idle, strict: o.Strict}
+	s := &Session{opts: o, active: -1, state: Idle, strict: o.Strict}
+	s.SetProbe(o.URL, o.Timeout)
+	return s
+}
+
+func (s *Session) SetProbe(url string, timeout time.Duration) {
+	if timeout <= 0 {
+		timeout = s.opts.Timeout
+	}
+	s.probing.Store(&probing{url: url, timeout: timeout})
+}
+
+func (s *Session) url() string {
+	return s.probing.Load().url
+}
+
+func (s *Session) timeout() time.Duration {
+	return s.probing.Load().timeout
 }
 
 func (s *Session) SetStrict(on bool) {
@@ -171,7 +194,7 @@ func (s *Session) measure(ctx context.Context, cands []Candidate, parallel int, 
 		out[i].Code = supervisor.CodeCanceled
 	}
 	var mu sync.Mutex
-	s.opts.Tunnel.Measure(ctx, targets, supervisor.MeasureOptions{URL: s.opts.URL, Timeout: s.opts.Timeout, Parallel: parallel, Began: began}, func(i int, m supervisor.Measurement) {
+	s.opts.Tunnel.Measure(ctx, targets, supervisor.MeasureOptions{URL: s.url(), Timeout: s.timeout(), Parallel: parallel, Began: began}, func(i int, m supervisor.Measurement) {
 		mu.Lock()
 		out[i] = m
 		mu.Unlock()
@@ -218,7 +241,7 @@ func (s *Session) connect(parent context.Context, cands []Candidate, pinned stri
 	if quick := remembered(cands, false); len(quick) > 0 {
 		s.install(cands, quick, false)
 		tried = quick[0]
-		limit := min(max(5*cands[tried].Known, 2*time.Second), s.opts.Timeout)
+		limit := min(max(5*cands[tried].Known, 2*time.Second), s.timeout())
 		if err, ok := s.settle(ctx, s.try(ctx, Connecting, tried, limit, s.opts.Retries[:1])); ok {
 			return err
 		}
@@ -231,7 +254,7 @@ func (s *Session) connect(parent context.Context, cands []Candidate, pinned stri
 	if answered {
 		return s.walk(ctx, Connecting, order)
 	}
-	err, ok := s.settle(ctx, s.try(ctx, Connecting, order[0], min(2*time.Second, s.opts.Timeout), s.opts.Retries[:1]))
+	err, ok := s.settle(ctx, s.try(ctx, Connecting, order[0], min(2*time.Second, s.timeout()), s.opts.Retries[:1]))
 	if ok {
 		return err
 	}
@@ -591,7 +614,7 @@ func (s *Session) walk(ctx context.Context, during State, order []int) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		err, ok := s.settle(ctx, s.try(ctx, during, i, s.opts.Timeout, waits))
+		err, ok := s.settle(ctx, s.try(ctx, during, i, s.timeout(), waits))
 		if ok {
 			return err
 		}
@@ -650,9 +673,9 @@ func (s *Session) limit() time.Duration {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.last <= 0 {
-		return s.opts.Timeout
+		return s.timeout()
 	}
-	return min(max(5*s.last, 2*time.Second), s.opts.Timeout)
+	return min(max(5*s.last, 2*time.Second), s.timeout())
 }
 
 func (s *Session) confirm(ctx context.Context, limit time.Duration, waits []time.Duration) (time.Duration, error) {
@@ -663,7 +686,7 @@ func (s *Session) confirm(ctx context.Context, limit time.Duration, waits []time
 			return 0, ctx.Err()
 		case <-time.After(wait):
 		}
-		delay, err := s.opts.Tunnel.Probe(ctx, "", s.opts.URL, limit)
+		delay, err := s.opts.Tunnel.Probe(ctx, "", s.url(), limit)
 		if err == nil {
 			s.mu.Lock()
 			s.last = delay

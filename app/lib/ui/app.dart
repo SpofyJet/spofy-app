@@ -4,14 +4,17 @@ import 'dart:ui' show AppExitResponse;
 import 'package:flutter/widgets.dart';
 
 import '../state/model.dart';
+import 'about.dart';
 import 'apps.dart';
 import 'home.dart';
+import 'logs.dart';
 import 'servers.dart';
 import 'settings.dart';
 import 'strings.dart';
 import 'subscription.dart';
 import 'support.dart';
 import 'theme.dart';
+import 'update.dart';
 
 class SpofyApp extends StatefulWidget {
   const SpofyApp({super.key, required this.model, this.now = DateTime.now});
@@ -28,6 +31,8 @@ class _SpofyAppState extends State<SpofyApp> with WidgetsBindingObserver {
   Timer? _poll;
   bool _visible = true;
   bool _subscription = false;
+  bool _offering = false;
+  int _offered = 0;
 
   @override
   void initState() {
@@ -79,6 +84,12 @@ class _SpofyAppState extends State<SpofyApp> with WidgetsBindingObserver {
       WidgetsBinding.instance.addPostFrameCallback((_) => _subscribe());
       WidgetsBinding.instance.scheduleFrame();
     }
+    final update = widget.model.update;
+    if (widget.model.ready && update != null && update.build != _offered && !_offering && shouldOffer(widget.model)) {
+      _offered = update.build;
+      WidgetsBinding.instance.addPostFrameCallback((_) => _offer());
+      WidgetsBinding.instance.scheduleFrame();
+    }
     final wanted = _visible && widget.model.connection.state.protecting;
     if (wanted && _poll == null) {
       widget.model.poll();
@@ -102,6 +113,34 @@ class _SpofyAppState extends State<SpofyApp> with WidgetsBindingObserver {
     final model = widget.model;
     _open((done) => SubscriptionScreen(model: model, now: widget.now, onDone: done))
         .whenComplete(() => _subscription = false);
+  }
+
+  void _offer() {
+    final model = widget.model;
+    final update = model.update;
+    if (_offering || !mounted || _navigator.currentState == null || update == null) {
+      return;
+    }
+    _offering = true;
+    if (!update.required) {
+      unawaited(model.set(updateShownKey, update.build));
+    }
+    _open((done) => UpdateScreen(model: model, onDone: done)).whenComplete(() => _offering = false);
+  }
+
+  void _settings() {
+    final model = widget.model;
+    _open(
+      (done) => SettingsScreen(
+        model: model,
+        onDone: done,
+        open: _open,
+        onApps: () => _open((done) => AppsScreen(model: model, onDone: done)),
+        onSupport: () => _open((done) => SupportScreen(model: model, onDone: done, now: widget.now)),
+        onLogs: () => _open((done) => LogsScreen(model: model, onDone: done)),
+        onAbout: () => _open((done) => AboutScreen(model: model, onDone: done, open: _open)),
+      ),
+    );
   }
 
   static PageRoute<T> _route<T>(WidgetBuilder builder, [RouteSettings? settings]) {
@@ -138,14 +177,13 @@ class _SpofyAppState extends State<SpofyApp> with WidgetsBindingObserver {
         now: widget.now,
         onServers: () => _open((done) => ServersScreen(model: model, onDone: done)),
         onSubscription: _subscribe,
-        onSettings: () => _open(
-          (done) => SettingsScreen(
-            model: model,
-            onDone: done,
-            onApps: () => _open((done) => AppsScreen(model: model, onDone: done)),
-            onSupport: () => _open((done) => SupportScreen(model: model, onDone: done, now: widget.now)),
-          ),
-        ),
+        onSettings: _settings,
+        onUpdate: () {
+          if (!_offering) {
+            _offering = true;
+            _open((done) => UpdateScreen(model: model, onDone: done)).whenComplete(() => _offering = false);
+          }
+        },
       ),
     );
   }

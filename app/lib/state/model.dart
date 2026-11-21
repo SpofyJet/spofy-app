@@ -6,7 +6,18 @@ import '../core/client.dart';
 import '../core/protocol.dart';
 import 'apps.dart';
 
-enum Task { subscribe, refresh, unsubscribe, connect, disconnect, measure }
+enum Task {
+  subscribe,
+  refresh,
+  unsubscribe,
+  activate,
+  connect,
+  disconnect,
+  measure,
+  checkUpdate,
+  fetchUpdate,
+  installUpdate,
+}
 
 class Failure {
   const Failure(this.task, this.code, this.error);
@@ -17,11 +28,11 @@ class Failure {
 }
 
 class AppModel extends ChangeNotifier {
-  AppModel(CoreClient client, {this.reopen, this.permit, this.always, this.apps, this.browse}) {
+  AppModel(CoreClient client, {this.reopen, this.permit, this.always, this.apps, this.browse, this.install}) {
     _attach(client);
   }
 
-  AppModel.opening(Future<CoreClient> Function() open, {this.permit, this.always, this.apps, this.browse})
+  AppModel.opening(Future<CoreClient> Function() open, {this.permit, this.always, this.apps, this.browse, this.install})
     : reopen = open {
     unawaited(revive());
   }
@@ -35,6 +46,7 @@ class AppModel extends ChangeNotifier {
   final VoidCallback? always;
   final AppList? apps;
   final void Function(String address)? browse;
+  final Future<bool> Function(String file)? install;
 
   CoreClient? _client;
   StreamSubscription<Event>? _events;
@@ -75,6 +87,31 @@ class AppModel extends ChangeNotifier {
 
   Subscription? get subscription => snapshot.subscription;
 
+  List<Brief> get subscriptions => snapshot.subscriptions;
+
+  Update? get update => snapshot.update;
+
+  Future<bool> checkUpdate() => _run(Task.checkUpdate, const Request.checkUpdate());
+
+  Future<bool> fetchUpdate() => _run(Task.fetchUpdate, const Request.fetchUpdate());
+
+  Future<bool> installUpdate() async {
+    final ready = update;
+    if (ready == null || !ready.ready) {
+      return false;
+    }
+    final own = install;
+    if (own != null) {
+      final ok = await own(ready.file);
+      if (!ok) {
+        failure = const Failure(Task.installUpdate, 'update_install', '');
+        _changed();
+      }
+      return ok;
+    }
+    return _run(Task.installUpdate, const Request.installUpdate());
+  }
+
   AppsChoice get chosenApps => AppsChoice.of(snapshot.settings[appsKey]);
 
   bool running(Task task) => _running.contains(task);
@@ -99,7 +136,9 @@ class AppModel extends ChangeNotifier {
 
   Future<bool> refresh() => _run(Task.refresh, const Request.refresh());
 
-  Future<bool> unsubscribe() => _run(Task.unsubscribe, const Request.unsubscribe());
+  Future<bool> unsubscribe([String? id]) => _run(Task.unsubscribe, Request.unsubscribe(id));
+
+  Future<bool> activate(String id) => _run(Task.activate, Request.activate(id));
 
   Future<bool> measure() => _run(Task.measure, const Request.measure());
 
@@ -178,11 +217,15 @@ class AppModel extends ChangeNotifier {
     await _ask(Request.online(online: online));
   }
 
-  Future<void> set(String key, Object? value) async {
-    await _ask(Request.set(key, value));
-  }
+  Future<bool> set(String key, Object? value) async => (await _ask(Request.set(key, value)))?.ok ?? false;
 
   Future<Report?> report() async => (await _ask(const Request.report()))?.report;
+
+  Future<List<LogLine>?> logs() async => (await _ask(const Request.logs()))?.logs;
+
+  Future<void> clearLogs() async {
+    await _ask(const Request.clearLogs());
+  }
 
   Future<void> poll() async {
     final seen = (await _ask(const Request.traffic()))?.traffic;

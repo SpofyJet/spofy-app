@@ -49,7 +49,7 @@ abstract final class S {
   static const pinned = 'Выбран вручную';
   static const removeShort = 'Удалить';
   static const noLink = 'В буфере нет ссылки. Скопируйте её в боте или в кабинете Spofy';
-  static const linkHint = 'Ссылка на подписку';
+  static const linkHint = 'Ссылка на подписку или ключи vless://, vmess://, trojan://, ss://, hy2://';
   static const paste = 'Вставить из буфера';
   static const add = 'Добавить';
   static const refresh = 'Обновить';
@@ -95,11 +95,253 @@ abstract final class S {
   static const removeConfirm = 'Удалить подписку с этого устройства?';
   static const cancel = 'Отмена';
   static const offeredHint = 'Ссылка получена. Проверьте её и нажмите «Добавить»';
-  static const replaceConfirm = 'Заменить подписку?';
-  static const replace = 'Заменить';
+  static const replaceConfirm = 'Добавить подписку по ссылке?';
+  static const replace = 'Добавить';
+  static const addAnother = 'Добавить ещё подписку';
+  static const subscriptions = 'Подписки';
+  static const ownKeys = 'Свои ключи';
+  static const switchHint = 'VPN переключится на выбранную подписку';
+  static const chosenSubscription = 'Выбранная';
 
   static String replaceFrom(String address) => 'Новая ссылка: ${Uri.tryParse(address)?.host ?? ''}';
+
+  static String briefTitle(Brief b) => b.title.trim().isNotEmpty ? b.title.trim() : (b.links ? ownKeys : subscription);
+
+  static String serversCount(int n) => '$n ${plural(n, 'сервер', 'сервера', 'серверов')}';
+
+  static Subscription briefed(Brief b) => Subscription(
+    title: b.title,
+    upload: 0,
+    download: b.used,
+    total: b.total,
+    expire: b.expire,
+    supportUrl: '',
+    webPageUrl: '',
+    announce: '',
+    fetchedAt: 0,
+    updateEvery: 0,
+    stop: b.stop,
+  );
+
+  static String briefLine(Brief b, DateTime now) {
+    final s = briefed(b);
+    return [
+      if (s.stopped) stopTitle(s) else serversCount(b.servers),
+      if (s.limited) usage(s),
+      if (s.expire > 0 && !s.stopped) until(s, now),
+    ].join(' · ');
+  }
+
   static const support = 'Поддержка';
+  static const connection = 'Подключение';
+  static const checking = 'Проверка серверов';
+  static const probeTarget = 'Адрес проверки';
+  static const probeAuto = 'Google и Cloudflare';
+  static const probeAutoHint = 'Ответ первого из двух. Подходит почти всем';
+  static const probeOwn = 'Свой адрес';
+  static const probeOwnHint = 'Адрес, который отвечает кодом 204 или 200';
+  static const probeWait = 'Ждать ответа';
+  static const probeWaitHint = 'Сколько ждать сервер, прежде чем считать, что он не отвечает';
+
+  static String seconds(int n) => '$n с';
+  static const tunnel = 'Туннель';
+  static const fragment = 'Фрагментация';
+  static const fragmentHint =
+      'Делит начало защищённого соединения на мелкие части. Помогает, когда провайдер мешает подключиться. Немного замедляет первое соединение';
+  static const dns = 'DNS';
+  static const dnsDefault = 'Как в подписке';
+  static const dnsDefaultHint = 'Настройки провайдера VPN';
+  static const dnsOwn = 'Свой DNS';
+  static const dnsOwnHint = 'Адрес IPv4 или IPv6, например 1.1.1.1';
+  static const ipv6 = 'IPv6';
+  static const ipv6Hint = 'Выключите, если сайты открываются долго: приложения сразу пойдут по IPv4';
+  static const lan = 'Домашняя сеть без VPN';
+  static const lanHint = 'Принтеры, телевизоры и роутер доступны при включённом VPN';
+  static const ownValue = 'Ввести';
+  static const save = 'Сохранить';
+  static const badValue = 'Такое значение не подходит';
+  static const logs = 'Журнал';
+  static const logsHint = 'Что делало приложение. Адресов серверов, ключей и ссылки на подписку в нём нет';
+  static const logsDetailed = 'Подробный журнал';
+  static const logsDetailedHint = 'Записывает и адреса сайтов. Включайте, только чтобы найти проблему';
+  static const logsEmpty = 'Записей пока нет';
+  static const copy = 'Скопировать';
+  static const clear = 'Очистить';
+  static const about = 'О приложении';
+  static const engine = 'Ядро';
+  static const device = 'Устройство';
+  static const sourceCode = 'Исходный код';
+  static const licenses = 'Лицензии';
+  static const licensesHint = 'Открытые библиотеки внутри приложения';
+  static const sortSpeed = 'По скорости';
+  static const sortName = 'По стране';
+  static const search = 'Поиск страны или сервера';
+  static const nothingFound = 'Ничего не найдено';
+
+  static String best(int ms) => ms > 0 ? 'лучший ${delay(ms)}' : '';
+
+  static const _countries = {
+    'AE': 'ОАЭ',
+    'AL': 'Албания',
+    'AM': 'Армения',
+    'AR': 'Аргентина',
+    'AT': 'Австрия',
+    'AU': 'Австралия',
+    'AZ': 'Азербайджан',
+    'BA': 'Босния и Герцеговина',
+    'BE': 'Бельгия',
+    'BG': 'Болгария',
+    'BR': 'Бразилия',
+    'BY': 'Беларусь',
+    'CA': 'Канада',
+    'CH': 'Швейцария',
+    'CL': 'Чили',
+    'CN': 'Китай',
+    'CO': 'Колумбия',
+    'CY': 'Кипр',
+    'CZ': 'Чехия',
+    'DE': 'Германия',
+    'DK': 'Дания',
+    'EE': 'Эстония',
+    'EG': 'Египет',
+    'ES': 'Испания',
+    'FI': 'Финляндия',
+    'FR': 'Франция',
+    'GB': 'Великобритания',
+    'GE': 'Грузия',
+    'GR': 'Греция',
+    'HK': 'Гонконг',
+    'HR': 'Хорватия',
+    'HU': 'Венгрия',
+    'ID': 'Индонезия',
+    'IE': 'Ирландия',
+    'IL': 'Израиль',
+    'IN': 'Индия',
+    'IS': 'Исландия',
+    'IT': 'Италия',
+    'JP': 'Япония',
+    'KG': 'Киргизия',
+    'KR': 'Южная Корея',
+    'KZ': 'Казахстан',
+    'LT': 'Литва',
+    'LU': 'Люксембург',
+    'LV': 'Латвия',
+    'MD': 'Молдова',
+    'ME': 'Черногория',
+    'MK': 'Северная Македония',
+    'MN': 'Монголия',
+    'MT': 'Мальта',
+    'MX': 'Мексика',
+    'MY': 'Малайзия',
+    'NL': 'Нидерланды',
+    'NO': 'Норвегия',
+    'NZ': 'Новая Зеландия',
+    'PE': 'Перу',
+    'PH': 'Филиппины',
+    'PL': 'Польша',
+    'PT': 'Португалия',
+    'QA': 'Катар',
+    'RO': 'Румыния',
+    'RS': 'Сербия',
+    'RU': 'Россия',
+    'SA': 'Саудовская Аравия',
+    'SE': 'Швеция',
+    'SG': 'Сингапур',
+    'SI': 'Словения',
+    'SK': 'Словакия',
+    'TH': 'Таиланд',
+    'TJ': 'Таджикистан',
+    'TR': 'Турция',
+    'TW': 'Тайвань',
+    'UA': 'Украина',
+    'UK': 'Великобритания',
+    'US': 'США',
+    'UZ': 'Узбекистан',
+    'VN': 'Вьетнам',
+    'ZA': 'ЮАР',
+  };
+
+  static String country(String code) => _countries[code.toUpperCase()] ?? code.toUpperCase();
+
+  static String detail(Server s) {
+    var text = s.label.replaceAll(RegExp(r'\(\s*[A-Za-z]{2}\s*\)'), '').trim();
+    if (text.startsWith('(') && text.endsWith(')') && !text.substring(1, text.length - 1).contains(RegExp(r'[()]'))) {
+      text = text.substring(1, text.length - 1).trim();
+    }
+    return text;
+  }
+
+  static String place(Server s) {
+    final rest = detail(s);
+    if (s.country.isEmpty) {
+      return rest.isEmpty ? serverName(s) : rest;
+    }
+    final name = country(s.country);
+    if (rest.isEmpty) {
+      return name;
+    }
+    return rest.contains(RegExp(r'[\p{L}\p{N}]', unicode: true)) ? rest : '$name $rest';
+  }
+
+  static const _protocols = {
+    'vless': 'VLESS',
+    'vmess': 'VMess',
+    'trojan': 'Trojan',
+    'shadowsocks': 'Shadowsocks',
+    'hysteria': 'Hysteria 2',
+    'hysteria2': 'Hysteria 2',
+    'wireguard': 'WireGuard',
+  };
+
+  static const _transports = {
+    'xhttp': 'XHTTP',
+    'splithttp': 'XHTTP',
+    'ws': 'WebSocket',
+    'grpc': 'gRPC',
+    'httpupgrade': 'HTTPUpgrade',
+    'kcp': 'mKCP',
+  };
+
+  static String via(Server s) {
+    final hysteria = s.protocol.startsWith('hysteria');
+    return [
+      _protocols[s.protocol] ?? s.protocol.toUpperCase(),
+      ?_transports[s.transport],
+      if (s.security == 'reality') 'Reality' else if (s.security == 'tls' && !hysteria) 'TLS',
+    ].where((p) => p.isNotEmpty).join(' · ');
+  }
+
+  static String uptime(Duration d) {
+    final seconds = d.isNegative ? 0 : d.inSeconds;
+    String two(int n) => n.toString().padLeft(2, '0');
+    final clock = '${two(seconds ~/ 3600 % 24)}:${two(seconds ~/ 60 % 60)}:${two(seconds % 60)}';
+    final days = seconds ~/ 86400;
+    return days > 0 ? '$days д $clock' : clock;
+  }
+
+  static const uptimeLabel = 'VPN работает';
+  static const update = 'Обновление';
+  static const updateNow = 'Обновить';
+  static const updateLater = 'Позже';
+  static const updateInstall = 'Установить';
+  static const updateCheck = 'Проверить обновления';
+  static const updateChecking = 'Проверяем';
+  static const updateLatest = 'У вас последняя версия';
+  static const updateSigned = 'Файл проверяется по подписи Spofy, прежде чем его установить';
+  static const updateRequired = 'Эта версия больше не поддерживается. Обновите приложение, чтобы VPN работал';
+
+  static const updateVpn = 'На время установки VPN выключится';
+
+  static String release(String number, int build) => build > 0 ? 'Версия $number, сборка $build' : version(number);
+
+  static String licenseCount(int n) => '$n ${plural(n, 'лицензия', 'лицензии', 'лицензий')}';
+
+  static String updateTitle(Update u) => 'Вышла версия ${u.version}';
+
+  static String updateBanner(Update u) => 'Доступна версия ${u.version}';
+
+  static String updateProgress(Update u) =>
+      u.ready ? 'Скачано и проверено' : (u.done > 0 ? 'Скачиваем ${(u.share * 100).floor()} %' : bytes(u.size));
   static const supportHint =
       'Если что-то не работает, скопируйте отчёт и отправьте его в поддержку. Ссылки на подписку и адресов серверов в нём нет';
   static const copyReport = 'Скопировать отчёт';
@@ -306,7 +548,8 @@ abstract final class S {
     'server_unreachable' => 'Этот сервер не отвечает. Выберите другой или «Авто»',
     'server_not_found' => 'Такого сервера больше нет в подписке',
     'no_subscription' => 'Сначала добавьте подписку',
-    'sub_bad_url' => 'Это не похоже на ссылку подписки. Она начинается с https://',
+    'sub_bad_url' =>
+      'Это не ссылка подписки и не ключ. Ссылка начинается с https://, ключ — с vless://, trojan:// или ss://',
     'sub_unreachable' => 'Сервер подписки не отвечает. Проверьте интернет',
     'sub_status' => 'Ссылка не принята. Скопируйте её заново',
     'sub_format' => 'По ссылке нет подписки Spofy',
@@ -316,6 +559,14 @@ abstract final class S {
     'sub_other' => 'Подписка не работает',
     'store_failed' => 'Не удалось сохранить данные на устройстве',
     'connected' => 'Проверка скорости доступна, когда VPN выключен',
+    'update_none' => updateLatest,
+    'update_unreachable' => 'Сервер обновлений не отвечает. Попробуйте позже',
+    'update_broken' => 'Файл обновления не прошёл проверку подписи и не будет установлен',
+    'update_file' => 'Файл обновления не скачался целиком. Попробуйте ещё раз',
+    'update_busy' => 'Обновление уже скачивается',
+    'update_off' => 'В этой сборке обновления выключены',
+    'update_install' => 'Не удалось открыть установку. Разрешите Spofy устанавливать приложения',
+    'sub_unknown' => 'Такой подписки больше нет',
     'vpn_denied' || 'guard_failed' => 'Нужно разрешение на VPN. Нажмите ещё раз',
     'tun_permission' => 'Нет прав, чтобы создать туннель',
     '' => '',

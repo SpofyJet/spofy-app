@@ -22,6 +22,8 @@ abstract interface class Host {
 
   void Function(String address)? get browse;
 
+  Future<bool> Function(String file)? get install;
+
   void links(void Function(String link) hear);
 }
 
@@ -54,6 +56,15 @@ class AndroidHost implements Host {
   @override
   void Function(String address)? get browse =>
       (address) => unawaited(_channel.invokeMethod<void>('browse', address));
+
+  @override
+  Future<bool> Function(String file)? get install => (file) async {
+    try {
+      return await _channel.invokeMethod<bool>('install', file) ?? false;
+    } on PlatformException {
+      return false;
+    }
+  };
 
   @override
   void links(void Function(String link) hear) {
@@ -159,6 +170,9 @@ class DesktopHost implements Host {
       return;
     }
   }
+
+  @override
+  Future<bool> Function(String file)? get install => null;
 
   @override
   void links(void Function(String link) hear) {}

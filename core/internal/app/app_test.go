@@ -1,11 +1,15 @@
 package app
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -140,9 +144,12 @@ func TestSubscribe(t *testing.T) {
 	if err := b.app.Subscribe(context.Background(), "  "+apptest.Address+"\n"); err != nil {
 		t.Fatal(err)
 	}
-	same(t, b.seen(), []string{EvSubscription, EvServers})
+	same(t, b.seen(), []string{EvSubscription, EvServers, EvList})
 	snap := b.app.Snapshot()
 	s := snap.Subscription
+	if len(snap.List) != 1 || !snap.List[0].Active || snap.List[0].Kind != KindURL || snap.List[0].Servers != 19 || snap.List[0].Title != s.Title || len(snap.List[0].ID) != 12 {
+		t.Fatalf("list = %+v", snap.List)
+	}
 	if len(snap.Servers) != 19 || s == nil || s.Total != 107374182400 || s.Download != 452716590 || s.Expire != 1798761600 || s.UpdateEvery != 3600 || s.FetchedAt != b.clock.Now().Unix() {
 		t.Fatalf("snapshot = %+v, subscription = %+v", snap, s)
 	}
@@ -1034,12 +1041,12 @@ func TestUnsubscribe(t *testing.T) {
 		t.Fatal(err)
 	}
 	b.seen()
-	if err := b.app.Unsubscribe(); err != nil {
+	if err := b.app.Unsubscribe(""); err != nil {
 		t.Fatal(err)
 	}
-	same(t, b.seen(), []string{"idle", "idle", EvSubscription, EvServers})
+	same(t, b.seen(), []string{"idle", "idle", EvSubscription, EvServers, EvList})
 	snap := b.app.Snapshot()
-	if snap.Subscription != nil || len(snap.Servers) != 0 || snap.Connection.Choice != Auto || b.tunnel.Running() != "" {
+	if snap.Subscription != nil || len(snap.Servers) != 0 || len(snap.List) != 0 || snap.Connection.Choice != Auto || b.tunnel.Running() != "" {
 		t.Fatalf("snapshot = %+v, running %q", snap, b.tunnel.Running())
 	}
 	b.open(nil)
@@ -1055,7 +1062,7 @@ func TestTrafficAndEvents(t *testing.T) {
 		t.Fatalf("traffic = %+v", tr)
 	}
 	for ev, want := range map[string]string{
-		EvConnection:   `{"ev":"connection","connection":{"state":"idle","choice":"auto","server":"","delayMs":0,"code":"","error":""}}`,
+		EvConnection:   `{"ev":"connection","connection":{"state":"idle","choice":"auto","server":"","delayMs":0,"code":"","error":"","since":0}}`,
 		EvSubscription: `{"ev":"subscription","subscription":null}`,
 		EvServers:      `{"ev":"servers","servers":[]}`,
 		EvSettings:     `{"ev":"settings","settings":{}}`,
@@ -1206,14 +1213,21 @@ func TestARunningConnectionEndsWhenTheSubscriptionGivesNoServers(t *testing.T) {
 	}
 }
 
+var providerLinks = base64.StdEncoding.EncodeToString([]byte(strings.Join([]string{
+	"vless://00000000-0000-4000-8000-0000000000a1@192.0.2.10:443?type=tcp&security=reality&pbk=" + strings.Repeat("BwcH", 10) + "Bwc&sni=www.example.com&flow=xtls-rprx-vision#%F0%9F%87%A9%F0%9F%87%AA%20(DE)",
+	"trojan://secret@example.org:443?type=ws&host=cdn.example.org&path=%2Ftj#%F0%9F%87%B1%F0%9F%87%B9%20(LT)",
+	"socks://dXNlcjpwYXNz@192.0.2.1:1080#Socks",
+	"hy2://letmein@192.0.2.40:443?sni=hy.example.com&obfs=salamander&obfs-password=pw#%F0%9F%87%AB%F0%9F%87%AE%20(FL)",
+}, "\r\n")))
+
 func TestAnAddressThatAnswersWithLinksIsAskedAgainForJSON(t *testing.T) {
 	b := newBench(t, nil)
-	b.panel.Links()
+	b.panel.Links(providerLinks)
 	if err := b.app.Subscribe(context.Background(), apptest.Address+"/"); err != nil {
 		t.Fatal(err)
 	}
-	if len(b.app.Snapshot().Servers) == 0 {
-		t.Fatal("no servers")
+	if n := len(b.app.Snapshot().Servers); n != 19 {
+		t.Fatalf("servers %d: the links were taken over the JSON", n)
 	}
 	b.panel.Set(func(_ *[]byte, h http.Header) { h.Set("Etag", `W/"next"`) })
 	if _, err := b.app.Refresh(context.Background()); err != nil {
@@ -1222,9 +1236,366 @@ func TestAnAddressThatAnswersWithLinksIsAskedAgainForJSON(t *testing.T) {
 	path := strings.TrimPrefix(apptest.Address, "https://sub.example.test")
 	same(t, b.panel.Paths(), []string{path + "/", path + "/json", path + "/json"})
 	b2 := newBench(t, nil)
-	b2.panel.Links()
+	b2.panel.Links("dmxlc3M6Ly9saW5rcy5leGFtcGxl")
 	b2.panel.Set(func(body *[]byte, _ http.Header) { *body = []byte("<html>") })
 	if err := b2.app.Subscribe(context.Background(), apptest.Address); code(err) != CodeFormat {
 		t.Fatalf("neither form is a list: %v", err)
+	}
+}
+
+const second = "https://sub.example.test/sub/SECOND0123456789"
+
+func (b *bench) only(names ...string) {
+	b.panel.Set(func(body *[]byte, _ http.Header) {
+		var all []map[string]any
+		json.Unmarshal(*body, &all)
+		kept := []map[string]any{}
+		for _, s := range all {
+			for _, n := range names {
+				if strings.Contains(s["remarks"].(string), "("+n+")") {
+					kept = append(kept, s)
+				}
+			}
+		}
+		*body, _ = json.Marshal(kept)
+	})
+}
+
+func TestASecondSubscriptionKeepsTheFirstWithItsChoice(t *testing.T) {
+	b := newBench(t, nil).subscribed()
+	if err := b.app.Connect("de"); err != nil {
+		t.Fatal(err)
+	}
+	full, _ := apptest.Fixture(t)
+	b.only("NL", "US")
+	if err := b.app.Subscribe(context.Background(), second); err != nil {
+		t.Fatal(err)
+	}
+	snap := b.app.Snapshot()
+	if len(snap.List) != 2 || !snap.List[0].Active || snap.List[0].Servers != 2 || snap.List[1].Active || snap.List[1].Servers != 19 || len(snap.Servers) != 2 || snap.Connection.Choice != Auto {
+		t.Fatalf("after the second: %+v", snap)
+	}
+	if !waitFor(func() bool { r := b.tunnel.Running(); return r == "nl" || r == "us" }) {
+		t.Fatalf("the tunnel stayed on %q after the second subscription took over", b.tunnel.Running())
+	}
+	if err := b.app.Connect("us"); err != nil {
+		t.Fatal(err)
+	}
+	b.panel.Set(func(body *[]byte, _ http.Header) { *body = full })
+	b.seen()
+	if err := b.app.Activate(snap.List[1].ID); err != nil {
+		t.Fatal(err)
+	}
+	seen := b.seen()
+	if !slices.Contains(seen, EvList) || !slices.Contains(seen, EvServers) {
+		t.Fatalf("events %v", seen)
+	}
+	back := b.app.Snapshot()
+	if len(back.Servers) != 19 || back.Connection.Choice != "de" || !back.List[0].Active || back.List[0].ID != snap.List[1].ID || back.List[1].ID != snap.List[0].ID {
+		t.Fatalf("after switching back: choice %q list %+v", back.Connection.Choice, back.List)
+	}
+	if !waitFor(func() bool { return b.tunnel.Running() == "de" }) {
+		t.Fatalf("running %q, want the server chosen in the first subscription", b.tunnel.Running())
+	}
+	if err := b.app.Activate(back.List[0].ID); err != nil {
+		t.Fatal("activating the active subscription must be a no-op")
+	}
+	if err := b.app.Activate("000000000000"); code(err) != CodeUnknown {
+		t.Fatalf("unknown id: %v", err)
+	}
+	b.open(nil)
+	if again := b.app.Snapshot(); len(again.List) != 2 || again.List[0].ID != back.List[0].ID || again.Connection.Choice != "de" {
+		t.Fatalf("after restart: %+v", again.List)
+	}
+	if err := b.app.Subscribe(context.Background(), second); err != nil {
+		t.Fatal(err)
+	}
+	if again := b.app.Snapshot(); len(again.List) != 2 || again.List[0].ID != snap.List[0].ID || again.Connection.Choice != "us" {
+		t.Fatalf("subscribing again to a known address must bring it back with its choice, not add a copy: %+v choice %q", again.List, again.Connection.Choice)
+	}
+}
+
+func TestUnsubscribeOneOfSeveral(t *testing.T) {
+	b := newBench(t, nil).subscribed()
+	b.only("NL")
+	if err := b.app.Subscribe(context.Background(), second); err != nil {
+		t.Fatal(err)
+	}
+	snap := b.app.Snapshot()
+	b.seen()
+	if err := b.app.Unsubscribe(snap.List[1].ID); err != nil {
+		t.Fatal(err)
+	}
+	same(t, b.seen(), []string{EvList})
+	if now := b.app.Snapshot(); len(now.List) != 1 || now.List[0].ID != snap.List[0].ID || len(now.Servers) != 1 {
+		t.Fatalf("after removing the parked one: %+v", now)
+	}
+	if err := b.app.Unsubscribe(snap.List[1].ID); code(err) != CodeUnknown {
+		t.Fatalf("removing it twice: %v", err)
+	}
+	if err := b.app.Subscribe(context.Background(), apptest.Address); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.app.Connect("nl"); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.app.Unsubscribe(""); err != nil {
+		t.Fatal(err)
+	}
+	now := b.app.Snapshot()
+	if b.tunnel.Running() != "" || now.Connection.State != session.Idle || len(now.List) != 1 || !now.List[0].Active || len(now.Servers) != 1 || now.Subscription == nil {
+		t.Fatalf("removing the active one must turn the VPN off and bring the next one: running %q %+v", b.tunnel.Running(), now)
+	}
+}
+
+func TestSwitchingToASubscriptionWithoutServersTurnsTheVPNOff(t *testing.T) {
+	b := newBench(t, nil).subscribed()
+	b.panel.Set(func(body *[]byte, _ http.Header) { *body = notices("⏰ Подписка закончилась") })
+	if err := b.app.Subscribe(context.Background(), second); err != nil {
+		t.Fatal(err)
+	}
+	snap := b.app.Snapshot()
+	if snap.List[0].Stop == "" || snap.List[0].Servers != 0 {
+		t.Fatalf("list = %+v", snap.List)
+	}
+	if err := b.app.Activate(snap.List[1].ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.app.Connect("de"); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.app.Activate(snap.List[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	if !waitFor(func() bool { return b.tunnel.Running() == "" && b.app.Snapshot().Connection.State == session.Idle }) {
+		t.Fatalf("the VPN stayed on %q after switching to a subscription without servers", b.tunnel.Running())
+	}
+}
+
+func TestNoMoreThanTwentySubscriptionsAreKept(t *testing.T) {
+	b := newBench(t, nil)
+	for i := range maxSubscriptions + 3 {
+		if err := b.app.Subscribe(context.Background(), fmt.Sprintf("%s/%d", second, i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snap := b.app.Snapshot()
+	if len(snap.List) != maxSubscriptions || !snap.List[0].Active {
+		t.Fatalf("kept %d", len(snap.List))
+	}
+}
+
+func waitFor(ok func() bool) bool {
+	for range 200 {
+		if ok() {
+			return true
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return ok()
+}
+
+func TestTunnelAndProbeSettings(t *testing.T) {
+	b := newBench(t, func(c *Config) {
+		c.Run = xcfg.Options{Mode: xcfg.ModeTun, Tun: xcfg.Tun{Name: "spofy0", MTU: 1500, Gateway: []string{"172.19.0.1/30"}, Routes: []string{"0.0.0.0/0"}, Resolver: []string{"172.19.0.2"}}}
+	}).subscribed()
+	for key, bad := range map[string]string{
+		KeyFragment:     `"yes"`,
+		KeyProbeTimeout: `1`,
+		KeyProbeURL:     `"ftp://example.test/"`,
+		KeyDNS:          `"192.168.1.1"`,
+		KeyLogLevel:     `"loud"`,
+		KeyLAN:          `1`,
+	} {
+		if err := b.app.Set(key, json.RawMessage(bad)); code(err) != CodeValue {
+			t.Fatalf("%s = %s: %v", key, bad, err)
+		}
+	}
+	for key, good := range map[string]string{
+		KeyProbeTimeout: `3`,
+		KeyProbeURL:     `"https://probe.example.test/204"`,
+		KeyDNS:          `"quad9"`,
+		KeyIPv6:         `false`,
+	} {
+		if err := b.app.Set(key, json.RawMessage(good)); err != nil {
+			t.Fatalf("%s = %s: %v", key, good, err)
+		}
+	}
+	if err := b.app.Set(KeyDNS, json.RawMessage(`"2606:4700:4700::1111"`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.app.Connect("de"); err != nil {
+		t.Fatal(err)
+	}
+	if got := b.tunnel.LastURL(); got != "https://probe.example.test/204" {
+		t.Fatalf("probe went to %q", got)
+	}
+	before := len(b.tunnel.Starts())
+	if err := b.app.Set(KeyFragment, json.RawMessage(`true`)); err != nil {
+		t.Fatal(err)
+	}
+	if !waitFor(func() bool { return len(b.tunnel.Starts()) > before && b.tunnel.Running() == "de" }) {
+		t.Fatalf("turning the fragment on did not restart the tunnel on the chosen server: starts %d → %d, running %q", before, len(b.tunnel.Starts()), b.tunnel.Running())
+	}
+	if cfg := b.tunnel.Config(); !bytes.Contains(cfg, []byte(xcfg.TagFragment)) || !bytes.Contains(cfg, []byte("2606:4700:4700::1111")) {
+		t.Fatal("the running config has no fragment or chosen DNS")
+	}
+	b.open(nil)
+	if s := b.app.Snapshot().Settings; string(s[KeyFragment]) != "true" || string(s[KeyProbeTimeout]) != "3" {
+		t.Fatalf("settings after restart: %s", s)
+	}
+}
+
+func TestTheLogBookTellsWhatHappenedWithoutSecrets(t *testing.T) {
+	b := newBench(t, nil).subscribed()
+	if err := b.app.Connect("de"); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.app.Set(KeyFragment, json.RawMessage(`true`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.app.Set(KeyApps, json.RawMessage(`{"mode":"except","list":["org.example.one"]}`)); err != nil {
+		t.Fatal(err)
+	}
+	st := b.app.cfg.Store.Get()
+	var endpoint string
+	for _, s := range st.Profile.Servers {
+		if s.ID == "de" {
+			endpoint = s.Endpoint
+		}
+	}
+	host, _, _ := strings.Cut(endpoint, ":")
+	b.app.Note("engine", "dial tcp "+endpoint+" via "+st.URL)
+	var text []string
+	for _, l := range b.app.Logs() {
+		text = append(text, l.Source+": "+l.Text)
+	}
+	all := strings.Join(text, "\n")
+	for _, want := range []string{"app: connected 🇩🇪 (DE)", "app: setting fragment = true", "app: setting apps = except, 1 apps", "engine: dial tcp •••"} {
+		if !strings.Contains(all, want) {
+			t.Fatalf("no %q in\n%s", want, all)
+		}
+	}
+	if host == "" || strings.Contains(all, host) || strings.Contains(all, "TESTTOKEN") || strings.Contains(all, "org.example.one") {
+		t.Fatalf("secret in the book:\n%s", all)
+	}
+	b.app.ClearLogs()
+	if n := len(b.app.Logs()); n != 0 {
+		t.Fatalf("%d lines after clearing", n)
+	}
+}
+
+func TestSubscribeKeepsTheLinksWhenThereIsNoJSON(t *testing.T) {
+	links, err := sub.ParseLinks(providerLinks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := strings.TrimPrefix(apptest.Address, "https://sub.example.test")
+	for name, hide := range map[string]func(*apptest.Panel){
+		"not found": func(p *apptest.Panel) { p.WithoutJSON() },
+		"a page":    func(p *apptest.Panel) { p.Set(func(body *[]byte, _ http.Header) { *body = []byte("<html>") }) },
+		"links":     func(p *apptest.Panel) { p.Set(func(body *[]byte, _ http.Header) { *body = []byte(providerLinks) }) },
+	} {
+		b := newBench(t, nil)
+		b.panel.Links(providerLinks)
+		hide(b.panel)
+		if err := b.app.Subscribe(context.Background(), apptest.Address); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		snap := b.app.Snapshot()
+		var ids []string
+		for _, s := range snap.Servers {
+			ids = append(ids, s.ID+" "+s.Country+" "+s.Protocol)
+		}
+		same(t, ids, []string{"de DE vless", "lt LT trojan", "fl FI hysteria"})
+		if s := snap.Subscription; s.Title != "🛡 Spofy VPN" || s.Total != 107374182400 || s.Stop != "" {
+			t.Fatalf("%s: subscription = %+v", name, s)
+		}
+		same(t, b.panel.Paths(), []string{path, path + "/json"})
+		b.tunnel.Know(links.Servers)
+		b.tunnel.Answer(map[string]time.Duration{"de": ms(50), "lt": ms(30), "fl": ms(70)})
+		if err := b.app.Connect(Auto); err != nil || b.tunnel.Running() != "lt" {
+			t.Fatalf("%s: err %v, running %q", name, err, b.tunnel.Running())
+		}
+		b.panel.Set(func(_ *[]byte, h http.Header) { h.Set("Etag", `W/"next"`) })
+		if changed, err := b.app.Refresh(context.Background()); err != nil || !changed {
+			t.Fatalf("%s: changed %v, err %v", name, changed, err)
+		}
+		same(t, b.panel.Paths(), []string{path, path + "/json", path})
+		b.app.Disconnect()
+		b.open(nil)
+		if again := b.app.Snapshot(); len(again.Servers) != 3 || find(again.Servers, "fl").Protocol != "hysteria" {
+			t.Fatalf("%s: after restart %+v", name, again.Servers)
+		}
+	}
+}
+
+func TestPastedKeysBecomeASubscriptionOfTheirOwn(t *testing.T) {
+	b := newBench(t, nil)
+	links, err := sub.ParseLinks(providerLinks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.tunnel.Know(links.Servers)
+	b.tunnel.Answer(map[string]time.Duration{"de": ms(50), "lt": ms(30), "fl": ms(70)})
+	if err := b.app.Subscribe(context.Background(), "\n"+providerLinks+"\n"); err != nil {
+		t.Fatal(err)
+	}
+	snap := b.app.Snapshot()
+	if len(snap.Servers) != 3 || len(snap.List) != 1 || snap.List[0].Kind != KindLinks || len(b.panel.Paths()) != 0 {
+		t.Fatalf("servers %d list %+v asked %v", len(snap.Servers), snap.List, b.panel.Paths())
+	}
+	if changed, err := b.app.Refresh(context.Background()); changed || err != nil || len(b.panel.Paths()) != 0 {
+		t.Fatalf("refreshing pasted keys: changed %v err %v asked %v", changed, err, b.panel.Paths())
+	}
+	if err := b.app.Subscribe(context.Background(), "просто текст"); code(err) != CodeBadURL {
+		t.Fatalf("text without keys: %v", err)
+	}
+	if err := b.app.Subscribe(context.Background(), apptest.Address); err != nil {
+		t.Fatal(err)
+	}
+	if again := b.app.Snapshot(); len(again.List) != 2 || again.List[1].Kind != KindLinks || again.List[1].Servers != 3 {
+		t.Fatalf("list %+v", again.List)
+	}
+}
+
+func TestServersSayHowTheyConnect(t *testing.T) {
+	b := newBench(t, nil).subscribed()
+	seen := map[string]bool{}
+	for _, s := range b.app.Snapshot().Servers {
+		if s.Protocol == "" || (s.Transport == "" && s.Protocol != "hysteria") {
+			t.Fatalf("server %+v", s)
+		}
+		seen[s.Protocol+" "+s.Transport+" "+s.Security] = true
+	}
+	if len(seen) < 2 {
+		t.Fatalf("all servers look the same: %v", seen)
+	}
+}
+
+func TestTheConnectionKnowsSinceWhenItProtects(t *testing.T) {
+	b := newBench(t, nil).subscribed()
+	if s := b.app.Snapshot().Connection.Since; s != 0 {
+		t.Fatalf("idle since %d", s)
+	}
+	began := b.clock.Now().Unix()
+	if err := b.app.Connect("de"); err != nil {
+		t.Fatal(err)
+	}
+	if s := b.app.Snapshot().Connection.Since; s != began {
+		t.Fatalf("since %d, want %d", s, began)
+	}
+	b.clock.Advance(time.Minute)
+	if err := b.app.Connect("nl"); err != nil {
+		t.Fatal(err)
+	}
+	if c := b.app.Snapshot().Connection; c.Server != "nl" || c.Since != began+60 {
+		t.Fatalf("a server chosen by hand is a new connection: %+v", c)
+	}
+	if err := b.app.Disconnect(); err != nil {
+		t.Fatal(err)
+	}
+	if s := b.app.Snapshot().Connection.Since; s != 0 {
+		t.Fatalf("after turning off: %d", s)
 	}
 }

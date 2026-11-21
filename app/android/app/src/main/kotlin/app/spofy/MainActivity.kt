@@ -93,6 +93,7 @@ class MainActivity : FlutterActivity() {
                     }
                     result.success(null)
                 }
+                "install" -> install(call.arguments as? String, result)
                 "always" -> {
                     try {
                         startActivity(Intent(Settings.ACTION_VPN_SETTINGS))
@@ -102,6 +103,29 @@ class MainActivity : FlutterActivity() {
                 }
                 else -> result.notImplemented()
             }
+        }
+    }
+
+    private fun install(path: String?, result: MethodChannel.Result) {
+        if (path == null) {
+            result.success(false)
+            return
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !packageManager.canRequestPackageInstalls()) {
+            try {
+                startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")))
+            } catch (e: Exception) {
+            }
+            result.success(false)
+            return
+        }
+        worker.execute {
+            val ok = try {
+                InstallReceiver.install(this, path)
+            } catch (e: Exception) {
+                false
+            }
+            runOnUiThread { result.success(ok) }
         }
     }
 
