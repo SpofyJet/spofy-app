@@ -121,6 +121,7 @@ func (s *setup) put(a *pack.Archive, p *progress) outcome {
 	}
 	p.permille.Store(unpacked + 60)
 	s.greet(s.plan(ran, upgrade))
+	allowSetForegroundWindow.Call(0xFFFFFFFF)
 	if err := s.core("install"); err != nil {
 		s.printf("the new version did not start: %v", err)
 		return s.rollback(old, ran, before)

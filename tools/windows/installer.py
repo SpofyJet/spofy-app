@@ -337,10 +337,11 @@ def scenario():
     back = connected()
     outage, leaks = watch.stop(began)
     tray = until(lambda: owner(stand.tray_window()) not in (0, before), 30, 0.1)
+    front = until(lambda: stand.window() and stand.user32.GetForegroundWindow() == stand.window(), 15, 0.1)
     expect("upgraded over itself with the kill switch and the window open: no reboot, the window closed, the tray replaced, the service connects by itself, nothing leaks, the desktop shortcut the person removed stays removed",
            code == 0 and bool(shown) and window.poll() is not None and bool(tray) and back and leaks == 0 and value(ENTRY, "DisplayVersion") == "0.0.0.2"
            and not os.path.exists(DESKTOP),
-           "code=%d setup=%.1f s vpn_down=%.1f s leaks=%d window=%s tray=%s signed=%s" % (code, took, outage, leaks, window.poll(), bool(tray), signed))
+           "code=%d setup=%.1f s vpn_down=%.1f s leaks=%d window=%s tray=%s signed=%s reopened_in_front=%s" % (code, took, outage, leaks, window.poll(), bool(tray), signed, bool(front)))
 
     kept = files(HOME)
     code, took = setup(damaged)
