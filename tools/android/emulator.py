@@ -247,6 +247,7 @@ def drawn():
 
 
 def started_in():
+    adb("logcat", "-G", "16M", limit=60)
     times, full = [], []
     for _ in range(5):
         shell("am force-stop %s" % PACKAGE)

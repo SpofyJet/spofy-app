@@ -258,10 +258,10 @@ def launches(source, ui, installer):
     code = started[0].wait(120)
     outage, leaks = watch.stop(began)
     after = stand.service_pid()
-    expect("the installer of the version that is installed opens the window and leaves the service and the VPN alone",
-           code == 0 and seen["shown"] is not None and before == after and outage < 1.0 and leaks == 0,
-           "code=%d s=%.1f shown_ms=%s content_ms=%s service %d -> %d vpn_down=%.1f s leaks=%d others=%s"
-           % (code, time.time() - began, seen["shown"], seen["content"], before, after, outage, leaks, seen["others"]))
+    expect("the installer of the version that is installed opens the window with no window of its own and leaves the service and the VPN alone",
+           code == 0 and seen["shown"] is not None and not seen["others"] and before == after and outage < 1.0 and leaks == 0,
+           "code=%d s=%.1f shown_ms=%s front_ms=%s content_ms=%s service %d -> %d vpn_down=%.1f s leaks=%d others=%s"
+           % (code, time.time() - began, seen["shown"], seen["front"], seen["content"], before, after, outage, leaks, seen["others"]))
     if seen["hwnd"]:
         shut(seen["hwnd"])
     os.remove(DESKTOP)
@@ -277,7 +277,7 @@ def launches(source, ui, installer):
     until(lambda: answer, 60, 0.1)
     expect("a person without administrator rights opens Spofy with the installer: no request for rights, the window opens, the service stays",
            answer == [0] and seen["shown"] is not None and stand.service_pid() == before,
-           "code=%s shown_ms=%s content_ms=%s others=%s" % (answer, seen["shown"], seen["content"], seen["others"]))
+           "code=%s shown_ms=%s front_ms=%s content_ms=%s others=%s" % (answer, seen["shown"], seen["front"], seen["content"], seen["others"]))
     if seen["hwnd"]:
         shut(seen["hwnd"])
 

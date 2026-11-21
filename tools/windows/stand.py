@@ -463,6 +463,7 @@ for name, args, result in [
     ("ReleaseDC", [ctypes.c_void_p, ctypes.c_void_p], ctypes.c_int),
     ("GetWindowRect", [ctypes.c_void_p, ctypes.c_void_p], ctypes.c_bool),
     ("GetWindowTextW", [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_int], ctypes.c_int),
+    ("GetForegroundWindow", [], ctypes.c_void_p),
 ]:
     getattr(user32, name).argtypes, getattr(user32, name).restype = args, result
 for name, args, result in [
@@ -534,19 +535,26 @@ def toplevel():
     return seen
 
 
+def cloaked(hwnd):
+    flag = ctypes.c_uint32()
+    return ctypes.windll.dwmapi.DwmGetWindowAttribute(ctypes.c_void_p(hwnd), 14, ctypes.byref(flag), ctypes.sizeof(flag)) == 0 and flag.value != 0
+
+
 def launch(start, name, out, limit=6.0, watched=2.0):
     before = toplevel()
     began = time.perf_counter()
     start()
-    hwnd, created, shown, frames, others, last = 0, None, None, [], {}, None
+    hwnd, created, shown, front, frames, others, last = 0, None, None, None, [], {}, None
     while time.perf_counter() - began < limit:
         t = time.perf_counter() - began
         if not hwnd:
             hwnd = window()
             if hwnd:
                 created = t
-        if hwnd and shown is None and user32.IsWindowVisible(hwnd):
+        if hwnd and shown is None and user32.IsWindowVisible(hwnd) and not cloaked(hwnd):
             shown = t
+        if hwnd and front is None and user32.GetForegroundWindow() == hwnd:
+            front = t
         if shown is not None:
             box = bounds(hwnd)
             if box[2] > 0 and box[3] > 0:
@@ -569,9 +577,9 @@ def launch(start, name, out, limit=6.0, watched=2.0):
             content = None
         png(os.path.join(out, "%s-%05d.png" % (name, round(t * 1000))), box[2], box[3], data)
     ms = lambda v: None if v is None else round(v * 1000)
-    print("     launch %s: window made %s ms, shown %s ms, final picture from %s ms; frames (ms, %% of pixels unlike the final): %s; other windows: %s"
-          % (name, ms(created), ms(shown), ms(content), timeline, sorted(others.values())), flush=True)
-    return {"made": ms(created), "shown": ms(shown), "content": ms(content), "frames": timeline, "others": sorted(others.values()), "hwnd": hwnd}
+    print("     launch %s: window made %s ms, shown %s ms, in front %s ms, final picture from %s ms; frames (ms, %% of pixels unlike the final): %s; other windows: %s"
+          % (name, ms(created), ms(shown), ms(front), ms(content), timeline, sorted(others.values())), flush=True)
+    return {"made": ms(created), "shown": ms(shown), "front": ms(front), "content": ms(content), "frames": timeline, "others": sorted(others.values()), "hwnd": hwnd}
 
 
 def menu_of(pid):
