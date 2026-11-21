@@ -3,6 +3,8 @@ package xcfg
 import (
 	"encoding/json"
 	"slices"
+	"strconv"
+	"strings"
 )
 
 type Tweaks struct {
@@ -19,7 +21,7 @@ const (
 )
 
 var (
-	fragment = json.RawMessage(`{"tag":"` + TagFragment + `","protocol":"freedom","settings":{"fragment":{"packets":"1-1","length":"128-137","interval":"0-0","maxSplit":"2-2"}}}`)
+	fragment = json.RawMessage(`{"tag":"` + TagFragment + `","protocol":"freedom","streamSettings":{"finalmask":{"tcp":[{"type":"fragment","settings":{"packets":"1-1","length":"128-137","delay":"0-0","maxSplit":"2-2"}}]}}}`)
 	private  = []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "fc00::/7", "fe80::/10"}
 )
 
@@ -139,15 +141,66 @@ func onlyIPv4(raw json.RawMessage) bool {
 
 func answerEmpty(ob map[string]json.RawMessage) {
 	var settings map[string]json.RawMessage
-	var types []int
-	if json.Unmarshal(ob["settings"], &settings) != nil || json.Unmarshal(settings["blockTypes"], &types) != nil {
+	var rules []map[string]json.RawMessage
+	if json.Unmarshal(ob["settings"], &settings) != nil || json.Unmarshal(settings["rules"], &rules) != nil {
 		return
 	}
-	kept := slices.DeleteFunc(types, func(t int) bool { return t == 28 })
-	if len(kept) == 0 {
-		delete(settings, "blockTypes")
-	} else {
-		settings["blockTypes"] = mustJSON(kept)
+	kept := rules[:0]
+	for _, r := range rules {
+		var action string
+		json.Unmarshal(r["action"], &action)
+		if a := strings.ToLower(action); a == "return" || a == "drop" {
+			if left, ok := without(r["qType"], 28); ok {
+				if left == "" {
+					continue
+				}
+				r["qType"] = mustJSON(left)
+			}
+		}
+		kept = append(kept, r)
 	}
+	settings["rules"] = mustJSON(kept)
 	ob["settings"] = mustJSON(settings)
+}
+
+func without(raw json.RawMessage, t int) (string, bool) {
+	var text string
+	if json.Unmarshal(raw, &text) != nil {
+		var n int
+		if json.Unmarshal(raw, &n) != nil || n <= 0 {
+			return "", false
+		}
+		text = strconv.Itoa(n)
+	}
+	var left []string
+	found := false
+	for _, part := range strings.Split(text, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		a, b, isRange := strings.Cut(part, "-")
+		if !isRange {
+			b = a
+		}
+		from, e1 := strconv.Atoi(a)
+		to, e2 := strconv.Atoi(b)
+		if e1 != nil || e2 != nil {
+			return "", false
+		}
+		if from > t || to < t {
+			left = append(left, part)
+			continue
+		}
+		found = true
+		for _, r := range [][2]int{{from, t - 1}, {t + 1, to}} {
+			switch {
+			case r[0] == r[1]:
+				left = append(left, strconv.Itoa(r[0]))
+			case r[0] < r[1]:
+				left = append(left, strconv.Itoa(r[0])+"-"+strconv.Itoa(r[1]))
+			}
+		}
+	}
+	return strings.Join(left, ","), found
 }

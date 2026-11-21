@@ -40,7 +40,7 @@ func TestBuildTunKeepsServerLogic(t *testing.T) {
 			t.Fatalf("server %d: %v", i, err)
 		}
 		for _, k := range []string{"outbounds", "dns", "routing", "fakedns", "burstObservatory"} {
-			if !bytes.Equal(in[k], out[k]) && !(onlyIPv4(in["dns"]) && sameButIPv6Block(in[k], out[k])) {
+			if !bytes.Equal(in[k], out[k]) && !sameButRewritten(in[k], out[k]) {
 				t.Fatalf("server %d: section %s changed", i, k)
 			}
 		}
@@ -82,17 +82,21 @@ func TestBuildTunKeepsServerLogic(t *testing.T) {
 	}
 }
 
-func sameButIPv6Block(in, out json.RawMessage) bool {
+func sameButRewritten(in, out json.RawMessage) bool {
 	var a, b any
 	if json.Unmarshal(in, &a) != nil || json.Unmarshal(out, &b) != nil {
 		return false
 	}
-	return reflect.DeepEqual(withoutIPv6Block(a), withoutIPv6Block(b))
+	return reflect.DeepEqual(rewritable(a), rewritable(b))
 }
 
-func withoutIPv6Block(v any) any {
-	if m, ok := v.(map[string]any); ok && m["rules"] != nil {
-		m["rules"] = withoutIPv6Block(m["rules"])
+func rewritable(v any) any {
+	if m, ok := v.(map[string]any); ok {
+		for _, k := range []string{"rules", "servers"} {
+			if m[k] != nil {
+				m[k] = rewritable(m[k])
+			}
+		}
 		return m
 	}
 	list, ok := v.([]any)
@@ -105,12 +109,155 @@ func withoutIPv6Block(v any) any {
 		if ok && (m["tag"] == TagBlock || m["outboundTag"] == TagBlock) {
 			continue
 		}
+		if ok && m["address"] == "fakedns" {
+			delete(m, "finalQuery")
+		}
 		if s, ok := m["settings"].(map[string]any); ok && m["protocol"] == "dns" {
 			delete(s, "blockTypes")
+			delete(s, "nonIPQuery")
+			delete(s, "rules")
+		}
+		if s, ok := m["settings"].(map[string]any); ok && m["protocol"] == "freedom" {
+			delete(s, "domainStrategy")
+			delete(m, "streamSettings")
 		}
 		kept = append(kept, e)
 	}
 	return kept
+}
+
+func TestTheSubscriptionIsWrittenInTheCurrentSyntax(t *testing.T) {
+	raw := servers(t, "../../testdata/sub/sub.json")[0]
+	built, err := Build(raw, tunOptions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var c struct {
+		DNS struct {
+			Servers []json.RawMessage `json:"servers"`
+		} `json:"dns"`
+		Outbounds []struct {
+			Tag      string          `json:"tag"`
+			Settings json.RawMessage `json:"settings"`
+			Stream   json.RawMessage `json:"streamSettings"`
+		} `json:"outbounds"`
+	}
+	if err := json.Unmarshal(built, &c); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, o := range c.Outbounds {
+		got[o.Tag] = string(o.Settings) + " " + string(o.Stream)
+	}
+	if got["dns-out"] != `{"rules":[{"action":"hijack","qType":"1,28"},{"action":"return","rCode":5}]} ` {
+		t.Errorf("name handler: %s", got["dns-out"])
+	}
+	if got["direct"] != `{} {"sockopt":{"domainStrategy":"UseIPv4"}}` {
+		t.Errorf("direct: %s", got["direct"])
+	}
+	if last := string(c.DNS.Servers[len(c.DNS.Servers)-1]); strings.Contains(last, "finalQuery") || !strings.Contains(last, "fakedns") {
+		t.Errorf("fake names: %s", last)
+	}
+}
+
+func TestOldFieldsKeepTheirMeaningInTheNewForm(t *testing.T) {
+	build := func(outbound string) map[string]json.RawMessage {
+		t.Helper()
+		b, err := Build(json.RawMessage(`{"outbounds":[{"tag":"proxy","protocol":"vless"},`+outbound+`]}`), Options{Mode: ModeProbe})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var c struct {
+			Outbounds []map[string]json.RawMessage `json:"outbounds"`
+		}
+		if err := json.Unmarshal(b, &c); err != nil {
+			t.Fatal(err)
+		}
+		return c.Outbounds[1]
+	}
+	for _, c := range []struct{ settings, rules string }{
+		{`{"nonIPQuery":"reject","blockTypes":[28]}`, `[{"action":"return","qType":"28","rCode":5},{"action":"hijack","qType":"1,28"},{"action":"return","rCode":5}]`},
+		{`{"nonIPQuery":"drop","blockTypes":[28,65]}`, `[{"action":"drop","qType":"28,65"},{"action":"hijack","qType":"1,28"},{"action":"drop"}]`},
+		{`{"nonIPQuery":"skip","blockTypes":[65]}`, `[{"action":"drop","qType":"65"},{"action":"hijack","qType":"1,28"},{"action":"direct"}]`},
+		{`{"blockTypes":[]}`, `[{"action":"hijack","qType":"1,28"},{"action":"return","rCode":5}]`},
+		{`{"nonIPQuery":"","port":53}`, `[{"action":"hijack","qType":"1,28"},{"action":"return","rCode":5}]`},
+	} {
+		ob := build(`{"tag":"d","protocol":"dns","settings":` + c.settings + `}`)
+		var s map[string]json.RawMessage
+		json.Unmarshal(ob["settings"], &s)
+		if string(s["rules"]) != c.rules || s["nonIPQuery"] != nil || s["blockTypes"] != nil {
+			t.Errorf("%s: %s", c.settings, ob["settings"])
+		}
+		if strings.Contains(c.settings, "port") && string(s["port"]) != "53" {
+			t.Errorf("the rest of the handler is kept: %s", ob["settings"])
+		}
+	}
+	for _, settings := range []string{`{"nonIPQuery":"refuse"}`, `{"blockTypes":[70000]}`, `{"blockTypes":[28],"rules":[]}`, `{"rules":[{"action":"hijack"}]}`, `{}`} {
+		ob := build(`{"tag":"d","protocol":"dns","settings":` + settings + `}`)
+		if string(ob["settings"]) != settings {
+			t.Errorf("what the core would refuse or already reads stays as it was: %s -> %s", settings, ob["settings"])
+		}
+	}
+	for _, c := range []struct{ outbound, settings, stream string }{
+		{`{"tag":"f","protocol":"freedom","settings":{"domainStrategy":"UseIPv4"}}`, `{}`, `{"sockopt":{"domainStrategy":"UseIPv4"}}`},
+		{`{"tag":"f","protocol":"freedom","settings":{"targetStrategy":"ForceIP","domainStrategy":"UseIPv4","redirect":"1.1.1.1:53"}}`, `{"redirect":"1.1.1.1:53"}`, `{"sockopt":{"domainStrategy":"ForceIP"}}`},
+		{`{"tag":"f","protocol":"freedom","targetStrategy":"UseIPv6","settings":{"domainStrategy":"UseIPv4"},"streamSettings":{"sockopt":{"mark":7,"domainStrategy":"UseIP"}}}`, `{}`, `{"sockopt":{"domainStrategy":"UseIPv6","mark":7}}`},
+		{`{"tag":"f","protocol":"freedom","targetStrategy":"UseIPv4"}`, ``, `{"sockopt":{"domainStrategy":"UseIPv4"}}`},
+	} {
+		ob := build(c.outbound)
+		if string(ob["settings"]) != c.settings || string(ob["streamSettings"]) != c.stream || ob["targetStrategy"] != nil {
+			t.Errorf("%s: settings %s, stream %s", c.outbound, ob["settings"], ob["streamSettings"])
+		}
+	}
+	for _, outbound := range []string{
+		`{"tag":"f","protocol":"freedom","settings":{"domainStrategy":"AsIs"}}`,
+		`{"tag":"f","protocol":"freedom","settings":{"domainStrategy":"Sometimes"}}`,
+		`{"tag":"f","protocol":"freedom"}`,
+		`{"tag":"v","protocol":"vless","targetStrategy":"UseIPv4"}`,
+	} {
+		var want, got any
+		json.Unmarshal([]byte(outbound), &want)
+		raw, _ := json.Marshal(build(outbound))
+		json.Unmarshal(raw, &got)
+		if !reflect.DeepEqual(want, got) {
+			t.Errorf("left as it was: %s -> %s", outbound, raw)
+		}
+	}
+}
+
+func TestFakeNamesStayForAppsWhileTheCoreFindsRealOnes(t *testing.T) {
+	fake := `{"address":"fakedns","domains":["regexp:.*"],"finalQuery":true,"skipFallback":true}`
+	final := func(dns, pools string) bool {
+		t.Helper()
+		server := `{"outbounds":[{"tag":"proxy","protocol":"vless"}],"dns":` + dns
+		if pools != "" {
+			server += `,"fakedns":` + pools
+		}
+		b, err := Build(json.RawMessage(server+`}`), Options{Mode: ModeTun, Tun: Tun{Name: "spofy0", Resolver: []string{"172.19.0.2"}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.Contains(string(b), `"finalQuery":true`)
+	}
+	four, both := `[{"ipPool":"198.18.0.0/15","poolSize":65535}]`, `[{"ipPool":"198.18.0.0/15","poolSize":100},{"ipPool":"fc00::/18","poolSize":100}]`
+	for _, c := range []struct {
+		dns, pools string
+		final      bool
+	}{
+		{`{"servers":["https://8.8.8.8/dns-query",` + fake + `],"queryStrategy":"UseIPv4"}`, four, false},
+		{`{"servers":["https://8.8.8.8/dns-query",` + fake + `],"queryStrategy":"UseIPv4"}`, `{"ipPool":"198.18.0.0/15","poolSize":65535}`, false},
+		{`{"servers":["https://8.8.8.8/dns-query",` + fake + `]}`, both, false},
+		{`{"servers":["https://8.8.8.8/dns-query",` + fake + `]}`, ``, false},
+		{`{"servers":["https://8.8.8.8/dns-query",` + strings.Replace(fake, `"finalQuery"`, `"queryStrategy":"UseIPv4","finalQuery"`, 1) + `]}`, four, false},
+		{`{"servers":["https://8.8.8.8/dns-query",` + fake + `]}`, four, true},
+		{`{"servers":["https://8.8.8.8/dns-query",` + fake + `],"queryStrategy":"UseIPv4","enableParallelQuery":true}`, four, true},
+		{`{"servers":[{"address":"https://8.8.8.8/dns-query","finalQuery":true},` + fake + `],"queryStrategy":"UseIPv4"}`, four, true},
+		{`{"servers":["https://8.8.8.8/dns-query",` + fake + `],"queryStrategy":"UseIPv4"}`, `[{"ipPool":"not a pool"}]`, true},
+	} {
+		if got := final(c.dns, c.pools); got != c.final {
+			t.Errorf("%s with %s: final %v, want %v", c.dns, c.pools, got, c.final)
+		}
+	}
 }
 
 func TestBuildTunGivesTheResolverAddressToTheNameHandlerAndRefusesTheRest(t *testing.T) {
@@ -345,11 +492,11 @@ func TestLocalAddressesAreNotSniffed(t *testing.T) {
 
 func TestWithoutIPv6TheNameHandlerAnswersAAAAEmptyNotRefused(t *testing.T) {
 	tun := Options{Mode: ModeTun, Tun: Tun{Name: "spofy0", Resolver: []string{"172.19.0.2"}}}
-	types := func(block string, off bool) string {
+	rules := func(settings string, off bool) string {
 		t.Helper()
 		o := tun
 		o.Tweaks.NoIPv6 = off
-		b, err := Build(json.RawMessage(`{"outbounds":[{"tag":"proxy","protocol":"vless"},{"tag":"dns-out","protocol":"dns","settings":{"nonIPQuery":"reject"`+block+`}}],"dns":{"servers":["1.1.1.1"]}}`), o)
+		b, err := Build(json.RawMessage(`{"outbounds":[{"tag":"proxy","protocol":"vless"},{"tag":"dns-out","protocol":"dns","settings":`+settings+`}],"dns":{"servers":["1.1.1.1"]}}`), o)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -364,27 +511,28 @@ func TestWithoutIPv6TheNameHandlerAnswersAAAAEmptyNotRefused(t *testing.T) {
 		}
 		for _, ob := range c.Outbounds {
 			if ob.Protocol == "dns" {
-				if string(ob.Settings["nonIPQuery"]) != `"reject"` {
-					t.Fatalf("the rest of the handler is kept: %s", ob.Settings)
-				}
-				return string(ob.Settings["blockTypes"])
+				return string(ob.Settings["rules"])
 			}
 		}
 		t.Fatal("no name handler")
 		return ""
 	}
+	tail := `{"action":"hijack","qType":"1,28"},{"action":"return","rCode":5}]`
 	for _, c := range []struct {
-		block string
-		off   bool
-		want  string
+		settings string
+		off      bool
+		want     string
 	}{
-		{`,"blockTypes":[28]`, true, ""},
-		{`,"blockTypes":[28,65]`, true, "[65]"},
-		{`,"blockTypes":[28]`, false, "[28]"},
-		{``, true, ""},
+		{`{"nonIPQuery":"reject","blockTypes":[28]}`, true, `[` + tail},
+		{`{"nonIPQuery":"reject","blockTypes":[28,65]}`, true, `[{"action":"return","qType":"65","rCode":5},` + tail},
+		{`{"nonIPQuery":"reject","blockTypes":[28]}`, false, `[{"action":"return","qType":"28","rCode":5},` + tail},
+		{`{"nonIPQuery":"reject"}`, true, `[` + tail},
+		{`{"rules":[{"action":"drop","qType":"1-100"},{"action":"return","qType":28},{"action":"hijack","qType":"28"},{"action":"return"}]}`, true,
+			`[{"action":"drop","qType":"1-27,29-100"},{"action":"hijack","qType":"28"},{"action":"return"}]`},
+		{`{"rules":[{"action":"return","qType":"env:TYPES"}]}`, true, `[{"action":"return","qType":"env:TYPES"}]`},
 	} {
-		if got := types(c.block, c.off); got != c.want {
-			t.Errorf("%s, switched off %v: blockTypes %q, want %q", c.block, c.off, got, c.want)
+		if got := rules(c.settings, c.off); got != c.want {
+			t.Errorf("%s, switched off %v:\n got %s\nwant %s", c.settings, c.off, got, c.want)
 		}
 	}
 }
@@ -416,16 +564,21 @@ func TestTweaksChangeOnlyWhatTheyName(t *testing.T) {
 		Outbounds []struct {
 			Tag      string `json:"tag"`
 			Protocol string `json:"protocol"`
-			Settings struct {
-				Fragment *struct {
-					Packets string `json:"packets"`
-					Split   string `json:"maxSplit"`
-				} `json:"fragment"`
-			} `json:"settings"`
-			Stream struct {
+			Stream   struct {
 				Sockopt struct {
 					Dialer string `json:"dialerProxy"`
 				} `json:"sockopt"`
+				Mask struct {
+					TCP []struct {
+						Type     string `json:"type"`
+						Settings struct {
+							Packets string `json:"packets"`
+							Length  string `json:"length"`
+							Delay   string `json:"delay"`
+							Split   string `json:"maxSplit"`
+						} `json:"settings"`
+					} `json:"tcp"`
+				} `json:"finalmask"`
 			} `json:"streamSettings"`
 		} `json:"outbounds"`
 		Routing struct {
@@ -456,7 +609,10 @@ func TestTweaksChangeOnlyWhatTheyName(t *testing.T) {
 	f := read(o)
 	cut := false
 	for _, out := range f.Outbounds {
-		cut = cut || (out.Tag == TagFragment && out.Protocol == "freedom" && out.Settings.Fragment != nil && out.Settings.Fragment.Packets == "1-1" && out.Settings.Fragment.Split == "2-2")
+		if m := out.Stream.Mask.TCP; out.Tag == TagFragment && out.Protocol == "freedom" && len(m) == 1 && m[0].Type == "fragment" {
+			s := m[0].Settings
+			cut = s.Packets == "1-1" && s.Length == "128-137" && s.Delay == "0-0" && s.Split == "2-2"
+		}
 	}
 	if f.Outbounds[0].Stream.Sockopt.Dialer != TagFragment || f.Outbounds[1].Stream.Sockopt.Dialer != "" || !cut {
 		t.Fatalf("fragment: %+v", f.Outbounds)
