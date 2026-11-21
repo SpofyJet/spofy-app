@@ -3,9 +3,11 @@ package main
 import (
 	"crypto/ed25519"
 	"encoding/base64"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/SpofyJet/spofy-app/core/internal/app"
@@ -29,20 +31,31 @@ func buildNumber() int {
 	return n
 }
 
+func publicKey(text string) ed25519.PublicKey {
+	if b, err := base64.StdEncoding.DecodeString(text); err == nil && len(b) == ed25519.PublicKeySize {
+		return ed25519.PublicKey(b)
+	}
+	return nil
+}
+
 func publicKeys() []ed25519.PublicKey {
 	var keys []ed25519.PublicKey
 	for _, k := range updateKeys {
-		if b, err := base64.StdEncoding.DecodeString(k); err == nil && len(b) == ed25519.PublicKeySize {
-			keys = append(keys, ed25519.PublicKey(b))
+		if key := publicKey(k); key != nil {
+			keys = append(keys, key)
 		}
 	}
 	return keys
 }
 
 func updates(folder string) app.Updates {
+	sources, keys := updateSources, publicKeys()
+	if source, key := os.Getenv("SPOFY_UPDATE_SOURCE"), publicKey(os.Getenv("SPOFY_UPDATE_KEY")); strings.HasPrefix(source, "https://") && key != nil {
+		sources, keys = []string{source}, []ed25519.PublicKey{key}
+	}
 	return app.Updates{
-		Sources:  updateSources,
-		Keys:     publicKeys(),
+		Sources:  sources,
+		Keys:     keys,
 		Platform: update.Platform(runtime.GOOS, runtime.GOARCH),
 		Dir:      filepath.Join(folder, "updates"),
 		First:    5 * time.Second,

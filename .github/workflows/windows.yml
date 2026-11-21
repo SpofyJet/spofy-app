@@ -63,6 +63,7 @@ jobs:
           python ../tools/windows/resources.py cmd/spofy-setup "Spofy Setup" "$version" ../app/windows/runner/resources/app_icon.ico cmd/spofy-setup/setup.manifest
           CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -H windowsgui -X main.version=$version" -o ../dist/spofy-setup.exe ./cmd/spofy-setup
           CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o ../dist/spofy-pack.exe ./cmd/spofy-pack
+          CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o ../dist/spofy-release.exe ./cmd/spofy-release
           ls -l ../dist/*.exe
       - name: flutter
         run: |
@@ -100,6 +101,7 @@ jobs:
             spofy-app/dist/shots
             spofy-app/dist/spofy-setup.exe
             spofy-app/dist/spofy-pack.exe
+            spofy-app/dist/spofy-release.exe
             spofy-app/app/build/windows/x64/runner/Release
           retention-days: 7
   installer:
@@ -124,7 +126,7 @@ jobs:
           bundle=../built/app/build/windows/x64/runner/Release
           cp "$bundle/spofy-core.exe" dist/stand/
           version="$(sed -n 's/^version: \([0-9.]*\).*/\1/p' app/pubspec.yaml).$GITHUB_RUN_NUMBER"
-          python tools/windows/installer.py dist/stand/spofy-core.exe ../built/dist/spofy-pack.exe ../built/dist/spofy-setup.exe "$bundle" dist/installer "$version"
+          python tools/windows/installer.py dist/stand/spofy-core.exe ../built/dist/spofy-pack.exe ../built/dist/spofy-setup.exe "$bundle" dist/installer "$version" ../built/dist/spofy-release.exe
       - if: always()
         uses: actions/upload-artifact@v7
         with:
