@@ -22,91 +22,179 @@ func block(t *testing.T, src, head string) string {
 	return rest[:strings.Index(rest, "\n  };")]
 }
 
-var entry = regexp.MustCompile(`(?m)^\s+((?:'\w+'(?: \|\| )?)+|VpnState\.\w+|_) =>\s+(\w+|'[^'$]*'),?$`)
+const said = `_t\(\s*'([^'$]*)',\s*'([^'$]*)',?\s*\)`
 
-func pairs(text string) map[string]string {
+var entry = regexp.MustCompile(`(?m)^\s+((?:'\w+'(?:\s*\|\|\s*)?)+|VpnState\.\w+|_) =>\s+(\w+|` + said + `),?$`)
+
+type window struct {
+	words map[string][2]string
+}
+
+func (w window) text(t *testing.T, l Lang, m []string) string {
+	t.Helper()
+	if m[3] != "" || m[4] != "" {
+		return m[3+int(l)]
+	}
+	v, ok := w.words[m[2]]
+	if !ok {
+		t.Fatalf("strings.dart has no text %s", m[2])
+	}
+	return v[l]
+}
+
+func (w window) pairs(t *testing.T, l Lang, text string) map[string]string {
+	t.Helper()
 	out := map[string]string{}
 	for _, m := range entry.FindAllStringSubmatch(text, -1) {
 		for _, key := range regexp.MustCompile(`\w+`).FindAllString(m[1], -1) {
 			if key != "VpnState" {
-				out[key] = m[2]
+				out[key] = w.text(t, l, m)
 			}
 		}
 	}
 	return out
 }
 
-func TestTextMatchesTheWindow(t *testing.T) {
+func readWindow(t *testing.T) (window, string) {
+	t.Helper()
 	raw, err := os.ReadFile(dart)
 	if err != nil {
 		t.Fatal(err)
 	}
 	src := string(raw)
-	consts := map[string]string{}
-	for _, m := range regexp.MustCompile(`static const (\w+) =\s+'([^']*)';`).FindAllStringSubmatch(src, -1) {
-		consts[m[1]] = m[2]
+	w := window{words: map[string][2]string{}}
+	for _, m := range regexp.MustCompile(`static const (\w+) = '([^']*)';`).FindAllStringSubmatch(src, -1) {
+		w.words[m[1]] = [2]string{m[2], m[2]}
 	}
-	text := func(v string) string {
-		if strings.HasPrefix(v, "'") {
-			return strings.Trim(v, "'")
-		}
-		c, ok := consts[v]
-		if !ok {
-			t.Fatalf("strings.dart has no constant %s", v)
-		}
-		return c
+	for _, m := range regexp.MustCompile(`static String get (\w+) =>\s+`+said+`;`).FindAllStringSubmatch(src, -1) {
+		w.words[m[1]] = [2]string{m[2], m[3]}
 	}
-	same := func(what, got, want string) {
-		t.Helper()
-		if got != want {
-			t.Errorf("%s: the tray says %q, the window says %q", what, got, want)
-		}
-	}
-	for name, got := range map[string]string{
-		"app": textApp, "connect": textConnect, "disconnect": textDisconnect, "stop": textStop,
-		"addSubscription": textAddSubscription, "renew": textRenew, "manage": textManage, "coreProtocol": textStale,
-	} {
-		same(name, got, consts[name])
-	}
-	window := pairs(block(t, src, "static String title(VpnState state)"))
-	if len(window) != len(titles) {
-		t.Errorf("the window names %d states, the tray %d", len(window), len(titles))
-	}
-	for state, v := range window {
-		same("title "+state, Title(state), text(v))
-	}
-	same("hint stalled", Hint("stalled"), text(pairs(block(t, src, "static String hint("))["stalled"]))
-	reasonBlock := block(t, src, "static String reason(String code)")
-	if !strings.Contains(reasonBlock, "_ => 'Ошибка: $code'") || !strings.Contains(reasonBlock, "'' => ''") {
-		t.Error("the window's fallback reasons changed")
-	}
-	window = pairs(reasonBlock)
-	if read, cases := len(entry.FindAllString(reasonBlock, -1)), strings.Count(reasonBlock, "=>")-3; read != cases {
-		t.Errorf("the check reads %d of the window's %d reasons", read, cases)
-	}
-	if len(window) != len(reasons) {
-		t.Errorf("the window explains %d codes, the tray %d", len(window), len(reasons))
-	}
-	for code, v := range window {
-		same("reason "+code, Reason(code), text(v))
-	}
-	same("reason of an unknown code", Reason("teleport"), "Ошибка: teleport")
-	same("reason of no code", Reason(""), "")
-	for _, f := range []struct {
-		head string
-		fn   func(string) string
-	}{{"static String stopTitle(", StopTitle}, {"static String stopAction(", StopAction}} {
-		window = pairs(block(t, src, f.head))
-		if len(window) != 4 {
-			t.Errorf("%s: %d branches in the window", f.head, len(window))
-		}
-		for stop, v := range window {
-			key := stop
-			if stop == "_" {
-				key = "paused"
+	return w, src
+}
+
+func TestTextMatchesTheWindow(t *testing.T) {
+	w, src := readWindow(t)
+	for _, l := range []Lang{Ru, En} {
+		same := func(what, got, want string) {
+			t.Helper()
+			if got != want {
+				t.Errorf("%d %s: the tray says %q, the window says %q", l, what, got, want)
 			}
-			same(f.head+stop, f.fn(key), text(v))
 		}
+		words := texts[l]
+		for name, got := range map[string]string{
+			"connect": words.connect, "disconnect": words.disconnect, "stop": words.stop,
+			"addSubscription": words.addSubscription, "renew": words.renew, "manage": words.manage, "coreProtocol": words.stale,
+		} {
+			same(name, got, w.words[name][l])
+		}
+		same("app", App, w.words["app"][l])
+		titles := w.pairs(t, l, block(t, src, "static String title(VpnState state)"))
+		if len(titles) != len(words.titles) {
+			t.Errorf("the window names %d states, the tray %d", len(titles), len(words.titles))
+		}
+		for state, v := range titles {
+			same("title "+state, l.Title(state), v)
+		}
+		same("hint stalled", l.Hint("stalled"), w.pairs(t, l, block(t, src, "static String hint("))["stalled"])
+		reasonBlock := block(t, src, "static String reason(String code)")
+		if !strings.Contains(reasonBlock, "_ => _t('Ошибка: $code', 'Error: $code')") || !strings.Contains(reasonBlock, "'' => ''") {
+			t.Error("the window's fallback reasons changed")
+		}
+		reasons := w.pairs(t, l, reasonBlock)
+		if read, cases := len(entry.FindAllString(reasonBlock, -1)), strings.Count(reasonBlock, "=>")-3; read != cases {
+			t.Errorf("the check reads %d of the window's %d reasons", read, cases)
+		}
+		if len(reasons) != len(words.reasons) {
+			t.Errorf("the window explains %d codes, the tray %d", len(reasons), len(words.reasons))
+		}
+		for code, v := range reasons {
+			same("reason "+code, l.Reason(code), v)
+		}
+		same("reason of an unknown code", l.Reason("teleport"), [...]string{"Ошибка: teleport", "Error: teleport"}[l])
+		same("reason of no code", l.Reason(""), "")
+		for _, f := range []struct {
+			head string
+			fn   func(string) string
+		}{{"static String stopTitle(", l.StopTitle}, {"static String stopAction(", l.StopAction}} {
+			stops := w.pairs(t, l, block(t, src, f.head))
+			if len(stops) != 4 {
+				t.Errorf("%s: %d branches in the window", f.head, len(stops))
+			}
+			for stop, v := range stops {
+				key := stop
+				if stop == "_" {
+					key = "paused"
+				}
+				same(f.head+stop, f.fn(key), v)
+			}
+		}
+	}
+	family := regexp.MustCompile(`const _russian = \{([^}]*)\};`).FindStringSubmatch(src)
+	if family == nil {
+		t.Fatal("strings.dart has no list of languages shown in Russian")
+	}
+	if got := strings.Join(regexp.MustCompile(`\w+`).FindAllString(family[1], -1), " "); got != strings.Join(russian, " ") {
+		t.Errorf("the window shows Russian for %s, the tray for %v", got, russian)
+	}
+}
+
+func TestTheLanguageComesFromTheSettingThenTheSystem(t *testing.T) {
+	for _, c := range []struct {
+		setting string
+		system  []string
+		want    Lang
+	}{
+		{"", []string{"ru-RU"}, Ru},
+		{"", []string{"uk-UA", "en-US"}, Ru},
+		{"", []string{"be_BY"}, Ru},
+		{"", []string{"KK-kz"}, Ru},
+		{"", []string{"de-DE", "ru-RU"}, Ru},
+		{"", []string{"de-DE", "en-GB", "ru-RU"}, En},
+		{"", []string{"fr-FR"}, En},
+		{"", nil, En},
+		{"ru", []string{"en-US"}, Ru},
+		{"en", []string{"ru-RU"}, En},
+		{"de", []string{"ru-RU"}, Ru},
+	} {
+		if got := Pick(c.setting, c.system); got != c.want {
+			t.Errorf("%q with %v: %d, want %d", c.setting, c.system, got, c.want)
+		}
+	}
+}
+
+func TestTheTraySpeaksTheLanguageOfTheWindow(t *testing.T) {
+	m := &Model{System: []string{"de-DE", "en-GB"}}
+	if v := m.View(); v.Status != "The Spofy service isn’t responding" || v.Open != "Open Spofy" || v.Quit.Label != "Quit" {
+		t.Errorf("before the service answers: %+v", v)
+	}
+	m.Link(1)
+	feed(t, m, strings.Replace(hello, `"settings":{}`, `"settings":{"language":"ru","theme":"light"}`, 1))
+	if v := m.View(); v.Status != "VPN выключен" || v.Toggle.Label != "Включить VPN" || v.Open != "Открыть Spofy" {
+		t.Errorf("the chosen language was not taken from the snapshot: %+v", v)
+	}
+	if r := feed(t, m, `{"ev":"settings","settings":{"language":"ru","theme":"dark"}}`)[0]; r.Changed {
+		t.Error("another setting redrew the menu")
+	}
+	if r := feed(t, m, `{"ev":"settings","settings":{"language":"en"}}`)[0]; !r.Changed {
+		t.Error("a new language did not redraw the menu")
+	}
+	if v := m.View(); v.Status != "VPN is off" || v.Toggle.Label != "Turn VPN on" || v.Tip != "Spofy\nVPN is off" {
+		t.Errorf("after switching to English: %+v", v)
+	}
+	m.Ask(2, Connect)
+	if r := feed(t, m, `{"re":2,"ok":false,"code":"sub_ended","error":"x"}`)[0]; r.Note == nil || *r.Note != (Note{Title: "Not connected", Text: "Subscription has ended"}) {
+		t.Errorf("the note is not in English: %+v", r.Note)
+	}
+	m.Lost()
+	m.Link(3)
+	if v := m.View(); v.Status != "The Spofy service isn’t responding" {
+		t.Errorf("the language was forgotten with the service: %+v", v)
+	}
+	m.System = []string{"uk-UA"}
+	feed(t, m, strings.Replace(hello, `"re":1`, `"re":3`, 1))
+	if v := m.View(); v.Status != "VPN выключен" {
+		t.Errorf("without a setting the system language must win: %+v", v)
 	}
 }
 
@@ -130,8 +218,12 @@ func conn(state, server, code string) string {
 
 const hello = `{"re":1,"ok":true,"snapshot":{"version":"0.1.0","protocol":1,"connection":{"state":"idle","choice":"auto","server":"","delayMs":0,"code":"","error":""},"subscription":{"title":"t","upload":0,"download":0,"total":0,"expire":0,"supportUrl":"","webPageUrl":"","announce":"","fetchedAt":0,"updateEvery":3600,"stop":"","notes":[]},"servers":[{"id":"nl","name":"🇳🇱 (NL)","label":"(NL)","country":"NL","protocol":"vless","tier":0,"delayMs":0,"measuredAt":0},{"id":"x","name":"x","label":"  ","country":"","protocol":"vless","tier":0,"delayMs":0,"measuredAt":0}],"settings":{}}}`
 
+func fresh() *Model {
+	return &Model{System: []string{"ru-RU"}}
+}
+
 func linked(t *testing.T) *Model {
-	m := &Model{}
+	m := fresh()
 	m.Link(1)
 	feed(t, m, hello)
 	if !m.Linked() {
@@ -145,7 +237,7 @@ func TestTheRecordedSessionDrivesTheTray(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := &Model{}
+	m := fresh()
 	m.Link(1)
 	var notes []Note
 	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
@@ -235,7 +327,7 @@ func TestTheStatusNamesTheServer(t *testing.T) {
 }
 
 func TestOnlyALiveFailureIsAnnouncedOnce(t *testing.T) {
-	m := &Model{}
+	m := fresh()
 	m.Link(1)
 	failed := strings.Replace(hello, `"state":"idle","choice":"auto","server":"","delayMs":0,"code":""`, `"state":"failed","choice":"auto","server":"","delayMs":0,"code":"no_server"`, 1)
 	if r := feed(t, m, failed)[0]; r.Note != nil {
@@ -299,7 +391,7 @@ func TestStalledNoteOnlyWhileStalled(t *testing.T) {
 }
 
 func TestWithoutTheServiceTheMenuWaits(t *testing.T) {
-	m := &Model{}
+	m := fresh()
 	v := m.View()
 	if v.Status != "Служба Spofy не отвечает" || !v.Toggle.Grey || v.Toggle.Action != Nothing || v.Quit.Action != Nothing || v.Icon != Off {
 		t.Errorf("view = %+v", v)

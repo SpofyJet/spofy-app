@@ -267,7 +267,7 @@ class Channel:
         while True:
             line = self.f.readline()
             if not line:
-                raise Abort()
+                need("the core answers %s before closing its channel" % op, False)
             m = json.loads(line)
             if m.get("re") == self.n:
                 m["ms"] = int((time.time() - began) * 1000)
@@ -357,12 +357,28 @@ def tap(*labels):
     return ""
 
 
+def reach(limit=40):
+    end = time.time() + limit
+    while time.time() < end:
+        try:
+            ch = Channel(9099)
+            ch.s.sendall(b'{"id":999,"op":"hello"}\n')
+            for line in ch.f:
+                if json.loads(line).get("re") == 999:
+                    return ch
+            ch.s.close()
+        except (OSError, ValueError):
+            pass
+        time.sleep(1)
+    return None
+
+
 def alarmed():
-    text = shell("dumpsys alarm", limit=30)
-    m = re.search(r"Pending alarm(s| batches): \d+", text)
-    text = text[m.start():] if m else ""
-    ends = [i for i in (text.find(w) for w in ("Past-due", "Pending user blocked", "App Alarm history", "Top Alarms", "Alarm Stats")) if i > 0]
-    return "app.spofy.REMIND" in (text[:min(ends)] if ends else text)
+    return re.search(r"tag=\*w?alarm\*:app\.spofy\.REMIND", shell("dumpsys alarm", limit=30)) is not None
+
+
+def alarms():
+    return " | ".join(l.strip() for l in shell("dumpsys alarm", limit=30).splitlines() if "app.spofy" in l)[:600]
 
 
 def front():
@@ -483,6 +499,7 @@ def scenario():
     hello = ui.call("hello")
     need("the core answers on its socket", hello.get("ok") and hello["snapshot"]["servers"] == [], str(hello)[:300])
     print("core version %s" % hello["snapshot"].get("version"), flush=True)
+    need("the app is set to Russian, the language these checks read", ui.call("set", key="language", value="ru")["ok"])
     time.sleep(2)
     screen("1-start")
     kinds = list(processes().values())
@@ -499,7 +516,7 @@ def scenario():
     s = ui.call("subscribe", url="https://%s:8443/sub/EMULATORTOKEN" % GATE)
     need("subscribe", s["ok"], "ms=%d %s %s" % (s["ms"], s.get("code"), s.get("error", "")[:300]))
     planned = until(alarmed, 20)
-    expect("the end of the subscription is reminded: an alarm waits for it", bool(planned))
+    expect("the end of the subscription is reminded: an alarm waits for it", bool(planned), "" if planned else alarms())
     ui.call("set", key="remind", value=0)
     off = until(lambda: not alarmed(), 20)
     expect("with reminders switched off no alarm waits", bool(off))
@@ -545,6 +562,11 @@ def scenario():
     expect("traffic is counted", t["traffic"]["down"] > 0 and t["traffic"]["up"] > 0, str(t["traffic"]))
     service = shell("dumpsys activity services %s/.CoreService" % PACKAGE)
     expect("the service is in the foreground with a notification", "isForeground=true" in service, re.sub(r"\s+", " ", service)[:200])
+    ui.call("set", key="language", value="en")
+    english = until(lambda: "VPN is on" in shell("dumpsys notification --noredact"), 10)
+    ui.call("set", key="language", value="ru")
+    russian = until(lambda: "VPN работает" in shell("dumpsys notification --noredact"), 10)
+    expect("the notification speaks the language chosen in the app and follows a change", bool(english) and bool(russian))
     time.sleep(1)
     screen("2-connected")
     shell("cmd statusbar expand-notifications")
@@ -822,7 +844,9 @@ def scenario():
     last.s.close()
 
     if public:
-        last = Channel(9099)
+        shell("am start -W -n %s/.MainActivity" % PACKAGE, limit=120)
+        last = reach()
+        need("the core is up before the update", last is not None)
         c = last.call("connect", server="auto")
         need("connected before the update", c["ok"] and bool(until(lambda: tunnel() != "" and through(), 30, 0.2)), str(c)[:200])
         snap = last.call("hello")["snapshot"]
@@ -858,7 +882,7 @@ def scenario():
         confirmed = confirm_install()
         replaced = until(lambda: version_code() == before + 1, 120)
         back = until(lambda: tunnel() != "" and through(), 60, 0.2)
-        then = Channel(9099) if until(lambda: "core.sock" in shell("ls %s/files" % DATA), 30) else None
+        then = reach()
         snap = then.call("hello")["snapshot"] if then else {}
         again = then.call("checkUpdate") if then else {}
         expect("the update goes through the app: downloaded and checked, the system asks once, the new build runs and the VPN comes back by itself",

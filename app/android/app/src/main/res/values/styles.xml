@@ -1,15 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <color name="ink">#070D1A</color>
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <color name="back">#F3F6FB</color>
     <color name="brand">#2563EB</color>
-    <style name="LaunchTheme" parent="@android:style/Theme.Black.NoTitleBar">
+    <style name="LaunchTheme" parent="@android:style/Theme.Light.NoTitleBar">
         <item name="android:windowBackground">@drawable/launch_background</item>
-        <item name="android:statusBarColor">@color/ink</item>
-        <item name="android:navigationBarColor">@color/ink</item>
+        <item name="android:statusBarColor">@color/back</item>
+        <item name="android:navigationBarColor">@color/back</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar" tools:targetApi="27">true</item>
     </style>
-    <style name="NormalTheme" parent="@android:style/Theme.Black.NoTitleBar">
-        <item name="android:windowBackground">@color/ink</item>
-        <item name="android:statusBarColor">@color/ink</item>
-        <item name="android:navigationBarColor">@color/ink</item>
+    <style name="NormalTheme" parent="@android:style/Theme.Light.NoTitleBar">
+        <item name="android:windowBackground">@color/back</item>
+        <item name="android:statusBarColor">@color/back</item>
+        <item name="android:navigationBarColor">@color/back</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar" tools:targetApi="27">true</item>
     </style>
 </resources>

@@ -64,7 +64,7 @@ class QuickTile : TileService() {
         tile.state = if (on()) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
         tile.label = getString(R.string.app)
         if (Build.VERSION.SDK_INT >= 29) {
-            tile.subtitle = getString(
+            tile.subtitle = Language.words(this).getString(
                 when (CoreService.now) {
                     "connected" -> R.string.tile_on
                     "connecting", "measuring", "switching" -> R.string.tile_starting

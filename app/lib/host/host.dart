@@ -24,6 +24,8 @@ abstract interface class Host {
 
   Future<bool> Function(String file)? get install;
 
+  void Function(bool dark, Color background)? get dress;
+
   void links(void Function(String link) hear);
 }
 
@@ -65,6 +67,9 @@ class AndroidHost implements Host {
       return false;
     }
   };
+
+  @override
+  void Function(bool dark, Color background)? get dress => null;
 
   @override
   void links(void Function(String link) hear) {
@@ -173,6 +178,9 @@ class DesktopHost implements Host {
 
   @override
   Future<bool> Function(String file)? get install => null;
+
+  @override
+  void Function(bool dark, Color background)? get dress => null;
 
   @override
   void links(void Function(String link) hear) {}

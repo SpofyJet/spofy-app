@@ -56,6 +56,8 @@ const (
 	KeyLAN          = "lan"
 	KeyLogLevel     = "logLevel"
 	KeyRemind       = "remind"
+	KeyTheme        = "theme"
+	KeyLanguage     = "language"
 )
 
 var Resolvers = map[string][]string{
@@ -76,6 +78,8 @@ var checks = map[string]func(json.RawMessage) bool{
 	KeyProbeURL:     validURL,
 	KeyDNS:          validDNS,
 	KeyRemind:       validRemind,
+	KeyTheme:        oneOf("light", "dark"),
+	KeyLanguage:     oneOf("ru", "en"),
 }
 
 func validRemind(v json.RawMessage) bool {
@@ -84,6 +88,13 @@ func validRemind(v json.RawMessage) bool {
 		return true
 	}
 	return false
+}
+
+func oneOf(allowed ...string) func(json.RawMessage) bool {
+	return func(v json.RawMessage) bool {
+		t, ok := text(v)
+		return ok && slices.Contains(allowed, t)
+	}
 }
 
 func validLevel(v json.RawMessage) bool {

@@ -164,7 +164,7 @@ class _ChoiceScreenState extends State<ChoiceScreen> {
                             ],
                           ),
                         ),
-                        if (_refused) ...[const SizedBox(height: 8), const Notice(S.badValue)],
+                        if (_refused) ...[const SizedBox(height: 8), Notice(S.badValue)],
                         const SizedBox(height: 8),
                         PrimaryButton(label: S.save, busy: _saving, onTap: _save),
                       ],

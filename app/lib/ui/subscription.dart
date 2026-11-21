@@ -196,7 +196,7 @@ class _DetailsState extends State<_Details> {
       padding: const EdgeInsets.fromLTRB(Ink.gutter, 4, Ink.gutter, 16),
       children: [
         if (all.length > 1) ...[
-          const SectionTitle(S.subscriptions),
+          SectionTitle(S.subscriptions),
           for (final b in all) ...[
             Tile(
               leading: CountryMark(b.links ? '#' : S.briefTitle(b).characters.first.toUpperCase(), active: b.active),
@@ -214,7 +214,7 @@ class _DetailsState extends State<_Details> {
             padding: const EdgeInsets.fromLTRB(4, 0, 4, 4),
             child: Text(S.switchHint, style: Ink.type(12, 400, Ink.faint)),
           ),
-          const SectionTitle(S.chosenSubscription),
+          SectionTitle(S.chosenSubscription),
         ],
         if (offered != null || model.running(Task.subscribe)) ...[
           Panel(

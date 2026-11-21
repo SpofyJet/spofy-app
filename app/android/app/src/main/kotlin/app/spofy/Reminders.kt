@@ -68,7 +68,8 @@ object Reminders {
         if (expire <= 0 || store.getLong(EXPIRE, 0) != expire || store.getInt(DAYS, DEFAULT) <= 0 || key in shown) {
             return
         }
-        val res = context.resources
+        val words = Language.words(context)
+        val res = words.resources
         val left = between(System.currentTimeMillis(), expire * 1000)
         val title = when {
             kind == ENDED -> res.getString(R.string.remind_ended)
@@ -79,16 +80,13 @@ object Reminders {
         }
         val text = res.getString(if (kind == ENDED) R.string.remind_ended_hint else R.string.remind_soon_hint)
         store.edit().putString(SHOWN, (shown + key).takeLast(4).joinToString(",")).apply()
-        post(context, title, text)
+        post(context, words, title, text)
     }
 
-    private fun post(context: Context, title: String, text: String) {
+    private fun post(context: Context, words: Context, title: String, text: String) {
         val manager = context.getSystemService(NotificationManager::class.java)
         val builder = if (Build.VERSION.SDK_INT >= 26) {
-            if (manager.getNotificationChannel(CHANNEL) == null) {
-                val channel = NotificationChannel(CHANNEL, context.getString(R.string.reminders), NotificationManager.IMPORTANCE_DEFAULT)
-                manager.createNotificationChannel(channel)
-            }
+            manager.createNotificationChannel(NotificationChannel(CHANNEL, words.getString(R.string.reminders), NotificationManager.IMPORTANCE_DEFAULT))
             Notification.Builder(context, CHANNEL)
         } else {
             @Suppress("DEPRECATION")

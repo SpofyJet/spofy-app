@@ -173,7 +173,7 @@ class _ServersScreenState extends State<ServersScreen> {
             if (servers.length > 6) SearchField(controller: _query, hint: S.search, clear: S.appsClear),
             if (servers.length > 3)
               Segments<String>(
-                options: const [(sortSpeed, S.sortSpeed), (sortName, S.sortName)],
+                options: [(sortSpeed, S.sortSpeed), (sortName, S.sortName)],
                 value: sort,
                 onChanged: (value) => model.set(serverSortKey, value == sortSpeed ? null : value),
               ),
@@ -340,8 +340,8 @@ class ServerTile extends StatelessWidget {
                   ),
                 ),
                 if (selected)
-                  const Padding(
-                    padding: EdgeInsets.only(left: 10),
+                  Padding(
+                    padding: const EdgeInsets.only(left: 10),
                     child: GlyphIcon(Glyph.check, color: Ink.accent, size: 20),
                   ),
               ],
@@ -398,7 +398,7 @@ class PlaceTile extends StatelessWidget {
                               ),
                             ] else if (place.silent) ...[
                               const TextSpan(text: ' · '),
-                              const TextSpan(
+                              TextSpan(
                                 text: S.silent,
                                 style: TextStyle(color: Ink.warning),
                               ),
@@ -415,7 +415,7 @@ class PlaceTile extends StatelessWidget {
                 AnimatedRotation(
                   turns: open ? 0.25 : 0,
                   duration: const Duration(milliseconds: 160),
-                  child: const GlyphIcon(Glyph.forward, color: Ink.faint, size: 20),
+                  child: GlyphIcon(Glyph.forward, color: Ink.faint, size: 20),
                 ),
               ],
             ),

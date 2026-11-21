@@ -40,6 +40,7 @@ Future<void> page(
   tester.view.devicePixelRatio = ratio;
   tester.view.physicalSize = size * ratio;
   addTearDown(tester.view.reset);
+  system(tester);
   final keys = [for (final _ in frames) GlobalKey()];
   await tester.pumpWidget(
     Directionality(
