@@ -28,6 +28,7 @@ class MainActivity : FlutterActivity() {
     private var asking: MethodChannel.Result? = null
     private var channel: MethodChannel? = null
     private var offered: String? = null
+    private var waiting: Pair<String, MethodChannel.Result>? = null
     private var binding = false
     private var bound = false
     private var remote: IBinder? = null
@@ -45,6 +46,17 @@ class MainActivity : FlutterActivity() {
             bound = false
             remote = null
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        val (path, result) = waiting ?: return
+        waiting = null
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !packageManager.canRequestPackageInstalls()) {
+            result.success(false)
+            return
+        }
+        install(path, result)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -112,11 +124,14 @@ class MainActivity : FlutterActivity() {
             return
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !packageManager.canRequestPackageInstalls()) {
+            waiting?.second?.success(false)
+            waiting = null
             try {
                 startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")))
+                waiting = path to result
             } catch (e: Exception) {
+                result.success(false)
             }
-            result.success(false)
             return
         }
         worker.execute {

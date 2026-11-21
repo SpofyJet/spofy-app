@@ -1,7 +1,10 @@
 package main
 
 import (
+	"crypto/ed25519"
+	"encoding/base64"
 	"runtime"
+	"slices"
 	"testing"
 )
 
@@ -22,5 +25,29 @@ func TestTheReleaseKeysAndBuildAreReadable(t *testing.T) {
 	u := updates(t.TempDir())
 	if len(u.Sources) == 0 || u.Every <= 0 || (runtime.GOOS == "linux" && u.Platform != "") {
 		t.Fatalf("%+v", u)
+	}
+}
+
+func TestAStandGivesItsOwnUpdateSourceAndKeyOrNothingChanges(t *testing.T) {
+	public, _, _ := ed25519.GenerateKey(nil)
+	key := base64.StdEncoding.EncodeToString(public)
+	for _, c := range []struct {
+		source, key string
+		own         bool
+	}{
+		{"https://10.0.2.2:8443/update.json", key, true},
+		{"http://10.0.2.2/update.json", key, false},
+		{"https://10.0.2.2:8443/update.json", "bm90IGEga2V5", false},
+		{"", key, false},
+		{"https://10.0.2.2:8443/update.json", "", false},
+	} {
+		t.Setenv("SPOFY_UPDATE_SOURCE", c.source)
+		t.Setenv("SPOFY_UPDATE_KEY", c.key)
+		u := updates(t.TempDir())
+		own := slices.Equal(u.Sources, []string{c.source}) && len(u.Keys) == 1 && u.Keys[0].Equal(public)
+		builtin := slices.Equal(u.Sources, updateSources) && len(u.Keys) == len(updateKeys)
+		if own != c.own || own == builtin {
+			t.Fatalf("%q %q: sources %v, %d keys", c.source, c.key, u.Sources, len(u.Keys))
+		}
 	}
 }

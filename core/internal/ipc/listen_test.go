@@ -6,8 +6,10 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -123,29 +125,32 @@ func TestClientThatDoesNotReadIsDropped(t *testing.T) {
 	live.reply(1)
 	time.Sleep(50 * time.Millisecond)
 	value := `"` + strings.Repeat("x", 4000) + `"`
-	began := time.Now()
-	count := 0
+	var read atomic.Int64
 	seen := make(chan int, 1)
 	go func() {
-		n := 0
 		live.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 		for live.sc.Scan() {
-			if strings.Contains(live.sc.Text(), `"ev":"settings"`) {
-				n++
-				if n == 1000 {
-					break
-				}
+			if strings.Contains(live.sc.Text(), `"ev":"settings"`) && read.Add(1) == 1000 {
+				break
 			}
 		}
-		seen <- n
+		seen <- int(read.Load())
 	}()
-	for ; count < 1000; count++ {
+	var busy time.Duration
+	for count := 1; count <= 1000; count++ {
+		began := time.Now()
 		if err := r.app.Set("note", json.RawMessage(value)); err != nil {
 			t.Fatal(err)
 		}
+		busy += time.Since(began)
+		if count%(backlog/2) == 0 {
+			for wait := time.Now().Add(20 * time.Second); read.Load() < int64(count) && time.Now().Before(wait); {
+				time.Sleep(time.Millisecond)
+			}
+		}
 	}
-	if took := time.Since(began); took > 20*time.Second {
-		t.Fatalf("a client that does not read slowed the core down: %v", took)
+	if busy > 20*time.Second {
+		t.Fatalf("a client that does not read slowed the core down: %v", busy)
 	}
 	if n := <-seen; n != 1000 {
 		t.Fatalf("the reading client got %d of 1000 events", n)
@@ -157,5 +162,24 @@ func TestClientThatDoesNotReadIsDropped(t *testing.T) {
 	}
 	if lines >= 1000 || frozen.sc.Err() != nil {
 		t.Fatalf("the client that did not read was not dropped: %d lines, %v", lines, frozen.sc.Err())
+	}
+}
+
+func TestAnEventForAClientThatJustLeftIsDroppedNotACrash(t *testing.T) {
+	dropped := 0
+	q := &queue{lines: make(chan []byte, 1), drop: func() { dropped++ }}
+	if _, err := q.Write([]byte("a")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.Write([]byte("b")); err == nil || dropped != 1 {
+		t.Fatalf("a full queue: err = %v, dropped %d", err, dropped)
+	}
+	q.close()
+	q.close()
+	if _, err := q.Write([]byte("c")); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("a write after the client left: %v", err)
+	}
+	if b := <-q.lines; string(b) != "a" {
+		t.Fatalf("the queue lost what it held: %q", b)
 	}
 }

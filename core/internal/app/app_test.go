@@ -18,6 +18,7 @@ import (
 
 	"github.com/SpofyJet/spofy-app/core/internal/app/apptest"
 	"github.com/SpofyJet/spofy-app/core/internal/engine"
+	"github.com/SpofyJet/spofy-app/core/internal/logbook"
 	"github.com/SpofyJet/spofy-app/core/internal/session"
 	"github.com/SpofyJet/spofy-app/core/internal/store"
 	"github.com/SpofyJet/spofy-app/core/internal/sub"
@@ -636,9 +637,26 @@ func TestMeasure(t *testing.T) {
 	}
 	b.tunnel.Kill("us")
 	b.app.Measure(context.Background())
-	if s := find(b.app.Snapshot().Servers, "us"); s.DelayMs != 0 || s.MeasuredAt != 0 {
-		t.Fatalf("a silent server kept its old delay: %+v", s)
+	if s := find(b.app.Snapshot().Servers, "us"); s.DelayMs != 0 || s.MeasuredAt != b.clock.Now().Unix() {
+		t.Fatalf("a silent server is not told apart from one never checked: %+v", s)
 	}
+	b.tunnel.Kill("de", "nl", "fl", "pl", "by")
+	b.app.Measure(context.Background())
+	if s := find(b.app.Snapshot().Servers, "us"); s.DelayMs != 120 {
+		t.Fatalf("a server back again is still marked silent: %+v", s)
+	}
+	every := []string{}
+	for _, s := range b.app.Snapshot().Servers {
+		every = append(every, s.ID)
+	}
+	b.tunnel.Kill(every...)
+	b.app.Measure(context.Background())
+	for _, s := range b.app.Snapshot().Servers {
+		if s.MeasuredAt != 0 {
+			t.Fatalf("with nothing answering the fault is the network, yet a server is marked silent: %+v", s)
+		}
+	}
+	b.tunnel.Kill()
 	if err := b.app.Connect("de"); err != nil {
 		t.Fatal(err)
 	}
@@ -864,19 +882,55 @@ func TestSettings(t *testing.T) {
 	if err := b.app.Set("killSwitch", json.RawMessage(`true`)); err != nil {
 		t.Fatal(err)
 	}
-	if err := b.app.Set("theme", json.RawMessage(`["a.b","c.d"]`)); err != nil {
+	if err := b.app.Set("window", json.RawMessage(`["a.b","c.d"]`)); err != nil {
 		t.Fatal(err)
 	}
 	same(t, b.seen(), []string{EvSettings, EvSettings})
 	b.open(nil)
-	if s := b.app.Snapshot().Settings; string(s["killSwitch"]) != "true" || string(s["theme"]) != `["a.b","c.d"]` {
+	if s := b.app.Snapshot().Settings; string(s["killSwitch"]) != "true" || string(s["window"]) != `["a.b","c.d"]` {
 		t.Fatalf("settings = %v", s)
 	}
-	if err := b.app.Set("theme", json.RawMessage(`null`)); err != nil {
+	if err := b.app.Set("window", json.RawMessage(`null`)); err != nil {
 		t.Fatal(err)
 	}
 	if s := b.app.Snapshot().Settings; len(s) != 1 {
 		t.Fatalf("settings = %v", s)
+	}
+}
+
+func TestThemeAndLanguageTakeOnlyKnownValues(t *testing.T) {
+	b := newBench(t, nil)
+	for key, bads := range map[string][]string{
+		KeyTheme:    {`"system"`, `"Light"`, `""`, `true`, `1`, `["dark"]`, `{"theme":"dark"}`},
+		KeyLanguage: {`"system"`, `"RU"`, `"de"`, `"en-US"`, `""`, `false`, `["ru"]`},
+	} {
+		for _, bad := range bads {
+			if err := b.app.Set(key, json.RawMessage(bad)); code(err) != CodeValue {
+				t.Fatalf("%s = %s: %v", key, bad, err)
+			}
+		}
+	}
+	if s := b.app.Snapshot().Settings; len(s) != 0 {
+		t.Fatalf("a refused value was kept: %s", s)
+	}
+	for key, goods := range map[string][]string{KeyTheme: {`"light"`, `"dark"`}, KeyLanguage: {`"en"`, `"ru"`}} {
+		for _, good := range goods {
+			if err := b.app.Set(key, json.RawMessage(good)); err != nil {
+				t.Fatalf("%s = %s: %v", key, good, err)
+			}
+		}
+	}
+	b.open(nil)
+	if s := b.app.Snapshot().Settings; string(s[KeyTheme]) != `"dark"` || string(s[KeyLanguage]) != `"ru"` {
+		t.Fatalf("settings after restart: %s", s)
+	}
+	for _, key := range []string{KeyTheme, KeyLanguage} {
+		if err := b.app.Set(key, json.RawMessage(`null`)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if s := b.app.Snapshot().Settings; len(s) != 0 {
+		t.Fatalf("null did not bring the default back: %s", s)
 	}
 }
 
@@ -1597,5 +1651,123 @@ func TestTheConnectionKnowsSinceWhenItProtects(t *testing.T) {
 	}
 	if s := b.app.Snapshot().Connection.Since; s != 0 {
 		t.Fatalf("after turning off: %d", s)
+	}
+}
+
+type roadblock struct {
+	shut atomic.Bool
+	next http.RoundTripper
+}
+
+func (r *roadblock) RoundTrip(req *http.Request) (*http.Response, error) {
+	if r.shut.Load() {
+		return nil, errors.New("the way to the subscription server is blocked")
+	}
+	return r.next.RoundTrip(req)
+}
+
+func TestABlockedSubscriptionServerIsReachedThroughTheRunningTunnel(t *testing.T) {
+	road := &roadblock{}
+	b := newBench(t, func(c *Config) {
+		road.next = c.HTTP.Transport
+		c.HTTP = &http.Client{Transport: road, Timeout: 10 * time.Second}
+	})
+	b.subscribed()
+	b.tunnel.Carry(b.panel.Handler())
+	road.shut.Store(true)
+	b.panel.Usage("upload=5; download=7; total=100; expire=1798761600")
+	if _, err := b.app.Refresh(context.Background()); code(err) != CodeUnreachable {
+		t.Fatalf("with no tunnel up: err = %v", err)
+	}
+	if n := len(b.tunnel.Carried()); n != 0 {
+		t.Fatalf("the tunnel was asked while it was down: %d", n)
+	}
+	if err := b.app.Connect("de"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.app.Refresh(context.Background()); err != nil {
+		t.Fatalf("through the tunnel: %v", err)
+	}
+	if s := b.app.Snapshot().Subscription; s.Download != 7 || s.Total != 100 {
+		t.Fatalf("subscription = %+v", s)
+	}
+	if h := b.panel.Last(); h.Get("X-Hwid") != "hw-1" || h.Get("If-None-Match") == "" {
+		t.Fatalf("the carried request lost its headers: %v", h)
+	}
+	if got := b.tunnel.Carried(); len(got) != 1 || got[0] != "proxy" {
+		t.Fatalf("carried through %v", got)
+	}
+	if !slices.ContainsFunc(b.app.Logs(), func(l logbook.Line) bool { return strings.Contains(l.Text, "through the tunnel") }) {
+		t.Fatal("the log does not say the subscription came through the tunnel")
+	}
+	b.panel.Status(http.StatusForbidden)
+	road.shut.Store(false)
+	if _, err := b.app.Refresh(context.Background()); code(err) != CodeStatus || len(b.tunnel.Carried()) != 1 {
+		t.Fatalf("an answer from the server itself must not be carried again: err = %v, carried %d", err, len(b.tunnel.Carried()))
+	}
+}
+
+func TestAMovedSubscriptionKeepsItsPlaceAndANewOneTakesTheNewAddress(t *testing.T) {
+	b := newBench(t, nil)
+	const old = "https://old.example.test/sub/TESTTOKEN0123456789"
+	b.panel.Route("old.example.test", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Host = "sub.example.test"
+		b.panel.Handler().ServeHTTP(w, r)
+	}))
+	if err := b.app.Subscribe(context.Background(), old); err != nil {
+		t.Fatal(err)
+	}
+	before := b.app.cfg.Store.Get()
+	b.panel.Route("old.example.test", http.RedirectHandler(apptest.Address, http.StatusPermanentRedirect))
+	b.clock.Advance(time.Hour)
+	if _, err := b.app.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	after := b.app.cfg.Store.Get()
+	if after.URL != apptest.Address || after.ID != before.ID || len(after.Others) != 0 {
+		t.Fatalf("moved: url %q id %q (was %q), others %d", after.URL, after.ID, before.ID, len(after.Others))
+	}
+	b2 := newBench(t, nil)
+	b2.panel.Route("old.example.test", http.RedirectHandler(apptest.Address, http.StatusMovedPermanently))
+	if err := b2.app.Subscribe(context.Background(), old); err != nil {
+		t.Fatal(err)
+	}
+	if u := b2.app.cfg.Store.Get().URL; u != apptest.Address {
+		t.Fatalf("added at %q", u)
+	}
+	b3 := newBench(t, nil)
+	b3.panel.Route("old.example.test", http.RedirectHandler(apptest.Address, http.StatusFound))
+	if err := b3.app.Subscribe(context.Background(), old); err != nil {
+		t.Fatal(err)
+	}
+	if u := b3.app.cfg.Store.Get().URL; u != old {
+		t.Fatalf("a temporary redirect replaced the address: %q", u)
+	}
+}
+
+func TestTheReminderTakesOnlyTheOfferedDays(t *testing.T) {
+	b := newBench(t, nil)
+	for _, bad := range []string{`2`, `"3"`, `3.0`, `-1`, `30`, `true`} {
+		if err := b.app.Set(KeyRemind, json.RawMessage(bad)); code(err) != CodeValue {
+			t.Fatalf("remind = %s: %v", bad, err)
+		}
+	}
+	for _, good := range []string{`0`, `1`, `3`, `5`, `7`, `null`} {
+		if err := b.app.Set(KeyRemind, json.RawMessage(good)); err != nil {
+			t.Fatalf("remind = %s: %v", good, err)
+		}
+	}
+	if _, kept := b.app.Snapshot().Settings[KeyRemind]; kept {
+		t.Fatal("null did not bring back the default")
+	}
+	for _, bad := range []string{`"2:1798761600"`, `"0:"`, `"0:1798761600 "`, `1`, `""`, `"0:1234567890123"`} {
+		if err := b.app.Set(KeyReminded, json.RawMessage(bad)); code(err) != CodeValue {
+			t.Fatalf("reminded = %s: %v", bad, err)
+		}
+	}
+	for _, good := range []string{`"0:1798761600"`, `"1:1798761600"`, `null`} {
+		if err := b.app.Set(KeyReminded, json.RawMessage(good)); err != nil {
+			t.Fatalf("reminded = %s: %v", good, err)
+		}
 	}
 }

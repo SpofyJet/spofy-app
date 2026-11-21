@@ -102,7 +102,7 @@ class _LogsScreenState extends State<LogsScreen> {
               child: Panel(
                 padding: EdgeInsets.zero,
                 child: lines == null
-                    ? const Center(child: Spinner(size: 28, color: Ink.accent))
+                    ? Center(child: Spinner(size: 28, color: Ink.accent))
                     : lines.isEmpty
                     ? Center(child: Text(S.logsEmpty, style: Ink.note))
                     : ListView.builder(

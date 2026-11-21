@@ -22,6 +22,9 @@ List<Server> ordered(List<Server> servers) {
     if (x.measured != y.measured) {
       return x.measured ? -1 : 1;
     }
+    if (x.silent != y.silent) {
+      return x.silent ? 1 : -1;
+    }
     if (x.measured && x.delayMs != y.delayMs) {
       return x.delayMs.compareTo(y.delayMs);
     }
@@ -49,6 +52,8 @@ class Place {
   }
 
   int get tier => servers.map((s) => s.tier).reduce((a, b) => a < b ? a : b);
+
+  bool get silent => servers.every((s) => s.silent);
 }
 
 String placeName(Server s) {
@@ -87,6 +92,9 @@ List<Place> places(List<Server> servers, {required String sort, String query = '
     final x = a.best, y = b.best;
     if ((x > 0) != (y > 0)) {
       return x > 0 ? -1 : 1;
+    }
+    if (a.silent != b.silent) {
+      return a.silent ? 1 : -1;
     }
     return x != y ? x.compareTo(y) : a.name.compareTo(b.name);
   });
@@ -165,7 +173,7 @@ class _ServersScreenState extends State<ServersScreen> {
             if (servers.length > 6) SearchField(controller: _query, hint: S.search, clear: S.appsClear),
             if (servers.length > 3)
               Segments<String>(
-                options: const [(sortSpeed, S.sortSpeed), (sortName, S.sortName)],
+                options: [(sortSpeed, S.sortSpeed), (sortName, S.sortName)],
                 value: sort,
                 onChanged: (value) => model.set(serverSortKey, value == sortSpeed ? null : value),
               ),
@@ -291,7 +299,7 @@ class ServerTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final via = S.via(server);
-    final delay = S.delay(server.delayMs);
+    final delay = S.answer(server);
     return Pressable(
       label: [title, via, delay].join(', '),
       onTap: onTap,
@@ -326,11 +334,14 @@ class ServerTile extends StatelessWidget {
                 ),
                 Padding(
                   padding: const EdgeInsets.only(left: 12),
-                  child: Text(delay, style: Ink.note.copyWith(color: delayColor(server.delayMs))),
+                  child: Text(
+                    delay,
+                    style: Ink.note.copyWith(color: server.silent ? Ink.warning : delayColor(server.delayMs)),
+                  ),
                 ),
                 if (selected)
-                  const Padding(
-                    padding: EdgeInsets.only(left: 10),
+                  Padding(
+                    padding: const EdgeInsets.only(left: 10),
                     child: GlyphIcon(Glyph.check, color: Ink.accent, size: 20),
                   ),
               ],
@@ -357,7 +368,7 @@ class PlaceTile extends StatelessWidget {
     return Semantics(
       expanded: open,
       child: Pressable(
-        label: [place.name, count, S.best(best)].where((p) => p.isNotEmpty).join(', '),
+        label: [place.name, count, if (best > 0) S.best(best), if (place.silent) S.silent].join(', '),
         onTap: onTap,
         child: Panel(
           color: selected ? Color.alphaBlend(Ink.selected, Ink.surface) : Ink.surface,
@@ -385,6 +396,12 @@ class PlaceTile extends StatelessWidget {
                                 text: S.best(best),
                                 style: TextStyle(color: delayColor(best)),
                               ),
+                            ] else if (place.silent) ...[
+                              const TextSpan(text: ' · '),
+                              TextSpan(
+                                text: S.silent,
+                                style: TextStyle(color: Ink.warning),
+                              ),
                             ],
                           ],
                         ),
@@ -398,7 +415,7 @@ class PlaceTile extends StatelessWidget {
                 AnimatedRotation(
                   turns: open ? 0.25 : 0,
                   duration: const Duration(milliseconds: 160),
-                  child: const GlyphIcon(Glyph.forward, color: Ink.faint, size: 20),
+                  child: GlyphIcon(Glyph.forward, color: Ink.faint, size: 20),
                 ),
               ],
             ),

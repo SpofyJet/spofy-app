@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app">Spofy</string>
+    <string name="app" translatable="false">Spofy</string>
     <string name="channel">Состояние VPN</string>
     <string name="state_connected">VPN работает</string>
     <string name="tile_on">Включён</string>
@@ -22,4 +22,16 @@
     <string name="refused_other">Подписка не работает</string>
     <string name="refused">VPN не включён</string>
     <string name="refused_hint">Откройте Spofy</string>
+    <string name="reminders">Напоминания о подписке</string>
+    <plurals name="remind_soon">
+        <item quantity="one">Подписка закончится через %d день</item>
+        <item quantity="few">Подписка закончится через %d дня</item>
+        <item quantity="many">Подписка закончится через %d дней</item>
+        <item quantity="other">Подписка закончится через %d дня</item>
+    </plurals>
+    <string name="remind_today">Подписка закончится сегодня</string>
+    <string name="remind_tomorrow">Подписка закончится завтра</string>
+    <string name="remind_soon_hint">Продлите её, чтобы VPN работал без перерыва</string>
+    <string name="remind_ended">Подписка закончилась</string>
+    <string name="remind_ended_hint">Продлите её, чтобы VPN снова заработал</string>
 </resources>

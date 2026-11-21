@@ -83,6 +83,7 @@ jobs:
           CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -checklinkname=0" -o "$RUNNER_TEMP/spofy-core" ./cmd/spofy-core
           mkdir -p "$RUNNER_TEMP/host"
           mv "$RUNNER_TEMP/spofy-core" "$RUNNER_TEMP/host/"
+          CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o "$RUNNER_TEMP/host/spofy-release" ./cmd/spofy-release
           GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o "$RUNNER_TEMP/host/bind" ./internal/stand/bind
       - name: apk
         working-directory: spofy-app/app
@@ -91,7 +92,16 @@ jobs:
           flutter pub get --enforce-lockfile
           flutter build apk --release --split-per-abi
           flutter build apk --debug --target-platform android-x64
-          ls -l build/app/outputs/flutter-apk/
+          out=build/app/outputs/flutter-apk
+          mv $out/app-debug.apk "$RUNNER_TEMP/app-debug.apk"
+          pub=$(sed -n 's/^version: //p' pubspec.yaml)
+          sed -i "s/^version: .*/version: ${pub%+*}+$(( ${pub#*+} + 1 ))/" pubspec.yaml
+          ANDROID_ABIS=x86_64 ../tools/android-core.sh
+          flutter build apk --debug --target-platform android-x64
+          mv $out/app-debug.apk $out/app-debug-next.apk
+          mv "$RUNNER_TEMP/app-debug.apk" $out/
+          git checkout -- pubspec.yaml
+          ls -l $out/
       - uses: actions/upload-artifact@v7
         with:
           name: apk
@@ -126,7 +136,7 @@ jobs:
         with:
           name: host
           path: ${{ runner.temp }}/host
-      - run: chmod +x "$RUNNER_TEMP/host/spofy-core" "$RUNNER_TEMP/host/bind"
+      - run: chmod +x "$RUNNER_TEMP/host/spofy-core" "$RUNNER_TEMP/host/bind" "$RUNNER_TEMP/host/spofy-release"
       - name: kvm
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules

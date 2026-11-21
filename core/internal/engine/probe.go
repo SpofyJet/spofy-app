@@ -56,7 +56,23 @@ func (i *Instance) probe(ctx context.Context, target, tag string) (time.Duration
 	if err != nil {
 		return 0, &Error{Code: CodeConfig, Err: err}
 	}
-	tr := &http.Transport{
+	tr := i.transport(tag)
+	defer tr.CloseIdleConnections()
+	client := &http.Client{Transport: tr, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	began := started()
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, &Error{Code: CodeProbe, Err: err}
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
+		return 0, &Error{Code: CodeProbe, Err: errors.New("unexpected status " + strconv.Itoa(resp.StatusCode))}
+	}
+	return began.elapsed(), nil
+}
+
+func (i *Instance) transport(tag string) *http.Transport {
+	return &http.Transport{
 		DisableKeepAlives: true,
 		DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
 			host, port, err := net.SplitHostPort(addr)
@@ -73,18 +89,6 @@ func (i *Instance) probe(ctx context.Context, target, tag string) (time.Duration
 			return core.Dial(ctx, i.inst, xnet.TCPDestination(xnet.ParseAddress(host), xnet.Port(n)))
 		},
 	}
-	defer tr.CloseIdleConnections()
-	client := &http.Client{Transport: tr, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	began := started()
-	resp, err := client.Do(req)
-	if err != nil {
-		return 0, &Error{Code: CodeProbe, Err: err}
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
-		return 0, &Error{Code: CodeProbe, Err: errors.New("unexpected status " + strconv.Itoa(resp.StatusCode))}
-	}
-	return began.elapsed(), nil
 }
 
 var measuring sync.Mutex

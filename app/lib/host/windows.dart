@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:ffi';
+import 'dart:ui' show Color;
 
 import '../core/client.dart';
 import '../core/pipe_transport.dart';
@@ -30,6 +31,9 @@ class WindowsHost implements Host {
   Future<bool> Function(String file)? get install => null;
 
   @override
+  void Function(bool dark, Color background)? get dress => dressOnWindows;
+
+  @override
   void links(void Function(String link) hear) {}
 }
 
@@ -55,7 +59,60 @@ void browseOnWindows(String address) {
   }
 }
 
+void dressOnWindows(bool dark, Color background) {
+  final heap = _processHeap();
+  final memory = _heapAlloc(heap, 8, 64);
+  if (memory == nullptr) {
+    return;
+  }
+  try {
+    final name = _windowClass.codeUnits;
+    memory.asTypedList(name.length).setAll(0, name);
+    final window = _findWindow(memory, nullptr);
+    final value = (memory + 24).cast<Uint32>();
+    if (window == 0 || _windowProcess(window, value) == 0 || value.value != _currentProcess()) {
+      return;
+    }
+    final argb = background.toARGB32();
+    final color = (argb & 0xFF) << 16 | (argb & 0xFF00) | (argb >> 16 & 0xFF);
+    value.value = dark ? 1 : 0;
+    _dwmSet(window, 20, value, 4);
+    value.value = color;
+    _dwmSet(window, 35, value, 4);
+    _dwmSet(window, 34, value, 4);
+    final brush = _brushes.putIfAbsent(color, () => _solidBrush(color));
+    if (brush != 0) {
+      _setClassLong(window, -10, brush);
+    }
+  } finally {
+    _heapFree(heap, 0, memory);
+  }
+}
+
+const _windowClass = 'SPOFY_WINDOW\u0000';
+final _brushes = <int, int>{};
+
 final _kernel = DynamicLibrary.open('kernel32.dll');
+final _user = DynamicLibrary.open('user32.dll');
+final _currentProcess = _kernel.lookupFunction<Uint32 Function(), int Function()>('GetCurrentProcessId');
+final _findWindow = _user
+    .lookupFunction<IntPtr Function(Pointer<Uint16>, Pointer<Uint16>), int Function(Pointer<Uint16>, Pointer<Uint16>)>(
+      'FindWindowW',
+    );
+final _windowProcess = _user
+    .lookupFunction<Uint32 Function(IntPtr, Pointer<Uint32>), int Function(int, Pointer<Uint32>)>(
+      'GetWindowThreadProcessId',
+    );
+final _setClassLong = _user.lookupFunction<IntPtr Function(IntPtr, Int32, IntPtr), int Function(int, int, int)>(
+  'SetClassLongPtrW',
+);
+final _solidBrush = DynamicLibrary.open('gdi32.dll')
+    .lookupFunction<IntPtr Function(Uint32), int Function(int)>('CreateSolidBrush');
+final _dwmSet = DynamicLibrary.open('dwmapi.dll')
+    .lookupFunction<
+      Int32 Function(IntPtr, Uint32, Pointer<Uint32>, Uint32),
+      int Function(int, int, Pointer<Uint32>, int)
+    >('DwmSetWindowAttribute');
 final _processHeap = _kernel.lookupFunction<IntPtr Function(), int Function()>('GetProcessHeap');
 final _heapAlloc = _kernel
     .lookupFunction<Pointer<Uint16> Function(IntPtr, Uint32, IntPtr), Pointer<Uint16> Function(int, int, int)>(

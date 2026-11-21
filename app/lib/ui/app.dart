@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:ui' show AppExitResponse;
 
+import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
 import '../state/model.dart';
@@ -17,10 +18,12 @@ import 'theme.dart';
 import 'update.dart';
 
 class SpofyApp extends StatefulWidget {
-  const SpofyApp({super.key, required this.model, this.now = DateTime.now});
+  const SpofyApp({super.key, required this.model, this.now = DateTime.now, this.dress, this.hold = false});
 
   final AppModel model;
   final DateTime Function() now;
+  final void Function(bool dark, Color background)? dress;
+  final bool hold;
 
   @override
   State<SpofyApp> createState() => _SpofyAppState();
@@ -33,10 +36,18 @@ class _SpofyAppState extends State<SpofyApp> with WidgetsBindingObserver {
   bool _subscription = false;
   bool _offering = false;
   int _offered = 0;
+  Palette? _palette;
+  Lang? _lang;
+  Palette? _dressed;
+  Timer? _held;
 
   @override
   void initState() {
     super.initState();
+    if (widget.hold) {
+      WidgetsBinding.instance.deferFirstFrame();
+      _held = Timer(const Duration(milliseconds: 300), _show);
+    }
     WidgetsBinding.instance.addObserver(this);
     widget.model.addListener(_schedule);
     _schedule();
@@ -54,10 +65,53 @@ class _SpofyAppState extends State<SpofyApp> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    _show();
     WidgetsBinding.instance.removeObserver(this);
     widget.model.removeListener(_schedule);
     _poll?.cancel();
     super.dispose();
+  }
+
+  @override
+  void didChangePlatformBrightness() => _look(again: true);
+
+  @override
+  void didChangeLocales(List<Locale>? locales) => _look(again: true);
+
+  void _show() {
+    final held = _held;
+    if (held != null) {
+      _held = null;
+      held.cancel();
+      WidgetsBinding.instance.allowFirstFrame();
+    }
+  }
+
+  void _look({bool again = false}) {
+    final system = WidgetsBinding.instance.platformDispatcher;
+    final settings = widget.model.snapshot.settings;
+    final palette = paletteFor(settings[themeKey], system.platformBrightness);
+    final lang = langFor(settings[languageKey], system.locales);
+    final first = _palette == null;
+    if (!again && palette == _palette && lang == _lang) {
+      return;
+    }
+    _palette = palette;
+    _lang = lang;
+    Ink.use(palette);
+    S.use(lang);
+    if (palette != _dressed) {
+      _dressed = palette;
+      widget.dress?.call(palette.dark, palette.background);
+    }
+    if (!first) {
+      void mark(Element element) {
+        element.markNeedsBuild();
+        element.visitChildren(mark);
+      }
+
+      mark(context as Element);
+    }
   }
 
   @override
@@ -80,6 +134,10 @@ class _SpofyAppState extends State<SpofyApp> with WidgetsBindingObserver {
   }
 
   void _schedule() {
+    _look();
+    if (widget.model.ready || widget.model.fault.isNotEmpty) {
+      _show();
+    }
     if (widget.model.ready && widget.model.offered != null && !_subscription) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _subscribe());
       WidgetsBinding.instance.scheduleFrame();
@@ -165,25 +223,30 @@ class _SpofyAppState extends State<SpofyApp> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     final model = widget.model;
-    return WidgetsApp(
-      navigatorKey: _navigator,
-      title: S.app,
-      color: Ink.background,
-      debugShowCheckedModeBanner: false,
-      textStyle: Ink.body,
-      pageRouteBuilder: <T>(RouteSettings settings, WidgetBuilder builder) => _route<T>(builder, settings),
-      home: HomeScreen(
-        model: model,
-        now: widget.now,
-        onServers: () => _open((done) => ServersScreen(model: model, onDone: done)),
-        onSubscription: _subscribe,
-        onSettings: _settings,
-        onUpdate: () {
-          if (!_offering) {
-            _offering = true;
-            _open((done) => UpdateScreen(model: model, onDone: done)).whenComplete(() => _offering = false);
-          }
-        },
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: _palette!.bars,
+      child: WidgetsApp(
+        navigatorKey: _navigator,
+        title: S.app,
+        color: Ink.background,
+        locale: Locale(_lang!.name),
+        supportedLocales: const [Locale('ru'), Locale('en')],
+        debugShowCheckedModeBanner: false,
+        textStyle: Ink.body,
+        pageRouteBuilder: <T>(RouteSettings settings, WidgetBuilder builder) => _route<T>(builder, settings),
+        home: HomeScreen(
+          model: model,
+          now: widget.now,
+          onServers: () => _open((done) => ServersScreen(model: model, onDone: done)),
+          onSubscription: _subscribe,
+          onSettings: _settings,
+          onUpdate: () {
+            if (!_offering) {
+              _offering = true;
+              _open((done) => UpdateScreen(model: model, onDone: done)).whenComplete(() => _offering = false);
+            }
+          },
+        ),
       ),
     );
   }

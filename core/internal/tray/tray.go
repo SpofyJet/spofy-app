@@ -3,6 +3,7 @@ package tray
 import (
 	"encoding/json"
 	"strings"
+	"time"
 	"unicode/utf16"
 )
 
@@ -37,6 +38,7 @@ type View struct {
 	Tip     string
 	Status  string
 	Toggle  Item
+	Open    string
 	Quit    Item
 	Stalled bool
 }
@@ -64,7 +66,14 @@ type server struct {
 }
 
 type subscription struct {
-	Stop string `json:"stop"`
+	Stop   string `json:"stop"`
+	Expire int64  `json:"expire"`
+}
+
+type settings struct {
+	Language string `json:"language"`
+	Remind   *int   `json:"remind"`
+	Reminded string `json:"reminded"`
 }
 
 type snapshot struct {
@@ -72,6 +81,7 @@ type snapshot struct {
 	Connection   connection    `json:"connection"`
 	Subscription *subscription `json:"subscription"`
 	Servers      []server      `json:"servers"`
+	Settings     settings      `json:"settings"`
 }
 
 type message struct {
@@ -83,25 +93,34 @@ type message struct {
 	Connection   *connection     `json:"connection"`
 	Subscription json.RawMessage `json:"subscription"`
 	Servers      []server        `json:"servers"`
+	Settings     *settings       `json:"settings"`
 }
 
 type Model struct {
-	hello   uint64
-	linked  bool
-	stale   bool
-	conn    connection
-	sub     *subscription
-	servers []server
-	asked   map[uint64]Action
-	told    bool
+	System   []string
+	language string
+	hello    uint64
+	linked   bool
+	stale    bool
+	conn     connection
+	sub      *subscription
+	servers  []server
+	asked    map[uint64]Action
+	told     bool
+	remind   *int
+	reminded string
 }
 
 func (m *Model) Link(hello uint64) {
-	*m = Model{hello: hello, asked: map[uint64]Action{}}
+	*m = Model{System: m.System, language: m.language, hello: hello, asked: map[uint64]Action{}}
 }
 
 func (m *Model) Lost() {
-	*m = Model{}
+	*m = Model{System: m.System, language: m.language}
+}
+
+func (m *Model) Lang() Lang {
+	return Pick(m.language, m.System)
 }
 
 func (m *Model) Linked() bool {
@@ -138,6 +157,8 @@ func (m *Model) Read(line []byte) (Result, error) {
 			return Result{Changed: true}, nil
 		}
 		m.linked = true
+		m.language = msg.Snapshot.Settings.Language
+		m.remind, m.reminded = msg.Snapshot.Settings.Remind, msg.Snapshot.Settings.Reminded
 		m.conn = msg.Snapshot.Connection
 		m.sub = msg.Snapshot.Subscription
 		m.servers = msg.Snapshot.Servers
@@ -150,7 +171,7 @@ func (m *Model) Read(line []byte) (Result, error) {
 	delete(m.asked, msg.Re)
 	r := Result{Answered: msg.Re}
 	if !msg.OK && action == Connect && !(m.conn.State == "failed" && m.conn.Code == msg.Code) {
-		r.Note = &Note{Title: Title("failed"), Text: Reason(msg.Code)}
+		r.Note = &Note{Title: m.Lang().Title("failed"), Text: m.Lang().Reason(msg.Code)}
 		m.told = m.conn.State == "stalled"
 	}
 	return r, nil
@@ -169,7 +190,7 @@ func (m *Model) event(msg message) Result {
 		}
 		r := Result{Changed: true}
 		if m.conn.State == "failed" && was != "failed" && m.conn.Code != "" {
-			r.Note = &Note{Title: Title("failed"), Text: Reason(m.conn.Code)}
+			r.Note = &Note{Title: m.Lang().Title("failed"), Text: m.Lang().Reason(m.conn.Code)}
 		}
 		return r
 	case "subscription":
@@ -182,8 +203,38 @@ func (m *Model) event(msg message) Result {
 	case "servers":
 		m.servers = msg.Servers
 		return Result{Changed: true}
+	case "settings":
+		if msg.Settings == nil {
+			return Result{}
+		}
+		m.remind, m.reminded = msg.Settings.Remind, msg.Settings.Reminded
+		if msg.Settings.Language == m.language {
+			return Result{}
+		}
+		m.language = msg.Settings.Language
+		return Result{Changed: true}
 	}
 	return Result{}
+}
+
+func (m *Model) Reminder(now time.Time) (string, *Note) {
+	if !m.linked || m.sub == nil {
+		return "", nil
+	}
+	days := RemindDefault
+	if m.remind != nil {
+		days = *m.remind
+	}
+	r, due := Due(m.sub.Expire, days, now)
+	if !due || r.Key == m.reminded {
+		return "", nil
+	}
+	n := m.Lang().Remind(r)
+	return r.Key, &n
+}
+
+func (m *Model) Reminded(key string) {
+	m.reminded = key
 }
 
 func (m *Model) StalledNote() *Note {
@@ -191,20 +242,22 @@ func (m *Model) StalledNote() *Note {
 		return nil
 	}
 	m.told = true
-	return &Note{Title: Title("stalled"), Text: Hint("stalled")}
+	return &Note{Title: m.Lang().Title("stalled"), Text: m.Lang().Hint("stalled")}
 }
 
 func (m *Model) View() View {
-	quit := Item{Label: textQuit}
+	l := m.Lang()
+	w := texts[l]
+	quit := Item{Label: w.quit}
 	if !m.linked {
-		status := textLost
+		status := w.lost
 		if m.stale {
-			status = textStale
+			status = w.stale
 		}
-		return View{Icon: Off, Tip: tip(status), Status: status, Toggle: Item{Label: textConnect, Grey: true}, Quit: quit}
+		return View{Icon: Off, Tip: tip(status), Status: status, Toggle: Item{Label: w.connect, Grey: true}, Open: w.open, Quit: quit}
 	}
 	state := m.conn.State
-	v := View{Status: Title(state), Stalled: state == "stalled"}
+	v := View{Status: l.Title(state), Open: w.open, Stalled: state == "stalled"}
 	switch state {
 	case "connected":
 		v.Icon = On
@@ -222,19 +275,19 @@ func (m *Model) View() View {
 	case "idle", "failed":
 		switch {
 		case m.sub == nil:
-			v.Toggle = Item{Label: textAddSubscription, Action: Open}
+			v.Toggle = Item{Label: w.addSubscription, Action: Open}
 		case m.sub.Stop != "":
-			v.Status = StopTitle(m.sub.Stop)
-			v.Toggle = Item{Label: StopAction(m.sub.Stop), Action: Open}
+			v.Status = l.StopTitle(m.sub.Stop)
+			v.Toggle = Item{Label: l.StopAction(m.sub.Stop), Action: Open}
 		default:
-			v.Toggle = Item{Label: textConnect, Action: Connect}
+			v.Toggle = Item{Label: w.connect, Action: Connect}
 		}
 	case "measuring", "connecting", "switching":
-		v.Toggle = Item{Label: textStop, Action: Disconnect}
-		quit = Item{Label: textQuitOff, Action: Disconnect}
+		v.Toggle = Item{Label: w.stop, Action: Disconnect}
+		quit = Item{Label: w.quitOff, Action: Disconnect}
 	default:
-		v.Toggle = Item{Label: textDisconnect, Action: Disconnect}
-		quit = Item{Label: textQuitOff, Action: Disconnect}
+		v.Toggle = Item{Label: w.disconnect, Action: Disconnect}
+		quit = Item{Label: w.quitOff, Action: Disconnect}
 	}
 	v.Quit = quit
 	v.Tip = tip(v.Status)
@@ -254,7 +307,7 @@ func (m *Model) name(id string) string {
 }
 
 func tip(status string) string {
-	return Clip(textApp+"\n"+status, 127)
+	return Clip(App+"\n"+status, 127)
 }
 
 func Clip(s string, units int) string {

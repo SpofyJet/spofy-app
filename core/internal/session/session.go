@@ -137,6 +137,15 @@ func (s *Session) State() State {
 	return s.state
 }
 
+func (s *Session) Route() (string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state != Connected || s.active < 0 || s.active >= len(s.cands) {
+		return "", false
+	}
+	return s.cands[s.active].Tag, true
+}
+
 func (s *Session) Measure(ctx context.Context, cands []Candidate) []supervisor.Measurement {
 	return s.measure(ctx, cands, s.opts.Parallel, nil, nil)
 }

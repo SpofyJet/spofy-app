@@ -15,22 +15,46 @@ const dnsKey = 'dns';
 const ipv6Key = 'ipv6';
 const lanKey = 'lan';
 const logLevelKey = 'logLevel';
+const remindKey = 'remind';
 
 const probeGoogle = 'http://www.gstatic.com/generate_204';
 const probeCloudflare = 'http://cp.cloudflare.com/generate_204';
 
-const probeChoices = [
+List<Choice> get probeChoices => [
   Choice(null, S.probeAuto, S.probeAutoHint),
-  Choice(probeGoogle, 'Google', 'www.gstatic.com'),
-  Choice(probeCloudflare, 'Cloudflare', 'cp.cloudflare.com'),
+  const Choice(probeGoogle, 'Google', 'www.gstatic.com'),
+  const Choice(probeCloudflare, 'Cloudflare', 'cp.cloudflare.com'),
 ];
 
-const dnsChoices = [
+List<Choice> get dnsChoices => [
   Choice(null, S.dnsDefault, S.dnsDefaultHint),
-  Choice('cloudflare', 'Cloudflare', '1.1.1.1'),
-  Choice('google', 'Google', '8.8.8.8'),
-  Choice('quad9', 'Quad9', '9.9.9.9 · без вредоносных сайтов'),
-  Choice('adguard', 'AdGuard', '94.140.14.14 · без рекламы'),
+  const Choice('cloudflare', 'Cloudflare', '1.1.1.1'),
+  const Choice('google', 'Google', '8.8.8.8'),
+  Choice('quad9', 'Quad9', '9.9.9.9 · ${S.dnsSafe}'),
+  Choice('adguard', 'AdGuard', '94.140.14.14 · ${S.dnsClean}'),
+];
+
+List<Choice> get themeChoices {
+  final system = WidgetsBinding.instance.platformDispatcher.platformBrightness;
+  return [
+    Choice(null, S.themeSystem, S.themeNow(paletteFor(null, system).dark)),
+    Choice('light', S.themeLight),
+    Choice('dark', S.themeDark),
+  ];
+}
+
+List<Choice> get languageChoices => [
+  Choice(null, S.languageSystem, S.languageNow(langFor(null, WidgetsBinding.instance.platformDispatcher.locales))),
+  const Choice('ru', S.russian),
+  const Choice('en', S.english),
+];
+
+List<Choice> get remindChoices => [
+  Choice(1, S.remindBefore(1)),
+  Choice(null, S.remindBefore(3)),
+  Choice(5, S.remindBefore(5)),
+  Choice(7, S.remindBefore(7)),
+  Choice(0, S.remindOff),
 ];
 
 String chosen(List<Choice> choices, Object? value) {
@@ -79,7 +103,7 @@ class SettingsScreen extends StatelessWidget {
                 child: ListView(
                   padding: const EdgeInsets.fromLTRB(Ink.gutter, 0, Ink.gutter, 16),
                   children: [
-                    const SectionTitle(S.connection),
+                    SectionTitle(S.connection),
                     SwitchTile(
                       title: S.autoConnect,
                       subtitle: S.autoConnectHint,
@@ -101,7 +125,7 @@ class SettingsScreen extends StatelessWidget {
                       gap,
                       Tile(title: S.alwaysOn, subtitle: S.alwaysOnHint, wrap: true, onTap: model.always),
                     ],
-                    const SectionTitle(S.tunnel),
+                    SectionTitle(S.tunnel),
                     SwitchTile(
                       title: S.fragment,
                       subtitle: S.fragmentHint,
@@ -138,7 +162,7 @@ class SettingsScreen extends StatelessWidget {
                       value: settings[lanKey] == true,
                       onChanged: (value) => model.set(lanKey, value ? true : null),
                     ),
-                    const SectionTitle(S.checking),
+                    SectionTitle(S.checking),
                     Tile(
                       title: S.probeTarget,
                       subtitle: chosen(probeChoices, settings[probeUrlKey]),
@@ -166,7 +190,50 @@ class SettingsScreen extends StatelessWidget {
                       value: wait,
                       onChanged: (value) => model.set(probeTimeoutKey, value == 4 ? null : value),
                     ),
-                    const SectionTitle(S.logs),
+                    SectionTitle(S.notices),
+                    Tile(
+                      title: S.remind,
+                      subtitle: chosen(remindChoices, settings[remindKey]),
+                      onTap: () => open(
+                        (done) => ChoiceScreen(
+                          model: model,
+                          title: S.remind,
+                          setting: remindKey,
+                          choices: remindChoices,
+                          hint: S.remindHint,
+                          onDone: done,
+                        ),
+                      ),
+                    ),
+                    SectionTitle(S.look),
+                    Tile(
+                      title: S.theme,
+                      subtitle: chosen(themeChoices, settings[themeKey]),
+                      onTap: () => open(
+                        (done) => ChoiceScreen(
+                          model: model,
+                          title: S.theme,
+                          setting: themeKey,
+                          choices: themeChoices,
+                          onDone: done,
+                        ),
+                      ),
+                    ),
+                    gap,
+                    Tile(
+                      title: S.language,
+                      subtitle: chosen(languageChoices, settings[languageKey]),
+                      onTap: () => open(
+                        (done) => ChoiceScreen(
+                          model: model,
+                          title: S.language,
+                          setting: languageKey,
+                          choices: languageChoices,
+                          onDone: done,
+                        ),
+                      ),
+                    ),
+                    SectionTitle(S.logs),
                     SwitchTile(
                       title: S.logsDetailed,
                       subtitle: S.logsDetailedHint,
@@ -174,7 +241,7 @@ class SettingsScreen extends StatelessWidget {
                       onChanged: (value) => model.set(logLevelKey, value ? 'detailed' : null),
                     ),
                     if (onLogs != null) ...[gap, Tile(title: S.logs, subtitle: S.logsHint, wrap: true, onTap: onLogs)],
-                    const SectionTitle(S.about),
+                    SectionTitle(S.about),
                     if (onSupport != null) ...[Tile(title: S.support, onTap: onSupport), gap],
                     if (onAbout != null)
                       Tile(

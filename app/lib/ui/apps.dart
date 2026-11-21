@@ -109,8 +109,8 @@ class _AppsScreenState extends State<AppsScreen> {
 
   Widget _list(List<InstalledApp>? apps) {
     if (apps == null) {
-      return const Align(
-        alignment: Alignment(0, -0.6),
+      return Align(
+        alignment: const Alignment(0, -0.6),
         child: Spinner(size: 28, color: Ink.accent),
       );
     }
@@ -122,11 +122,11 @@ class _AppsScreenState extends State<AppsScreen> {
               if (app.name.toLowerCase().contains(text) || app.id.toLowerCase().contains(text)) app,
           ];
     final notes = [
-      if (_locked) const Notice(S.appsLocked),
+      if (_locked) Notice(S.appsLocked),
       if (apps.isEmpty)
-        const Notice(S.appsFailed)
+        Notice(S.appsFailed)
       else if (_mode == AppsMode.only && _marked.isEmpty)
-        const Notice(S.appsOnlyEmpty),
+        Notice(S.appsOnlyEmpty),
       if (apps.isNotEmpty && shown.isEmpty)
         Padding(
           padding: const EdgeInsets.only(top: 24),
@@ -170,7 +170,7 @@ class _AppsScreenState extends State<AppsScreen> {
             padding: const EdgeInsets.fromLTRB(Ink.gutter, 4, Ink.gutter, 0),
             child: Segments<AppsMode>(
               value: _mode,
-              options: const [(AppsMode.all, S.appsAll), (AppsMode.except, S.appsExcept), (AppsMode.only, S.appsOnly)],
+              options: [(AppsMode.all, S.appsAll), (AppsMode.except, S.appsExcept), (AppsMode.only, S.appsOnly)],
               onChanged: (mode) => _change(() => _mode = mode),
             ),
           ),
@@ -193,8 +193,8 @@ class _Icon extends StatelessWidget {
 
   final Future<MemoryImage?> image;
 
-  static const _blank = DecoratedBox(
-    decoration: BoxDecoration(color: Ink.raised, borderRadius: BorderRadius.all(Radius.circular(10))),
+  static Widget get _blank => DecoratedBox(
+    decoration: BoxDecoration(color: Ink.raised, borderRadius: const BorderRadius.all(Radius.circular(10))),
   );
 
   @override

@@ -12,6 +12,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
+import android.content.res.Configuration
 import android.net.ConnectivityManager
 import android.net.InetAddresses
 import android.net.LocalSocket
@@ -55,6 +56,8 @@ class CoreService : VpnService() {
     private var core: Process? = null
     private var link: LocalSocket? = null
     private var sent = 100
+    private var expire = -1L
+    private var remind = Reminders.DEFAULT
 
     @Volatile
     private var closing = false
@@ -70,6 +73,12 @@ class CoreService : VpnService() {
 
     @Volatile
     private var connecting = 0
+
+    @Volatile
+    private var language = ""
+
+    @Volatile
+    private var words: Context = this
 
     private var watching = false
     private var ready = false
@@ -102,6 +111,8 @@ class CoreService : VpnService() {
 
     override fun onCreate() {
         super.onCreate()
+        language = Language.saved(this)
+        words = Language.words(this, language)
         tell(now)
         thread(name = "core") {
             var failures = 0
@@ -126,6 +137,11 @@ class CoreService : VpnService() {
         }
     }
 
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        retell()
+    }
+
     override fun onBind(intent: Intent): IBinder? {
         return if (intent.action == SERVICE_INTERFACE) super.onBind(intent) else local
     }
@@ -138,7 +154,7 @@ class CoreService : VpnService() {
             }
             SERVICE_INTERFACE -> {
                 wanted = true
-                front(getString(R.string.state_connecting), "")
+                front(text(R.string.state_connecting), "")
                 watch(true)
                 request("connect")
             }
@@ -177,6 +193,14 @@ class CoreService : VpnService() {
         }
         var added = resources.openRawResource(R.raw.roots).use { it.readBytes() }
         if (BuildConfig.DEBUG) {
+            val stand = File(filesDir, "test-update")
+            if (stand.isFile) {
+                val lines = stand.readLines()
+                if (lines.size >= 2) {
+                    env["SPOFY_UPDATE_SOURCE"] = lines[0].trim()
+                    env["SPOFY_UPDATE_KEY"] = lines[1].trim()
+                }
+            }
             val extra = File(filesDir, "test-ca.pem")
             if (extra.isFile) {
                 added += extra.readBytes()
@@ -205,6 +229,7 @@ class CoreService : VpnService() {
         socket.connect(LocalSocketAddress(path.path, LocalSocketAddress.Namespace.FILESYSTEM))
         link = socket
         send(JSONObject().put("id", 1).put("op", "platform").put("owners", Build.VERSION.SDK_INT >= 29))
+        send(JSONObject().put("id", HELLO).put("op", "hello"))
         asks.execute {
             ready = true
             while (true) {
@@ -258,7 +283,26 @@ class CoreService : VpnService() {
         }
     }
 
+    private fun learn(message: JSONObject) {
+        val snapshot = message.optJSONObject("snapshot")
+        when {
+            snapshot != null -> {
+                expire = snapshot.optJSONObject("subscription")?.optLong("expire") ?: 0
+                remind = days(snapshot.optJSONObject("settings"))
+            }
+            message.optString("ev") == "subscription" -> expire = message.optJSONObject("subscription")?.optLong("expire") ?: 0
+            message.optString("ev") == "settings" -> remind = days(message.optJSONObject("settings"))
+            else -> return
+        }
+        if (expire >= 0) {
+            Reminders.plan(this, expire, remind)
+        }
+    }
+
+    private fun days(settings: JSONObject?) = settings?.optInt("remind", Reminders.DEFAULT) ?: Reminders.DEFAULT
+
     private fun handle(message: JSONObject) {
+        learn(message)
         if (!message.has("ask")) {
             if (message.optString("ev") == "connection") {
                 val state = message.getJSONObject("connection").optString("state")
@@ -272,7 +316,14 @@ class CoreService : VpnService() {
                 }
                 if (state == "connected") {
                     getSystemService(NotificationManager::class.java).cancel(REFUSED)
+                    resumed(this).createNewFile()
+                } else if (state == "idle") {
+                    resumed(this).delete()
                 }
+            } else if (message.optString("ev") == "settings") {
+                speak(message.optJSONObject("settings"))
+            } else if (message.optInt("re") == HELLO && message.optBoolean("ok")) {
+                speak(message.optJSONObject("snapshot")?.optJSONObject("settings"))
             } else if (message.has("re") && !message.optBoolean("ok")) {
                 note("request ${message.optInt("re")} failed: ${message.optString("code")}")
                 if (message.optInt("re") == connecting && now == "idle") {
@@ -301,6 +352,36 @@ class CoreService : VpnService() {
             else -> send(answer.put("ok", false).put("error", "the platform does not know this request"))
         }
     }
+
+    private fun speak(settings: JSONObject?) {
+        val setting = settings?.optString("language") ?: ""
+        if (setting != language) {
+            language = setting
+            Language.save(this, setting)
+            retell()
+        }
+    }
+
+    private fun retell() {
+        words = Language.words(this, language)
+        if (Build.VERSION.SDK_INT >= 26) {
+            val manager = getSystemService(NotificationManager::class.java)
+            if (manager.getNotificationChannel(CHANNEL) != null) {
+                manager.createNotificationChannel(channel())
+            }
+        }
+        show(now)
+        tell(now)
+    }
+
+    @TargetApi(26)
+    private fun channel(): NotificationChannel {
+        val channel = NotificationChannel(CHANNEL, text(R.string.channel), NotificationManager.IMPORTANCE_LOW)
+        channel.setShowBadge(false)
+        return channel
+    }
+
+    private fun text(id: Int): String = words.getString(id)
 
     private fun tunnel(answer: JSONObject, spec: JSONObject) {
         val allowed = try {
@@ -449,7 +530,7 @@ class CoreService : VpnService() {
             }
         }
         if (!shown) {
-            front(getString(R.string.state_connecting), "")
+            front(text(R.string.state_connecting), "")
         }
         watch(true)
     }
@@ -482,7 +563,7 @@ class CoreService : VpnService() {
             else -> R.string.refused
         }
         try {
-            val notice = notice(getString(title), getString(R.string.refused_hint), false)
+            val notice = notice(text(title), text(R.string.refused_hint), false)
             getSystemService(NotificationManager::class.java).notify(REFUSED, notice)
         } catch (e: Exception) {
             if (BuildConfig.DEBUG) {
@@ -539,11 +620,11 @@ class CoreService : VpnService() {
         val title = title(state) ?: return
         if (shown) {
             val text = when (state) {
-                "stalled" -> getString(R.string.stalled_hint)
-                "failed" -> getString(R.string.failed_hint)
+                "stalled" -> text(R.string.stalled_hint)
+                "failed" -> text(R.string.failed_hint)
                 else -> ""
             }
-            getSystemService(NotificationManager::class.java).notify(NOTICE, notice(getString(title), text))
+            getSystemService(NotificationManager::class.java).notify(NOTICE, notice(text(title), text))
         }
     }
 
@@ -551,9 +632,7 @@ class CoreService : VpnService() {
         val manager = getSystemService(NotificationManager::class.java)
         val builder = if (Build.VERSION.SDK_INT >= 26) {
             if (manager.getNotificationChannel(CHANNEL) == null) {
-                val channel = NotificationChannel(CHANNEL, getString(R.string.channel), NotificationManager.IMPORTANCE_LOW)
-                channel.setShowBadge(false)
-                manager.createNotificationChannel(channel)
+                manager.createNotificationChannel(channel())
             }
             Notification.Builder(this, CHANNEL)
         } else {
@@ -572,7 +651,7 @@ class CoreService : VpnService() {
             .setCategory(if (running) Notification.CATEGORY_SERVICE else Notification.CATEGORY_STATUS)
             .setContentIntent(open)
         if (running) {
-            builder.addAction(Notification.Action.Builder(null, getString(R.string.disconnect), stop).build())
+            builder.addAction(Notification.Action.Builder(null, text(R.string.disconnect), stop).build())
         }
         if (text.isNotEmpty()) {
             builder.setContentText(text)
@@ -632,6 +711,7 @@ class CoreService : VpnService() {
         private const val REFUSED = 2
         private const val RESTARTS = 5
         private const val PENDING = 8
+        private const val HELLO = 2
         private const val SETTLE = 1500L
         private val ROOTS = listOf("/apex/com.android.conscrypt/cacerts", "/system/etc/security/cacerts")
 
@@ -640,6 +720,8 @@ class CoreService : VpnService() {
             private set
 
         fun socket(context: Context) = File(context.filesDir, "core.sock")
+
+        fun resumed(context: Context) = File(context.filesDir, "resume")
 
         fun title(state: String): Int? = when (state) {
             "connected" -> R.string.state_connected

@@ -46,6 +46,8 @@ type Profile struct {
 	Servers     []Server          `json:"servers"`
 	Notes       []string          `json:"notes,omitempty"`
 	Format      string            `json:"format"`
+	Moved       string            `json:"-"`
+	Counted     bool              `json:"-"`
 }
 
 func Parse(body []byte, h http.Header) (*Profile, error) {

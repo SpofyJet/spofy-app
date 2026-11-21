@@ -2,6 +2,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:spofy/core/protocol.dart';
+import 'package:spofy/state/model.dart';
 import 'package:spofy/ui/home.dart';
 import 'package:spofy/ui/servers.dart';
 import 'package:spofy/ui/settings.dart';
@@ -42,7 +43,7 @@ Future<void> scrollTo(WidgetTester tester, Finder target) async {
 }
 
 void main() {
-  setUpAll(loadFonts);
+  setUpAll(loadAssets);
 
   test('each server says how it connects, in the words its makers use', () {
     final named = {for (final s in servers()) s.id: S.via(s)};
@@ -128,6 +129,33 @@ void main() {
     expect(scene.transport.sent.single, '{"id":1,"op":"connect","server":"bypass2"}');
   });
 
+  test('a server that did not answer is told apart from one not yet checked and goes last', () {
+    final list = servers();
+    final sg = list.firstWhere((s) => s.id == 'sg');
+    final unchecked = list.firstWhere((s) => s.id == 'bypass2');
+    expect([sg.silent, sg.measured, S.answer(sg)], [true, false, S.silent]);
+    expect([unchecked.silent, S.answer(unchecked)], [false, S.noDelay]);
+    expect(ordered(list).last.id, 'sg');
+    expect(places(list, sort: sortSpeed).last.name, 'Сингапур');
+  });
+
+  testWidgets('with no subscription the empty screen leads to the shop, and after a failure to help', (tester) async {
+    final opened = <String>[];
+    final scene = Scene(subscription: null, browse: opened.add);
+    await show(tester, scene, phone);
+    await press(tester, find.bySemanticsLabel('${S.buyAsk} ${S.buy}'));
+    expect(opened, [shopAddress]);
+    await show(
+      tester,
+      Scene(subscription: null, browse: opened.add, failure: const Failure(Task.subscribe, 'sub_unreachable', '')),
+      phone,
+    );
+    expect(find.bySemanticsLabel('${S.buyAsk} ${S.buy}'), findsNothing);
+    await press(tester, find.bySemanticsLabel('${S.stuckAsk} ${S.stuck}'));
+    expect(opened, [shopAddress, shopAddress]);
+    await golden(tester, 'empty_stuck_360');
+  });
+
   testWidgets('search narrows the places, the order can be by name and is kept by the core', (tester) async {
     final scene = home(VpnState.idle);
     await show(tester, scene, phone);
@@ -191,7 +219,7 @@ void main() {
     final scene = home(VpnState.idle, settings: {probeTimeoutKey: 6});
     await show(tester, scene, phone);
     await open(tester, S.settings);
-    await scrollTo(tester, find.text(S.seconds(10)));
+    await scrollTo(tester, find.text(S.checking.toUpperCase()));
     await golden(tester, 'settings_checking_360');
     await tester.tap(find.text(S.seconds(4)));
     await tester.pump();
@@ -203,6 +231,27 @@ void main() {
       scene.transport.sent.last,
       '{"id":2,"op":"set","key":"probeUrl","value":"http://cp.cloudflare.com/generate_204"}',
     );
+  });
+
+  testWidgets('the subscription reminder is chosen in settings: three days unless changed, or off', (tester) async {
+    final scene = home(VpnState.idle);
+    await show(tester, scene, phone);
+    await open(tester, S.settings);
+    await scrollTo(tester, find.text(S.remind));
+    expect(find.text(S.remindBefore(3)), findsOneWidget);
+    await open(tester, S.remind);
+    expect(find.text(S.remindHint), findsOneWidget);
+    await tester.tap(find.text(S.remindOff));
+    await tester.pump();
+    expect(scene.transport.sent.last, '{"id":1,"op":"set","key":"remind","value":0}');
+    await tester.tap(find.text(S.remindBefore(7)));
+    await tester.pump();
+    expect(scene.transport.sent.last, '{"id":2,"op":"set","key":"remind","value":7}');
+    await tester.tap(find.text(S.remindBefore(3)));
+    await tester.pump();
+    expect(scene.transport.sent.last, '{"id":3,"op":"set","key":"remind","value":null}');
+    expect(S.remindBefore(1), 'За день');
+    expect(S.remindBefore(5), 'За 5 дней');
   });
 
   testWidgets('the log is read from the core, copied whole and cleared', (tester) async {

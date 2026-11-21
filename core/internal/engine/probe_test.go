@@ -228,6 +228,10 @@ func TestServeProbeAndMeasure(t *testing.T) {
 	if m := next(); m.Re != 1 || m.OK || m.Code != CodeIdle {
 		t.Fatalf("probe before start = %+v", m)
 	}
+	send(Request{ID: 7, Op: "fetch", URL: "https://example.test/"})
+	if m := next(); m.Re != 7 || m.OK || m.Code != CodeIdle {
+		t.Fatalf("fetch before start = %+v", m)
+	}
 	send(Request{ID: 2, Op: "start", Config: json.RawMessage(probeConfig)})
 	if m := next(); m.Re != 2 || !m.OK {
 		t.Fatalf("start = %+v", m)
@@ -239,6 +243,10 @@ func TestServeProbeAndMeasure(t *testing.T) {
 	send(Request{ID: 4, Op: "probe", URL: srv.URL + "/generate_204", Tag: "dead"})
 	if m := next(); m.Re != 4 || m.OK || m.Code != CodeProbe {
 		t.Fatalf("probe via dead outbound = %+v", m)
+	}
+	send(Request{ID: 6, Op: "fetch", URL: srv.URL + "/generate_204", Tag: "proxy"})
+	if m := next(); m.Re != 6 || m.OK || m.Code != CodeConfig {
+		t.Fatalf("fetch of a plain address = %+v", m)
 	}
 	send(Request{ID: 5, Op: "measure", Config: json.RawMessage(probeConfig), URL: srv.URL + "/generate_204", Tag: "proxy"})
 	if m := next(); m.Re != 5 || m.OK || m.Code != CodeBusy {

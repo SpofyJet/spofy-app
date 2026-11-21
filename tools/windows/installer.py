@@ -4,6 +4,7 @@ import hashlib
 import http.server
 import os
 import shutil
+import ssl
 import subprocess
 import sys
 import threading
@@ -15,6 +16,8 @@ from stand import PIPE, Pipe, expect, failed, past, pipe_open, ps, until
 
 PACK, STUB, BUNDLE, OUT = (os.path.abspath(a) for a in sys.argv[2:6])
 VERSION = sys.argv[6]
+RELEASE = os.path.abspath(sys.argv[7])
+SERVICE = r"SYSTEM\CurrentControlSet\Services\Spofy"
 HOME = os.path.join(os.environ["ProgramFiles"], "Spofy")
 DATA = os.path.join(os.environ["ProgramData"], "Spofy")
 SHORTCUT = os.path.join(os.environ["ProgramData"], r"Microsoft\Windows\Start Menu\Programs\Spofy.lnk")
@@ -154,6 +157,59 @@ class Watch:
         return max(b - a for a, b in zip(seen, seen[1:] + [time.time()])), self.leaks
 
 
+def shelf(files):
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            path = files.get(self.path.lstrip("/"))
+            if not path:
+                self.send_response(404)
+                self.end_headers()
+                return
+            body = open(path, "rb").read()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.load_cert_chain(os.path.join(stand.WORK, "srv.pem"), os.path.join(stand.WORK, "srv.key"))
+    srv.socket = ctx.wrap_socket(srv.socket, server_side=True)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv, "https://127.0.0.1:%d/" % srv.server_address[1]
+
+
+def release(*args):
+    r = subprocess.run([RELEASE, *args], capture_output=True, text=True)
+    if r.returncode != 0:
+        raise SystemExit("spofy-release %s: %s %s" % (args[0], r.stdout[-1000:], r.stderr[-1000:]))
+    return r.stdout.strip()
+
+
+def publish(exe, version, build, base):
+    key, notes, manifest, signed = (os.path.join(stand.WORK, n) for n in ("update.key", "notes.txt", "manifest.json", "update.json"))
+    for path in (key, manifest, signed):
+        if os.path.exists(path):
+            os.remove(path)
+    public = release("keygen", "-out", key)
+    with open(notes, "w", encoding="utf-8") as f:
+        f.write("stand")
+    release("manifest", "-version", version, "-build", str(build), "-notes-file", notes, "-rollout", "100", "-url-base", base, "-file", "windows-x64=" + exe, "-out", manifest)
+    release("sign", "-key", key, "-manifest", manifest, "-out", signed)
+    return signed, public
+
+
+def service_env(values):
+    with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, SERVICE, 0, winreg.KEY_SET_VALUE | winreg.KEY_WOW64_64KEY) as k:
+        winreg.SetValueEx(k, "Environment", 0, winreg.REG_MULTI_SZ, ["%s=%s" % kv for kv in values.items()])
+    for verb in ("stop", "start"):
+        subprocess.run(["sc", verb, "Spofy"], capture_output=True)
+        until(lambda: ("RUNNING" if verb == "start" else "STOPPED") in subprocess.run(["sc", "query", "Spofy"], capture_output=True, text=True).stdout, 60, 0.2)
+    return bool(until(pipe_open, 30, 0.2))
+
+
 def owner(hwnd):
     pid = ctypes.c_uint32()
     if hwnd:
@@ -238,6 +294,35 @@ def scenario():
     expect("an upgrade whose service does not start: every file of the running version is put back, it connects by itself, nothing leaks",
            code == 9 and back and leaks == 0 and left == kept and value(ENTRY, "DisplayVersion") == "0.0.0.2" and not glob.glob(HOME + ".*"),
            "code=%d setup=%.1f s vpn_down=%.1f s leaks=%d changed=%s" % (code, took, outage, leaks, sorted(k for k in set(kept) | set(left) if kept.get(k) != left.get(k))[:5]))
+
+    fresh = build(BUNDLE, "0.0.0.4")
+    files_served = {os.path.basename(fresh): fresh}
+    store, base = shelf(files_served)
+    ui = Pipe(PIPE)
+    current = (ui.ask("hello") or {}).get("snapshot", {}).get("build", 0)
+    ui.close()
+    signed_file, public = publish(fresh, "0.0.0.4", current + 1, base)
+    files_served["update.json"] = signed_file
+    restarted = service_env({"SPOFY_UPDATE_SOURCE": base + "update.json", "SPOFY_UPDATE_KEY": public})
+    back = connected()
+    ui = Pipe(PIPE)
+    checked = ui.ask("checkUpdate", 60)
+    offered = ui.wait(lambda m: m.get("ev") == "update" and (m.get("update") or {}).get("build") == current + 1, 30)
+    fetched = ui.ask("fetchUpdate", 300)
+    ready = ui.wait(lambda m: m.get("ev") == "update" and (m.get("update") or {}).get("file"), 30)
+    watch = Watch(source)
+    began = time.time()
+    started = ui.ask("installUpdate", 30)
+    ui.close()
+    done = until(lambda: value(ENTRY, "DisplayVersion") == "0.0.0.4", 300, 0.5)
+    up = connected(120)
+    outage, leaks = watch.stop(began)
+    took = time.time() - began
+    expect("the service updates itself from a signed update file: it downloads and checks it, runs the installer, comes back on the new version and connects by itself, nothing leaks",
+           current > 0 and restarted and back and all(r and r.get("ok") for r in (checked, fetched, started)) and bool(offered) and bool(ready) and bool(done) and up and leaks == 0,
+           "build=%d check=%s fetch=%s install=%s offered=%s ready=%s version=%s update=%.1f s vpn_down=%.1f s leaks=%d"
+           % (current, checked, fetched, started, bool(offered), bool(ready), value(ENTRY, "DisplayVersion"), took, outage, leaks))
+    store.shutdown()
 
     window = subprocess.Popen([os.path.join(HOME, "spofy.exe")])
     until(stand.window, 30, 0.2)

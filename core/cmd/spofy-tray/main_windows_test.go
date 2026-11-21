@@ -292,7 +292,7 @@ func (f *fake) send(lines ...string) {
 	}
 }
 
-const snapshot = `{"re":%v,"ok":true,"snapshot":{"version":"0.1.0","protocol":1,"connection":{"state":"connected","choice":"auto","server":"nl","delayMs":40,"code":"","error":""},"subscription":{"title":"t","upload":0,"download":0,"total":0,"expire":0,"supportUrl":"","webPageUrl":"","announce":"","fetchedAt":0,"updateEvery":3600,"stop":"","notes":[]},"servers":[{"id":"nl","name":"n","label":"(NL)","country":"NL","protocol":"vless","tier":0,"delayMs":40,"measuredAt":0}],"settings":{}}}`
+const snapshot = `{"re":%v,"ok":true,"snapshot":{"version":"0.1.0","protocol":1,"connection":{"state":"connected","choice":"auto","server":"nl","delayMs":40,"code":"","error":""},"subscription":{"title":"t","upload":0,"download":0,"total":0,"expire":0,"supportUrl":"","webPageUrl":"","announce":"","fetchedAt":0,"updateEvery":3600,"stop":"","notes":[]},"servers":[{"id":"nl","name":"n","label":"(NL)","country":"NL","protocol":"vless","tier":0,"delayMs":40,"measuredAt":0}],"settings":{"language":"ru"}}}`
 
 func TestTheTrayFollowsTheServiceAndLetsGo(t *testing.T) {
 	path, l := listen(t, "O:BAD:P(A;;GA;;;WD)")

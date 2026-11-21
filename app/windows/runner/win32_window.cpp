@@ -14,8 +14,19 @@ namespace {
 constexpr const wchar_t kWindowClassName[] = L"SPOFY_WINDOW";
 
 constexpr COLORREF kInk = RGB(0x07, 0x0D, 0x1A);
+constexpr COLORREF kPaper = RGB(0xF3, 0xF6, 0xFB);
 constexpr DWORD kCaptionColor = 35;
 constexpr DWORD kBorderColor = 34;
+
+bool SystemIsDark() {
+  DWORD light = 0;
+  DWORD size = sizeof(light);
+  LSTATUS read = RegGetValueW(
+      HKEY_CURRENT_USER,
+      L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+      L"AppsUseLightTheme", RRF_RT_REG_DWORD, nullptr, &light, &size);
+  return read != ERROR_SUCCESS || light == 0;
+}
 
 static int g_active_window_count = 0;
 
@@ -77,7 +88,7 @@ const wchar_t* WindowClassRegistrar::GetWindowClass() {
     window_class.hInstance = GetModuleHandle(nullptr);
     window_class.hIcon =
         LoadIcon(window_class.hInstance, MAKEINTRESOURCE(IDI_APP_ICON));
-    window_class.hbrBackground = CreateSolidBrush(kInk);
+    window_class.hbrBackground = CreateSolidBrush(SystemIsDark() ? kInk : kPaper);
     window_class.lpszMenuName = nullptr;
     window_class.lpfnWndProc = Win32Window::WndProc;
     RegisterClass(&window_class);
@@ -191,10 +202,6 @@ Win32Window::MessageHandler(HWND hwnd,
       }
       return 0;
 
-    case WM_DWMCOLORIZATIONCOLORCHANGED:
-      UpdateTheme(hwnd);
-      return 0;
-
     case WM_GETMINMAXINFO: {
       auto limits = reinterpret_cast<MINMAXINFO*>(lparam);
       UINT dpi = GetDpiForWindow(hwnd);
@@ -257,9 +264,9 @@ void Win32Window::OnDestroy() {
 }
 
 void Win32Window::UpdateTheme(HWND const window) {
-  BOOL dark = TRUE;
+  BOOL dark = SystemIsDark() ? TRUE : FALSE;
   DwmSetWindowAttribute(window, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
-  COLORREF ink = kInk;
-  DwmSetWindowAttribute(window, kCaptionColor, &ink, sizeof(ink));
-  DwmSetWindowAttribute(window, kBorderColor, &ink, sizeof(ink));
+  COLORREF back = dark ? kInk : kPaper;
+  DwmSetWindowAttribute(window, kCaptionColor, &back, sizeof(back));
+  DwmSetWindowAttribute(window, kBorderColor, &back, sizeof(back));
 }

@@ -3,7 +3,9 @@ import 'dart:math' as math;
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
+import 'flags.dart';
 import 'icons.dart';
+import 'strings.dart';
 import 'theme.dart';
 
 Future<String> clipboardText() async {
@@ -87,16 +89,16 @@ class _PressableState extends State<Pressable> {
 }
 
 class Panel extends StatelessWidget {
-  const Panel({super.key, required this.child, this.padding = const EdgeInsets.all(16), this.color = Ink.surface});
+  const Panel({super.key, required this.child, this.padding = const EdgeInsets.all(16), this.color});
 
   final Widget child;
   final EdgeInsets padding;
-  final Color color;
+  final Color? color;
 
   @override
   Widget build(BuildContext context) {
     return DecoratedBox(
-      decoration: BoxDecoration(color: color, borderRadius: Ink.radius),
+      decoration: BoxDecoration(color: color ?? Ink.surface, borderRadius: Ink.radius),
       child: Padding(padding: padding, child: child),
     );
   }
@@ -193,7 +195,7 @@ class Tile extends StatelessWidget {
     this.selected = false,
     this.arrow = true,
     this.semantic,
-    this.trailingColor = Ink.muted,
+    this.trailingColor,
     this.wrap = false,
   });
 
@@ -205,11 +207,12 @@ class Tile extends StatelessWidget {
   final bool selected;
   final bool arrow;
   final String? semantic;
-  final Color trailingColor;
+  final Color? trailingColor;
   final bool wrap;
 
   @override
   Widget build(BuildContext context) {
+    final trailingColor = this.trailingColor ?? Ink.muted;
     final tight = MediaQuery.textScalerOf(context).scale(100) > 115 || MediaQuery.sizeOf(context).width < 340;
     final folded = tight && subtitle.isNotEmpty && trailing.isNotEmpty;
     final row = Panel(
@@ -256,13 +259,13 @@ class Tile extends StatelessWidget {
                 child: Text(trailing, style: Ink.note.copyWith(color: trailingColor)),
               ),
             if (selected)
-              const Padding(
-                padding: EdgeInsets.only(left: 10),
+              Padding(
+                padding: const EdgeInsets.only(left: 10),
                 child: GlyphIcon(Glyph.check, color: Ink.accent, size: 20),
               )
             else if (arrow && onTap != null)
-              const Padding(
-                padding: EdgeInsets.only(left: 6),
+              Padding(
+                padding: const EdgeInsets.only(left: 6),
                 child: GlyphIcon(Glyph.forward, color: Ink.faint, size: 20),
               ),
           ],
@@ -309,7 +312,7 @@ class Segments<T> extends StatelessWidget {
                     alignment: Alignment.center,
                     padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
                     decoration: BoxDecoration(
-                      color: id == value ? Ink.raised : const Color(0x001A2740),
+                      color: id == value ? Ink.raised : Ink.raised.withAlpha(0),
                       borderRadius: _radius,
                     ),
                     child: FittedBox(
@@ -351,7 +354,7 @@ class PrimaryButton extends StatelessWidget {
           height: 56,
           child: Center(
             child: busy
-                ? const Spinner(size: 22, color: Ink.onAccent, stroke: 2.5)
+                ? Spinner(size: 22, color: Ink.onAccent, stroke: 2.5)
                 : Text(label, style: onTap == null ? Ink.button.copyWith(color: Ink.faint) : Ink.button),
           ),
         ),
@@ -361,15 +364,16 @@ class PrimaryButton extends StatelessWidget {
 }
 
 class QuietButton extends StatelessWidget {
-  const QuietButton({super.key, required this.label, required this.onTap, this.color = Ink.accent, this.busy = false});
+  const QuietButton({super.key, required this.label, required this.onTap, this.color, this.busy = false});
 
   final String label;
   final VoidCallback? onTap;
-  final Color color;
+  final Color? color;
   final bool busy;
 
   @override
   Widget build(BuildContext context) {
+    final color = this.color ?? Ink.accent;
     const radius = BorderRadius.all(Radius.circular(14));
     return Pressable(
       label: label,
@@ -406,7 +410,7 @@ class RoundButton extends StatelessWidget {
         dimension: 44,
         child: Center(
           child: busy
-              ? const Spinner(size: 20, color: Ink.muted, stroke: 2.5)
+              ? Spinner(size: 20, color: Ink.muted, stroke: 2.5)
               : GlyphIcon(glyph, color: onTap == null ? Ink.faint : Ink.text),
         ),
       ),
@@ -422,6 +426,27 @@ class CountryMark extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final flag = code.toLowerCase() == 'uk' ? 'gb' : code.toLowerCase();
+    if (flagCodes.contains(flag)) {
+      return DecoratedBox(
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          border: active ? Border.all(color: Ink.accent, width: 2) : null,
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(3),
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: Ink.raised,
+              shape: BoxShape.circle,
+              image: DecorationImage(image: AssetImage('assets/flags/$flag.webp'), fit: BoxFit.cover),
+              border: Border.all(color: Ink.faint.withValues(alpha: 0.5)),
+            ),
+            child: const SizedBox.square(dimension: 34),
+          ),
+        ),
+      );
+    }
     final text = code.length > 3 ? code.substring(0, 3) : code;
     return DecoratedBox(
       decoration: BoxDecoration(
@@ -446,7 +471,7 @@ class GlyphMark extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return DecoratedBox(
-      decoration: const BoxDecoration(color: Ink.raised, borderRadius: BorderRadius.all(Radius.circular(12))),
+      decoration: BoxDecoration(color: Ink.raised, borderRadius: const BorderRadius.all(Radius.circular(12))),
       child: SizedBox.square(
         dimension: 40,
         child: Center(child: GlyphIcon(glyph, color: Ink.muted, size: 20)),
@@ -464,7 +489,7 @@ class RemainderMark extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return DecoratedBox(
-      decoration: const BoxDecoration(color: Ink.raised, borderRadius: BorderRadius.all(Radius.circular(12))),
+      decoration: BoxDecoration(color: Ink.raised, borderRadius: const BorderRadius.all(Radius.circular(12))),
       child: SizedBox.square(
         dimension: 40,
         child: Center(
@@ -511,7 +536,7 @@ class Skeleton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return DecoratedBox(
-      decoration: const BoxDecoration(color: Ink.raised, borderRadius: BorderRadius.all(Radius.circular(8))),
+      decoration: BoxDecoration(color: Ink.raised, borderRadius: const BorderRadius.all(Radius.circular(8))),
       child: SizedBox(width: width, height: height),
     );
   }
@@ -622,13 +647,13 @@ class Backdrop extends StatelessWidget {
       child: Stack(
         fit: StackFit.expand,
         children: [
-          const RepaintBoundary(
+          RepaintBoundary(
             child: DecoratedBox(
               decoration: BoxDecoration(
                 gradient: RadialGradient(
-                  center: Alignment(0, -1.25),
+                  center: const Alignment(0, -1.25),
                   radius: 1.1,
-                  colors: [Ink.glow, Color(0x00070D1A)],
+                  colors: [Ink.glow, Ink.background.withAlpha(0)],
                 ),
               ),
             ),
@@ -663,7 +688,7 @@ class Header extends StatelessWidget {
           if (onBack != null)
             Padding(
               padding: const EdgeInsets.only(left: 8),
-              child: RoundButton(glyph: Glyph.back, label: 'Назад', onTap: onBack),
+              child: RoundButton(glyph: Glyph.back, label: S.back, onTap: onBack),
             )
           else
             const SizedBox(width: Ink.gutter),
@@ -689,10 +714,10 @@ class Header extends StatelessWidget {
 }
 
 class Notice extends StatelessWidget {
-  const Notice(this.text, {super.key, this.color = Ink.warning, this.glyph = Glyph.warning});
+  const Notice(this.text, {super.key, this.color, this.glyph = Glyph.warning});
 
   final String text;
-  final Color color;
+  final Color? color;
   final Glyph glyph;
 
   @override
@@ -707,7 +732,7 @@ class Notice extends StatelessWidget {
           children: [
             Padding(
               padding: const EdgeInsets.only(top: 1),
-              child: GlyphIcon(glyph, color: color, size: 20),
+              child: GlyphIcon(glyph, color: color ?? Ink.warning, size: 20),
             ),
             const SizedBox(width: 10),
             Expanded(

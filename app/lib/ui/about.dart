@@ -5,6 +5,7 @@ import 'package:flutter/widgets.dart';
 
 import '../core/protocol.dart';
 import '../state/model.dart';
+import 'flags.dart';
 import 'icons.dart';
 import 'strings.dart';
 import 'theme.dart';
@@ -13,15 +14,16 @@ import 'widgets.dart';
 
 const sourceAddress = 'https://github.com/SpofyJet/spofy-app';
 
-const coreLicenses = [
+List<(String, String)> get coreLicenses => [
   (
     'Xray-core',
-    'Mozilla Public License 2.0\nhttps://mozilla.org/MPL/2.0/\n\nИсходный код ядра в Spofy: https://github.com/SpofyJet/xray-core',
+    'Mozilla Public License 2.0\nhttps://mozilla.org/MPL/2.0/\n\n${S.coreSource}: https://github.com/SpofyJet/xray-core',
   ),
   ('Wintun', 'Prebuilt Binaries License, WireGuard LLC\nhttps://www.wintun.net'),
   ('wireguard-go', 'MIT License, WireGuard LLC'),
   ('Go', 'BSD 3-Clause License, The Go Authors\nhttps://go.dev/LICENSE'),
-  ('Модули ядра', 'Список и версии: $sourceAddress/blob/main/core/go.mod'),
+  ('flag-icons', flagLicense),
+  (S.coreModules, '${S.coreModulesHint}: $sourceAddress/blob/main/core/go.mod'),
 ];
 
 class AboutScreen extends StatefulWidget {
@@ -102,7 +104,7 @@ class _AboutScreenState extends State<AboutScreen> {
                         Padding(
                           padding: const EdgeInsets.only(bottom: 8),
                           child: failure!.code == 'update_none'
-                              ? const Notice(S.updateLatest, color: Ink.good, glyph: Glyph.check)
+                              ? Notice(S.updateLatest, color: Ink.good, glyph: Glyph.check)
                               : Notice(S.failure(failure)),
                         ),
                       QuietButton(label: S.updateCheck, busy: checking, onTap: checking ? null : _check),
@@ -145,9 +147,7 @@ class LicensesScreen extends StatefulWidget {
 }
 
 class _LicensesScreenState extends State<LicensesScreen> {
-  final Map<String, List<String>> _found = {
-    for (final (name, text) in coreLicenses) name: [text],
-  };
+  final Map<String, List<String>> _read = {};
   StreamSubscription<LicenseEntry>? _reading;
   bool _done = false;
   String? _open;
@@ -159,7 +159,7 @@ class _LicensesScreenState extends State<LicensesScreen> {
       (entry) {
         final text = entry.paragraphs.map((p) => '${'  ' * p.indent.clamp(0, 8)}${p.text}').join('\n\n');
         for (final name in entry.packages) {
-          _found.putIfAbsent(name, () => []).add(text);
+          _read.putIfAbsent(name, () => []).add(text);
         }
       },
       onDone: () {
@@ -178,7 +178,13 @@ class _LicensesScreenState extends State<LicensesScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final names = _found.keys.toList()..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    final found = <String, List<String>>{
+      for (final (name, text) in coreLicenses) name: [text],
+    };
+    for (final MapEntry(:key, :value) in _read.entries) {
+      found.putIfAbsent(key, () => []).addAll(value);
+    }
+    final names = found.keys.toList()..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
     final open = _open;
     if (open != null) {
       return Backdrop(
@@ -193,7 +199,7 @@ class _LicensesScreenState extends State<LicensesScreen> {
                 child: ListView(
                   padding: const EdgeInsets.fromLTRB(Ink.gutter, 4, Ink.gutter, 16),
                   children: [
-                    for (final text in _found[open] ?? const <String>[]) ...[
+                    for (final text in found[open] ?? const <String>[]) ...[
                       Panel(child: Text(text, style: Ink.type(12.5, 400, Ink.muted, height: 1.45))),
                       const SizedBox(height: 8),
                     ],
@@ -212,14 +218,14 @@ class _LicensesScreenState extends State<LicensesScreen> {
           Header(title: S.licenses, onBack: widget.onDone),
           Expanded(
             child: !_done
-                ? const Center(child: Spinner(size: 28, color: Ink.accent))
+                ? Center(child: Spinner(size: 28, color: Ink.accent))
                 : ListView.separated(
                     padding: const EdgeInsets.fromLTRB(Ink.gutter, 4, Ink.gutter, 16),
                     itemCount: names.length,
                     separatorBuilder: (_, _) => const SizedBox(height: 8),
                     itemBuilder: (context, i) => Tile(
                       title: names[i],
-                      subtitle: S.licenseCount(_found[names[i]]!.length),
+                      subtitle: S.licenseCount(found[names[i]]!.length),
                       onTap: () => setState(() => _open = names[i]),
                     ),
                   ),

@@ -2,6 +2,8 @@ import http.server, ipaddress, json, os, re, signal, socket, socketserver, ssl, 
 
 APK, CORE, OUT = sys.argv[1], os.path.abspath(sys.argv[2]), os.path.abspath(sys.argv[3])
 RELEASE = sys.argv[4] if len(sys.argv) > 4 else ""
+NEXT = os.path.join(os.path.dirname(APK), "app-debug-next.apk")
+TOOL = os.path.join(os.path.dirname(CORE), "spofy-release")
 INSIDE = "127.0.0.2"
 RESOLVER = "172.19.0.2"
 PRIVATE = {"8.8.8.8", "8.8.4.4", "2001:4860:4860::8888", "2001:4860:4860::8844"}
@@ -17,7 +19,7 @@ seen = []
 asked = []
 kicks = []
 seen6 = []
-panel = {"ended": False}
+panel = {"ended": False, "update": ""}
 phone = {"sdk": 0, "nc": "nc", "limit": "timeout %d "}
 os.makedirs(OUT, exist_ok=True)
 
@@ -134,6 +136,10 @@ class Site(http.server.BaseHTTPRequestHandler):
         elif self.path == "/ip":
             (seen6 if self.server.address_family == socket.AF_INET6 else seen).append(self.client_address[0])
             self.reply(200, b"site sees " + self.client_address[0].encode())
+        elif self.path == "/update.json" and self.server.server_port == 8443 and panel["update"]:
+            self.reply(200, open(panel["update"], "rb").read(), [("Content-Type", "application/json")])
+        elif self.path == "/files/" + os.path.basename(NEXT) and self.server.server_port == 8443 and os.path.exists(NEXT):
+            self.reply(200, open(NEXT, "rb").read(), [("Content-Type", "application/vnd.android.package-archive")])
         elif self.path == "/sub/EMULATORTOKEN" and self.server.server_port == 8443:
             self.reply(200, ENDED if panel["ended"] else BODY,
                        [("Content-Type", "application/json"), ("Subscription-Userinfo", "upload=1; download=2; total=1000; expire=%d" % (1700000000 if panel["ended"] else 1798761600)),
@@ -261,7 +267,7 @@ class Channel:
         while True:
             line = self.f.readline()
             if not line:
-                raise Abort()
+                need("the core answers %s before closing its channel" % op, False)
             m = json.loads(line)
             if m.get("re") == self.n:
                 m["ms"] = int((time.time() - began) * 1000)
@@ -351,6 +357,68 @@ def tap(*labels):
     return ""
 
 
+def reach(limit=40):
+    end = time.time() + limit
+    while time.time() < end:
+        try:
+            ch = Channel(9099)
+            ch.s.sendall(b'{"id":999,"op":"hello"}\n')
+            for line in ch.f:
+                if json.loads(line).get("re") == 999:
+                    return ch
+            ch.s.close()
+        except (OSError, ValueError):
+            pass
+        time.sleep(1)
+    return None
+
+
+WAITING = re.compile(r"Alarm\{[^}\n]*\}[^\n]*\n\s*tag=\*w?alarm\*:app\.spofy\.REMIND")
+
+
+def alarmed():
+    return WAITING.search(shell("dumpsys alarm", limit=30)) is not None
+
+
+def alarms():
+    lines = shell("dumpsys alarm", limit=30).splitlines()
+    near = [i for i, l in enumerate(lines) if "app.spofy.REMIND" in l]
+    heads = [l.strip()[:60] for l in lines if l.startswith("  ") and not l.startswith("   ") and l.strip().endswith(":")]
+    return ("sections=%s | " % heads[:12] + " | ".join(" / ".join(x.strip() for x in lines[max(i - 2, 0):i + 1]) for i in near))[:900]
+
+
+def front():
+    resumed = re.search(r"(?:mResumedActivity|topResumedActivity)[:=] ?ActivityRecord\{\S+ u\d+ ([\w.]+)/", shell("dumpsys activity activities", limit=30))
+    return resumed.group(1) if resumed else ""
+
+
+def version_code():
+    m = re.search(r"versionCode=(\d+)", shell("dumpsys package %s" % PACKAGE, limit=30))
+    return int(m.group(1)) if m else 0
+
+
+def confirm_install():
+    for _ in range(30):
+        shell("uiautomator dump /sdcard/ui.xml", limit=60)
+        for node in re.findall(r"<node [^>]*>", shell("cat /sdcard/ui.xml", limit=30)):
+            text = (re.search(r' text="([^"]*)"', node) or re.search("()", ""))[1].strip()
+            rid = (re.search(r'resource-id="([^"]*)"', node) or re.search("()", ""))[1]
+            bounds = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', node)
+            if "packageinstaller" in node and 'enabled="true"' in node and bounds and (
+                    re.fullmatch(r"(?i)update|install|обновить|установить", text) or rid.endswith((":id/ok_button", "android:id/button1"))):
+                left, up, right, down = map(int, bounds.groups())
+                shell("input tap %d %d" % ((left + right) // 2, (up + down) // 2))
+                return text or rid
+        time.sleep(1.5)
+    return ""
+
+
+def release_tool(*args):
+    code, out = run(TOOL, *args, limit=60)
+    need("spofy-release " + args[0], code == 0, out[-400:])
+    return out.strip()
+
+
 def linked(kind):
     return re.search(r"ni\{%s(\[[^\]]*\])? CONNECTED" % kind, shell("dumpsys connectivity")) is not None
 
@@ -424,6 +492,12 @@ def scenario():
     cert = open(OUT + "/cert.pem", "rb").read()
     run("adb", "shell", "run-as %s sh -c 'mkdir -p files && cat > files/test-ca.pem'" % PACKAGE, data=cert)
     need("the test certificate is in the app folder", "test-ca.pem" in shell("run-as %s ls files" % PACKAGE))
+    stand_key = OUT + "/update.key"
+    public = release_tool("keygen", "-out", stand_key) if os.path.exists(TOOL) and os.path.exists(NEXT) else ""
+    if public:
+        run("adb", "shell", "run-as %s sh -c 'cat > files/test-update'" % PACKAGE, data=("https://%s:8443/update.json\n%s\n" % (GATE, public)).encode())
+    else:
+        print("no next build or no spofy-release: the update through the app is left out", flush=True)
     shell("am start -W -n %s/.MainActivity" % PACKAGE, limit=120)
     need("the app starts and its core listens", bool(until(lambda: "core.sock" in shell("ls %s/files" % DATA), 60)), shell("ls -la %s/files" % DATA))
     adb("forward", "tcp:9099", "localfilesystem:%s/files/core.sock" % DATA)
@@ -431,6 +505,7 @@ def scenario():
     hello = ui.call("hello")
     need("the core answers on its socket", hello.get("ok") and hello["snapshot"]["servers"] == [], str(hello)[:300])
     print("core version %s" % hello["snapshot"].get("version"), flush=True)
+    need("the app is set to Russian, the language these checks read", ui.call("set", key="language", value="ru")["ok"])
     time.sleep(2)
     screen("1-start")
     kinds = list(processes().values())
@@ -446,6 +521,19 @@ def scenario():
            "not trusted" not in trust.values() and trust["valid-isrgrootx1.letsencrypt.org"] in ("sub_format", "sub_status"), str(trust))
     s = ui.call("subscribe", url="https://%s:8443/sub/EMULATORTOKEN" % GATE)
     need("subscribe", s["ok"], "ms=%d %s %s" % (s["ms"], s.get("code"), s.get("error", "")[:300]))
+    planned = until(alarmed, 20)
+    expect("the end of the subscription is reminded: an alarm waits for it", bool(planned), "" if planned else alarms())
+    ui.call("set", key="remind", value=0)
+    off = until(lambda: not alarmed(), 20)
+    expect("with reminders switched off no alarm waits", bool(off), "" if off else alarms())
+    ui.call("set", key="remind", value=None)
+    until(alarmed, 20)
+    shell("am broadcast -n %s/.ReminderReceiver -a app.spofy.REMIND --el expire 1798761600 --ei kind 0" % PACKAGE)
+    told = until(lambda: "Подписка закончится через" in shell("dumpsys notification --noredact"), 20)
+    expect("the reminder says how many days are left", bool(told))
+    shell("am broadcast -n %s/.ReminderReceiver -a app.spofy.REMIND --el expire 1700000000 --ei kind 1" % PACKAGE)
+    time.sleep(2)
+    expect("a reminder for an end that has moved stays silent", "Подписка закончилась" not in shell("dumpsys notification --noredact"))
     m = ui.call("measure")
     servers = ([e for e in ui.events if e.get("ev") == "servers"] or [{"servers": []}])[-1]["servers"]
     expect("measure both servers", m["ok"] and len([x for x in servers if x["delayMs"] > 0]) == 2, "ms=%d delays=%s" % (m["ms"], {x["id"]: x["delayMs"] for x in servers}))
@@ -480,6 +568,11 @@ def scenario():
     expect("traffic is counted", t["traffic"]["down"] > 0 and t["traffic"]["up"] > 0, str(t["traffic"]))
     service = shell("dumpsys activity services %s/.CoreService" % PACKAGE)
     expect("the service is in the foreground with a notification", "isForeground=true" in service, re.sub(r"\s+", " ", service)[:200])
+    ui.call("set", key="language", value="en")
+    english = until(lambda: "VPN is on" in shell("dumpsys notification --noredact"), 10)
+    ui.call("set", key="language", value="ru")
+    russian = until(lambda: "VPN работает" in shell("dumpsys notification --noredact"), 10)
+    expect("the notification speaks the language chosen in the app and follows a change", bool(english) and bool(russian))
     time.sleep(1)
     screen("2-connected")
     shell("cmd statusbar expand-notifications")
@@ -756,6 +849,56 @@ def scenario():
     until(lambda: tunnel() == "", 10)
     last.s.close()
 
+    if public:
+        shell("am start -W -n %s/.MainActivity" % PACKAGE, limit=120)
+        last = reach()
+        need("the core is up before the update", last is not None)
+        c = last.call("connect", server="auto")
+        need("connected before the update", c["ok"] and bool(until(lambda: tunnel() != "" and through(), 30, 0.2)), str(c)[:200])
+        snap = last.call("hello")["snapshot"]
+        current = snap["build"]
+        with open(OUT + "/notes.txt", "w") as f:
+            f.write("emulator")
+        for name in ("manifest.json", "update.json"):
+            if os.path.exists(OUT + "/" + name):
+                os.remove(OUT + "/" + name)
+        release_tool("manifest", "-version", snap["version"], "-build", str(current + 1), "-notes-file", OUT + "/notes.txt", "-rollout", "100",
+                     "-url-base", "https://%s:8443/files/" % GATE, "-file", "android-x86_64=" + NEXT, "-out", OUT + "/manifest.json")
+        release_tool("sign", "-key", stand_key, "-manifest", OUT + "/manifest.json", "-out", OUT + "/update.json")
+        panel["update"] = OUT + "/update.json"
+        if phone["sdk"] >= 26:
+            shell("appops set %s REQUEST_INSTALL_PACKAGES deny" % PACKAGE)
+        else:
+            shell("settings put secure install_non_market_apps 1")
+        shell("am start -W -n %s/.MainActivity" % PACKAGE, limit=120)
+        r = last.call("checkUpdate")
+        offered = until(lambda: next((e for e in last.events if e.get("ev") == "update" and (e.get("update") or {}).get("build") == current + 1), None), 20)
+        expect("the core finds an update signed by the trusted key", r["ok"] and bool(offered), str(r)[:200])
+        time.sleep(2)
+        screen("11-update")
+        before = version_code()
+        pressed = tap("Обновить")
+        if not pressed and tap("Доступна версия"):
+            pressed = tap("Обновить")
+        if phone["sdk"] >= 26:
+            sent = until(lambda: front() == "com.android.settings", 120)
+            expect("without the right to install apps the app opens the system screen that gives it", bool(pressed) and bool(sent), "pressed=%s top=%s" % (pressed, front()))
+            shell("appops set %s REQUEST_INSTALL_PACKAGES allow" % PACKAGE)
+            shell("input keyevent KEYCODE_BACK")
+        confirmed = confirm_install()
+        replaced = until(lambda: version_code() == before + 1, 120)
+        back = until(lambda: tunnel() != "" and through(), 60, 0.2)
+        then = reach()
+        snap = then.call("hello")["snapshot"] if then else {}
+        again = then.call("checkUpdate") if then else {}
+        expect("the update goes through the app: downloaded and checked, the system asks once, the new build runs and the VPN comes back by itself",
+               bool(pressed) and bool(confirmed) and bool(replaced) and bool(back) and snap.get("build") == current + 1 and again.get("code") == "update_none",
+               "pressed=%s confirmed=%s code %d -> %d build=%s again=%s vpn=%s" % (pressed, confirmed, before, version_code(), snap.get("build"), again.get("code"), bool(back)))
+        if then:
+            then.call("disconnect")
+            until(lambda: tunnel() == "", 10)
+            then.s.close()
+
     if RELEASE:
         adb("uninstall", PACKAGE, limit=120)
         code, out = run("adb", "install", "-g", RELEASE, limit=300)
@@ -784,7 +927,7 @@ finally:
         screen("failed")
     for p in started:
         p.kill()
-    for name in ("key.pem",):
+    for name in ("key.pem", "update.key"):
         if os.path.exists(OUT + "/" + name):
             os.remove(OUT + "/" + name)
 print("%s in %.0f s, %d failed" % ("ANDROID OK" if not failed else "ANDROID FAILED", time.time() - began, len(failed)))

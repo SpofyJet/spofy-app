@@ -12,16 +12,6 @@ void main() {
   WidgetsFlutterBinding.ensureInitialized();
   if (Platform.isAndroid) {
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
-    SystemChrome.setSystemUIOverlayStyle(
-      const SystemUiOverlayStyle(
-        statusBarColor: Color(0x00000000),
-        statusBarIconBrightness: Brightness.light,
-        statusBarBrightness: Brightness.dark,
-        systemNavigationBarColor: Color(0x00000000),
-        systemNavigationBarIconBrightness: Brightness.light,
-        systemNavigationBarContrastEnforced: false,
-      ),
-    );
   }
   final platform = host();
   final model = AppModel.opening(
@@ -33,5 +23,5 @@ void main() {
     install: platform.install,
   );
   platform.links(model.offer);
-  runApp(SpofyApp(model: model));
+  runApp(SpofyApp(model: model, dress: platform.dress, hold: Platform.isWindows));
 }

@@ -9,10 +9,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -54,6 +56,10 @@ const (
 	KeyIPv6         = "ipv6"
 	KeyLAN          = "lan"
 	KeyLogLevel     = "logLevel"
+	KeyRemind       = "remind"
+	KeyReminded     = "reminded"
+	KeyTheme        = "theme"
+	KeyLanguage     = "language"
 )
 
 var Resolvers = map[string][]string{
@@ -73,6 +79,32 @@ var checks = map[string]func(json.RawMessage) bool{
 	KeyProbeTimeout: validSeconds,
 	KeyProbeURL:     validURL,
 	KeyDNS:          validDNS,
+	KeyRemind:       validRemind,
+	KeyReminded:     validReminded,
+	KeyTheme:        oneOf("light", "dark"),
+	KeyLanguage:     oneOf("ru", "en"),
+}
+
+func validRemind(v json.RawMessage) bool {
+	switch string(v) {
+	case "0", "1", "3", "5", "7":
+		return true
+	}
+	return false
+}
+
+var reminded = regexp.MustCompile(`^[01]:[0-9]{1,12}$`)
+
+func validReminded(v json.RawMessage) bool {
+	t, ok := text(v)
+	return ok && reminded.MatchString(t)
+}
+
+func oneOf(allowed ...string) func(json.RawMessage) bool {
+	return func(v json.RawMessage) bool {
+		t, ok := text(v)
+		return ok && slices.Contains(allowed, t)
+	}
 }
 
 func validLevel(v json.RawMessage) bool {
@@ -130,6 +162,7 @@ const (
 type Tunnel interface {
 	session.Tunnel
 	Traffic(tag string) (engine.Traffic, error)
+	Fetch(ctx context.Context, tag, url string, head map[string]string, timeout time.Duration) (*engine.Fetched, error)
 }
 
 type Config struct {
@@ -533,10 +566,10 @@ func (a *App) Subscribe(ctx context.Context, address string) error {
 	if err != nil || u.Scheme != "https" || u.Host == "" {
 		return fail(CodeBadURL, "the address must start with https://, a key with its scheme")
 	}
-	p, err := sub.Fetch(ctx, a.cfg.HTTP, u.String(), a.cfg.Device, "")
+	p, err := a.fetch(ctx, u.String(), "")
 	if errors.Is(err, sub.ErrFormat) || (err == nil && p.Format == sub.FormatLinks) {
 		named := u.JoinPath("json")
-		if again, failed := sub.Fetch(ctx, a.cfg.HTTP, named.String(), a.cfg.Device, ""); failed == nil && again.Format == sub.FormatJSON {
+		if again, failed := a.fetch(ctx, named.String(), ""); failed == nil && again.Format == sub.FormatJSON {
 			u, p, err = named, again, nil
 		}
 	}
@@ -544,6 +577,9 @@ func (a *App) Subscribe(ctx context.Context, address string) error {
 		err = fetchError(err)
 		a.Note("app", "subscription not added: "+err.Error())
 		return err
+	}
+	if p.Moved != "" {
+		return a.adopt(p.Moved, p)
 	}
 	return a.adopt(u.String(), p)
 }
@@ -556,17 +592,23 @@ func (a *App) Refresh(ctx context.Context) (bool, error) {
 	if st.URL == "" {
 		return false, nil
 	}
-	p, err := sub.Fetch(ctx, a.cfg.HTTP, st.URL, a.cfg.Device, st.Profile.ETag)
+	p, err := a.fetch(ctx, st.URL, st.Profile.ETag)
 	if errors.Is(err, sub.ErrNotModified) {
 		err = a.save(func(s *store.State) {
 			if s.Profile == nil {
 				return
 			}
 			s.FetchedAt = a.now()
-			if p != nil {
+			if p.Counted {
 				s.Profile.Usage = p.Usage
 			}
+			if p.Moved != "" {
+				s.URL = p.Moved
+			}
 		})
+		if p.Moved != "" {
+			a.Note("app", "the subscription moved to a new address")
+		}
 		if err == nil {
 			now := a.cfg.Store.Get()
 			a.plan(now, false)
@@ -580,10 +622,69 @@ func (a *App) Refresh(ctx context.Context) (bool, error) {
 		a.Note("app", "subscription not refreshed: "+err.Error())
 		return false, err
 	}
+	if p.Moved != "" {
+		a.Note("app", "the subscription moved to a new address")
+		return true, a.adoptAs(current(st), p.Moved, p)
+	}
 	return true, a.adopt(st.URL, p)
 }
 
 const renewDefault = 12 * time.Hour
+
+func (a *App) fetch(ctx context.Context, address, etag string) (*sub.Profile, error) {
+	p, err := sub.Fetch(ctx, a.cfg.HTTP, address, a.cfg.Device, etag)
+	var status *sub.StatusError
+	if err == nil || ctx.Err() != nil || errors.Is(err, sub.ErrNotModified) || errors.Is(err, sub.ErrFormat) ||
+		errors.Is(err, sub.ErrDowngrade) || errors.As(err, &status) {
+		return p, err
+	}
+	tag, ok := a.sess.Route()
+	if !ok {
+		return p, err
+	}
+	again, failed := sub.Fetch(ctx, &http.Client{Transport: carrier{a.cfg.Tunnel, tag}}, address, a.cfg.Device, etag)
+	if failed != nil && !errors.Is(failed, sub.ErrNotModified) {
+		return p, err
+	}
+	a.Note("app", "the subscription server did not answer directly; the subscription came through the tunnel")
+	return again, failed
+}
+
+type carrier struct {
+	tunnel Tunnel
+	tag    string
+}
+
+func (c carrier) RoundTrip(r *http.Request) (*http.Response, error) {
+	head := make(map[string]string, len(r.Header))
+	for k, v := range r.Header {
+		if len(v) > 0 {
+			head[k] = v[0]
+		}
+	}
+	wait := 30 * time.Second
+	if at, ok := r.Context().Deadline(); ok {
+		wait = time.Until(at)
+	}
+	if wait <= 0 {
+		return nil, context.DeadlineExceeded
+	}
+	f, err := c.tunnel.Fetch(r.Context(), c.tag, r.URL.String(), head, wait)
+	if err != nil {
+		return nil, err
+	}
+	return &http.Response{
+		Status:        fmt.Sprintf("%d %s", f.Status, http.StatusText(f.Status)),
+		StatusCode:    f.Status,
+		Proto:         "HTTP/1.1",
+		ProtoMajor:    1,
+		ProtoMinor:    1,
+		Header:        http.Header(f.Header),
+		Body:          io.NopCloser(bytes.NewReader(f.Body)),
+		ContentLength: int64(len(f.Body)),
+		Request:       r,
+	}, nil
+}
 
 func (a *App) plan(st store.State, failed bool) {
 	if st.URL == "" || st.Profile == nil || a.cfg.Renew < 0 {
@@ -1041,8 +1142,11 @@ func (a *App) Close() {
 }
 
 func (a *App) adopt(address string, p *sub.Profile) error {
+	return a.adoptAs(ident(address, p), address, p)
+}
+
+func (a *App) adoptAs(key, address string, p *sub.Profile) error {
 	before := a.cfg.Store.Get()
-	key := ident(address, p)
 	err := a.save(func(s *store.State) {
 		moved := s.Profile != nil && current(*s) != key
 		if moved {
@@ -1159,11 +1263,15 @@ func (a *App) onMeasure(cands []session.Candidate, measured []supervisor.Measure
 		if s.Delays == nil {
 			s.Delays = map[string]store.Delay{}
 		}
+		answered := slices.ContainsFunc(measured, supervisor.Measurement.OK)
 		for i, m := range measured {
 			switch {
 			case m.OK():
 				s.Delays[cands[i].ID] = store.Delay{Ms: max(m.Delay.Milliseconds(), 1), At: at}
-			case m.Code != supervisor.CodeCanceled:
+			case m.Code == supervisor.CodeCanceled:
+			case answered && m.Code != supervisor.CodeUnavailable:
+				s.Delays[cands[i].ID] = store.Delay{At: at}
+			default:
 				delete(s.Delays, cands[i].ID)
 			}
 		}

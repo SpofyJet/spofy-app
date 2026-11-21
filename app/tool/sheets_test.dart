@@ -40,6 +40,7 @@ Future<void> page(
   tester.view.devicePixelRatio = ratio;
   tester.view.physicalSize = size * ratio;
   addTearDown(tester.view.reset);
+  system(tester);
   final keys = [for (final _ in frames) GlobalKey()];
   await tester.pumpWidget(
     Directionality(
@@ -98,7 +99,7 @@ Future<void> page(
 }
 
 void main() {
-  setUpAll(loadFonts);
+  setUpAll(loadAssets);
 
   testWidgets('home', (tester) async {
     await sheet(tester, '1-home', [

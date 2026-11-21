@@ -1,3 +1,4 @@
+import 'dart:math';
 import 'dart:async';
 import 'dart:io';
 
@@ -9,6 +10,7 @@ import 'package:spofy/core/protocol.dart';
 import 'package:spofy/state/apps.dart';
 import 'package:spofy/state/model.dart';
 import 'package:spofy/ui/app.dart';
+import 'package:spofy/ui/flags.dart';
 import 'package:spofy/ui/servers.dart';
 
 class SilentTransport implements Transport {
@@ -81,7 +83,7 @@ const _names = [
   ('ie', 'Ирландия', 'IE', 74, 0, 'vless', 'raw', 'reality'),
   ('by', 'Беларусь', 'BY', 81, 0, 'vmess', 'ws', 'tls'),
   ('us', 'США', 'US', 142, 0, 'shadowsocks', 'raw', ''),
-  ('sg', 'Сингапур', 'SG', 0, 0, 'vless', 'xhttp', 'tls'),
+  ('sg', 'Сингапур', 'SG', -1, 0, 'vless', 'xhttp', 'tls'),
   ('bypass1', 'Обход 1', 'RU', 29, 0, 'vless', 'xhttp', 'tls'),
   ('bypass2', 'Обход 2', 'RU', 0, 0, 'vless', 'xhttp', 'tls'),
 ];
@@ -97,8 +99,8 @@ List<Server> servers({bool measured = true}) => [
       transport: transport,
       security: security,
       tier: tier,
-      delayMs: measured ? delay : 0,
-      measuredAt: measured && delay > 0 ? clock.millisecondsSinceEpoch ~/ 1000 - 600 : 0,
+      delayMs: measured ? max(delay, 0) : 0,
+      measuredAt: measured && delay != 0 ? clock.millisecondsSinceEpoch ~/ 1000 - 600 : 0,
     ),
 ];
 
@@ -204,17 +206,39 @@ Scene home(
   traffic: state.protecting ? const Traffic(up: 83 * 1024 * 1024, down: 1288490188) : const Traffic(),
 );
 
-Future<void> loadFonts() async {
+Future<void> loadAssets() async {
   final bytes = File('fonts/Geologica.ttf').readAsBytesSync();
   final loader = FontLoader('Geologica')..addFont(Future.value(ByteData.sublistView(bytes)));
   await loader.load();
+  for (final code in flagCodes) {
+    await precacheTestImage(AssetImage('assets/flags/$code.webp'));
+  }
 }
 
-Future<void> show(WidgetTester tester, Scene scene, Size size, {double textScale = 1}) async {
+void system(
+  WidgetTester tester, {
+  Brightness brightness = Brightness.dark,
+  List<Locale> locales = const [Locale('ru', 'RU')],
+}) {
+  tester.platformDispatcher.platformBrightnessTestValue = brightness;
+  tester.platformDispatcher.localesTestValue = locales;
+  addTearDown(tester.platformDispatcher.clearPlatformBrightnessTestValue);
+  addTearDown(tester.platformDispatcher.clearLocalesTestValue);
+}
+
+Future<void> show(
+  WidgetTester tester,
+  Scene scene,
+  Size size, {
+  double textScale = 1,
+  Brightness brightness = Brightness.dark,
+  List<Locale> locales = const [Locale('ru', 'RU')],
+}) async {
   const ratio = 1.0;
   tester.view.devicePixelRatio = ratio;
   tester.view.physicalSize = size * ratio;
   tester.platformDispatcher.textScaleFactorTestValue = textScale;
+  system(tester, brightness: brightness, locales: locales);
   addTearDown(tester.view.reset);
   addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
   await tester.pumpWidget(scene.app);

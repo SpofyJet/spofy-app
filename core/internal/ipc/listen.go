@@ -19,12 +19,28 @@ const (
 )
 
 type queue struct {
-	lines chan []byte
-	once  sync.Once
-	drop  func()
+	mu     sync.Mutex
+	closed bool
+	lines  chan []byte
+	once   sync.Once
+	drop   func()
+}
+
+func (q *queue) close() {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if !q.closed {
+		q.closed = true
+		close(q.lines)
+	}
 }
 
 func (q *queue) Write(b []byte) (int, error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.closed {
+		return 0, net.ErrClosed
+	}
 	select {
 	case q.lines <- bytes.Clone(b):
 		return len(b), nil
@@ -89,7 +105,7 @@ func Listen(ctx context.Context, l net.Listener, a *app.App, p *host.Platform) e
 				close(pumped)
 			}()
 			Serve(ctx, in, out, a, p)
-			close(out.lines)
+			out.close()
 			<-pumped
 			drop()
 			c.Close()

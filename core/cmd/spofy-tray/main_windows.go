@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"time"
 	"unicode/utf16"
 	"unsafe"
 
@@ -72,13 +73,15 @@ const (
 	cmdOpen   = 2
 	cmdQuit   = 3
 
-	timerAdd   = 1
-	timerStall = 2
-	timerQuit  = 3
+	timerAdd    = 1
+	timerStall  = 2
+	timerQuit   = 3
+	timerRemind = 4
 
-	addEvery  = 2000
-	stallWait = 20000
-	quitWait  = 5000
+	addEvery    = 2000
+	stallWait   = 20000
+	quitWait    = 5000
+	remindEvery = 30 * 60 * 1000
 )
 
 var (
@@ -187,9 +190,11 @@ func run() int {
 	defer windows.CloseHandle(single)
 	registerApplicationRestart.Call(0, 1|2|8)
 	s := &shell{}
+	s.model.System, _ = windows.GetUserPreferredUILanguages(windows.MUI_LANGUAGE_NAME)
 	if err := s.create(); err != nil {
 		return 1
 	}
+	setTimer.Call(uintptr(s.hwnd), timerRemind, remindEvery, 0)
 	ctx, cancel := context.WithCancel(context.Background())
 	served := make(chan struct{})
 	go func() {
@@ -227,7 +232,7 @@ func (s *shell) create() error {
 	if r, _, err := registerClassEx.Call(uintptr(unsafe.Pointer(&wc))); r == 0 {
 		return err
 	}
-	title, _ := windows.UTF16PtrFromString(tray.TextOpen)
+	title, _ := windows.UTF16PtrFromString(tray.App)
 	h, _, err := createWindowEx.Call(0, uintptr(unsafe.Pointer(class)), uintptr(unsafe.Pointer(title)), 0, 0, 0, 0, 0, 0, 0, uintptr(inst), 0)
 	if h == 0 {
 		return err
@@ -320,6 +325,8 @@ func (s *shell) proc(hwnd, m, w, l uintptr) uintptr {
 			}
 		case timerQuit:
 			destroyWindow.Call(hwnd)
+		case timerRemind:
+			s.reminder()
 		}
 		return 0
 	case wmQueryEndSession:
@@ -375,6 +382,7 @@ func (s *shell) refresh() {
 	for _, n := range notes {
 		s.notify(n)
 	}
+	s.reminder()
 	if s.quitting != 0 && (!linked || slices.Contains(answered, s.quitting)) {
 		destroyWindow.Call(uintptr(s.hwnd))
 	}
@@ -403,16 +411,29 @@ func (s *shell) place() {
 	killTimer.Call(uintptr(s.hwnd), timerAdd)
 }
 
-func (s *shell) notify(n tray.Note) {
-	if !s.added || windowShown() {
+func (s *shell) reminder() {
+	s.mu.Lock()
+	key, n := s.model.Reminder(time.Now())
+	s.mu.Unlock()
+	if n == nil || !s.notify(*n) {
 		return
+	}
+	s.mu.Lock()
+	s.model.Reminded(key)
+	s.mu.Unlock()
+	s.set(tray.RemindedKey, key)
+}
+
+func (s *shell) notify(n tray.Note) bool {
+	if !s.added || windowShown() {
+		return false
 	}
 	d := s.data(nifInfo)
 	put(d.InfoTitle[:], n.Title)
 	put(d.Info[:], n.Text)
 	d.InfoFlags = niifUser | niifLargeIcon | niifRespectQuietTime
 	d.BalloonIcon = s.large
-	notifyIcon(nimModify, d)
+	return notifyIcon(nimModify, d)
 }
 
 func notifyIcon(op uintptr, d *notifyIconData) bool {
@@ -445,7 +466,7 @@ func (s *shell) menu(x, y int32) {
 		toggle |= mfGrayed
 	}
 	item(toggle, cmdToggle, v.Toggle.Label)
-	item(mfString, cmdOpen, tray.TextOpen)
+	item(mfString, cmdOpen, v.Open)
 	appendMenu.Call(m, mfSeparator, 0, 0)
 	item(mfString, cmdQuit, v.Quit.Label)
 	setMenuDefaultItem.Call(m, cmdOpen, 0)

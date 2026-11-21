@@ -135,10 +135,10 @@ class _Loading extends StatelessWidget {
           child: const Align(alignment: Alignment.topCenter, child: Skeleton(width: 170, height: 16)),
         ),
         const SizedBox(height: Uptime.slot),
-        const Center(
+        Center(
           child: DecoratedBox(
             decoration: BoxDecoration(color: Ink.raised, shape: BoxShape.circle),
-            child: SizedBox.square(dimension: PowerControl.size),
+            child: const SizedBox.square(dimension: PowerControl.size),
           ),
         ),
         const Spacer(flex: 3),
@@ -158,6 +158,8 @@ class _Hidden extends StatelessWidget {
   @override
   Widget build(BuildContext context) => ExcludeSemantics(child: Opacity(opacity: 0, child: child));
 }
+
+const shopAddress = 'https://t.me/spofyvpnbot';
 
 class _Empty extends StatefulWidget {
   const _Empty({required this.model, required this.onManual});
@@ -210,10 +212,10 @@ class _EmptyState extends State<_Empty> {
                 : Text.rich(
                     TextSpan(
                       children: [
-                        const WidgetSpan(
+                        WidgetSpan(
                           alignment: PlaceholderAlignment.middle,
                           child: Padding(
-                            padding: EdgeInsets.only(right: 6),
+                            padding: const EdgeInsets.only(right: 6),
                             child: GlyphIcon(Glyph.warning, color: Ink.warning, size: 16),
                           ),
                         ),
@@ -228,6 +230,32 @@ class _EmptyState extends State<_Empty> {
           ),
         ),
         const Spacer(flex: 3),
+        if (widget.model.browse case final browse?)
+          Pressable(
+            label: problem.isEmpty ? '${S.buyAsk} ${S.buy}' : '${S.stuckAsk} ${S.stuck}',
+            onTap: () => browse(shopAddress),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(minHeight: 44),
+              child: Center(
+                child: ExcludeSemantics(
+                  child: Text.rich(
+                    TextSpan(
+                      text: '${problem.isEmpty ? S.buyAsk : S.stuckAsk} ',
+                      children: [
+                        TextSpan(
+                          text: problem.isEmpty ? S.buy : S.stuck,
+                          style: TextStyle(color: Ink.accent, fontWeight: FontWeight.w600),
+                        ),
+                      ],
+                    ),
+                    style: Ink.note,
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        const SizedBox(height: 4),
         QuietButton(label: S.manual, onTap: widget.onManual),
         const SizedBox(height: 8),
         PrimaryButton(label: S.pasteLink, busy: widget.model.running(Task.subscribe), onTap: _paste),
@@ -252,7 +280,7 @@ class _Stopped extends StatelessWidget {
     return _Stretch(
       children: [
         const Spacer(flex: 2),
-        const Center(child: GlyphIcon(Glyph.warning, color: Ink.warning, size: 40, stroke: 1.9)),
+        Center(child: GlyphIcon(Glyph.warning, color: Ink.warning, size: 40, stroke: 1.9)),
         const SizedBox(height: 16),
         Semantics(
           liveRegion: true,
@@ -422,7 +450,7 @@ class PowerControl extends StatelessWidget {
               decoration: BoxDecoration(color: fill, shape: BoxShape.circle),
             ),
             Center(child: GlyphIcon(troubled ? Glyph.warning : Glyph.power, color: ink, size: 56, stroke: 1.9)),
-            if (state.busy) const Spinner(size: size, color: Ink.accent, stroke: 4),
+            if (state.busy) Spinner(size: size, color: Ink.accent, stroke: 4),
           ],
         ),
       ),
