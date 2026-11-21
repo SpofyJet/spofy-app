@@ -2,6 +2,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
 import '../state/model.dart';
+import 'settings.dart';
 import 'strings.dart';
 import 'theme.dart';
 import 'widgets.dart';
@@ -145,7 +146,16 @@ class _ChoiceScreenState extends State<ChoiceScreen> {
                               ValueListenableBuilder<TextEditingValue>(
                                 valueListenable: _text,
                                 builder: (context, v, _) => v.text.isEmpty
-                                    ? Text(widget.ownHint, style: Ink.body.copyWith(color: Ink.faint), maxLines: 1)
+                                    ? Text(
+                                        switch (widget.setting) {
+                                          dnsKey => S.dnsExample,
+                                          probeUrlKey => S.probeExample,
+                                          _ => widget.ownHint,
+                                        },
+                                        style: Ink.body.copyWith(color: Ink.faint),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      )
                                     : const SizedBox.shrink(),
                               ),
                               Semantics(

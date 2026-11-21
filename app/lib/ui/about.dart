@@ -92,7 +92,7 @@ class _AboutScreenState extends State<AboutScreen> {
                         children: [
                           Text(S.app, style: Ink.wordmark),
                           const SizedBox(height: 6),
-                          Text(S.release(snapshot.version, snapshot.build), style: Ink.note),
+                          Selectable(child: Text(S.release(snapshot.version, snapshot.build), style: Ink.note)),
                         ],
                       ),
                     ),
@@ -110,9 +110,18 @@ class _AboutScreenState extends State<AboutScreen> {
                       QuietButton(label: S.updateCheck, busy: checking, onTap: checking ? null : _check),
                     ],
                     const SizedBox(height: 20),
-                    Tile(title: S.engine, subtitle: snapshot.engine.isEmpty ? '—' : snapshot.engine, arrow: false),
+                    Selectable(
+                      child: Tile(
+                        title: S.engine,
+                        subtitle: snapshot.engine.isEmpty ? '—' : snapshot.engine,
+                        arrow: false,
+                        wrap: true,
+                      ),
+                    ),
                     gap,
-                    Tile(title: S.device, subtitle: device.isEmpty ? '—' : device, arrow: false),
+                    Selectable(
+                      child: Tile(title: S.device, subtitle: device.isEmpty ? '—' : device, arrow: false, wrap: true),
+                    ),
                     gap,
                     Tile(
                       title: S.sourceCode,

@@ -42,10 +42,11 @@ class SubscriptionScreen extends StatelessWidget {
 }
 
 class _AddForm extends StatefulWidget {
-  const _AddForm({required this.model, required this.onDone, this.first = false});
+  const _AddForm({required this.model, required this.onDone, this.onCancel, this.first = false});
 
   final AppModel model;
   final VoidCallback onDone;
+  final VoidCallback? onCancel;
   final bool first;
 
   @override
@@ -122,16 +123,23 @@ class _AddFormState extends State<_AddForm> {
         if (widget.first) ...[
           Text(_given ? S.offeredHint : S.noSubscriptionHint, style: Ink.note),
           const SizedBox(height: 16),
-        ],
+        ] else
+          SectionTitle(S.newSubscription),
         Panel(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
           child: Stack(
             children: [
               ValueListenableBuilder<TextEditingValue>(
                 valueListenable: _link,
-                builder: (context, value, _) => value.text.isEmpty
-                    ? Text(S.linkHint, style: Ink.body.copyWith(color: Ink.faint))
-                    : const SizedBox.shrink(),
+                builder: (context, value, _) => ExcludeSemantics(
+                  child: Visibility(
+                    visible: value.text.isEmpty,
+                    maintainSize: true,
+                    maintainAnimation: true,
+                    maintainState: true,
+                    child: Text(S.linkHint, style: Ink.body.copyWith(color: Ink.faint)),
+                  ),
+                ),
               ),
               Semantics(
                 textField: true,
@@ -165,7 +173,19 @@ class _AddFormState extends State<_AddForm> {
         const SizedBox(height: 8),
         QuietButton(label: S.paste, onTap: busy ? null : _paste),
         const SizedBox(height: 8),
-        PrimaryButton(label: S.add, busy: busy, onTap: _submit),
+        if (widget.onCancel case final cancel?)
+          Row(
+            children: [
+              Expanded(
+                child: QuietButton(label: S.cancel, onTap: busy ? null : cancel),
+              ),
+              Expanded(
+                child: QuietButton(label: S.add, color: Ink.accent, busy: busy, onTap: _submit),
+              ),
+            ],
+          )
+        else
+          PrimaryButton(label: S.add, busy: busy, onTap: _submit),
       ],
     );
   }
@@ -206,6 +226,7 @@ class _DetailsState extends State<_Details> {
     final browse = model.browse;
     final all = model.subscriptions;
     final active = all.where((b) => b.active).firstOrNull;
+    final keys = active != null && active.links;
     final switching = model.running(Task.activate);
     return ListView(
       padding: const EdgeInsets.fromLTRB(Ink.gutter, 4, Ink.gutter, 16),
@@ -216,7 +237,7 @@ class _DetailsState extends State<_Details> {
             Tile(
               leading: CountryMark(b.links ? '#' : S.briefTitle(b).characters.first.toUpperCase(), active: b.active),
               title: S.briefTitle(b),
-              subtitle: S.briefLine(b, now),
+              subtitle: b.active && b.stop.isEmpty ? S.serversCount(b.servers) : S.briefLine(b, now),
               selected: b.active,
               arrow: false,
               wrap: true,
@@ -262,42 +283,61 @@ class _DetailsState extends State<_Details> {
           ),
           const SizedBox(height: 8),
         ],
-        if (failure?.task == Task.subscribe) ...[Notice(S.failure(failure!)), const SizedBox(height: 8)],
-        Panel(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              if (expiry.isNotEmpty) ...[
-                Text(left < 0 ? S.endedOn : S.validUntil, style: Ink.label),
+        if (failure?.task == Task.subscribe && !_adding) ...[Notice(S.failure(failure!)), const SizedBox(height: 8)],
+        if (keys)
+          Panel(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(S.ownKeys, style: Ink.label),
                 const SizedBox(height: 4),
-                Text(
-                  left < 0 ? S.date(DateTime.fromMillisecondsSinceEpoch(s.expire * 1000), now) : expiry,
-                  style: Ink.heading.copyWith(color: left <= 3 ? Ink.warning : Ink.text),
-                ),
-                const SizedBox(height: 18),
+                Text(S.serversCount(active.servers), style: Ink.heading),
               ],
-              Text(S.traffic, style: Ink.label),
-              const SizedBox(height: 4),
-              Text(S.usage(s), style: Ink.heading),
-              if (s.limited) ...[const SizedBox(height: 12), Meter(s.used / s.total)],
-            ],
+            ),
+          )
+        else
+          Panel(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (expiry.isNotEmpty) ...[
+                  Text(left < 0 ? S.endedOn : S.validUntil, style: Ink.label),
+                  const SizedBox(height: 4),
+                  Folded(
+                    [left < 0 ? S.date(DateTime.fromMillisecondsSinceEpoch(s.expire * 1000), now) : expiry]
+                        .expand((e) => e.split(' · '))
+                        .toList(),
+                    style: Ink.heading.copyWith(color: left <= 3 ? Ink.warning : Ink.text),
+                  ),
+                  const SizedBox(height: 18),
+                ],
+                Text(S.traffic, style: Ink.label),
+                const SizedBox(height: 4),
+                Folded(S.usage(s).split(' · '), style: Ink.heading),
+                if (s.limited) ...[const SizedBox(height: 12), Meter(s.used / s.total)],
+              ],
+            ),
           ),
-        ),
-        if (failure?.task == Task.refresh) ...[const SizedBox(height: 8), Notice(S.failure(failure!))],
         if (browse != null && page != null && page.isScheme('https')) ...[
           const SizedBox(height: 8),
           PrimaryButton(label: S.pageAction(s), onTap: () => browse(page.toString())),
         ],
-        if (active == null || !active.links) ...[
+        if (!keys) ...[
           const SizedBox(height: 8),
           QuietButton(label: S.refresh, busy: model.running(Task.refresh), onTap: model.refresh),
           if (S.fetched(s.fetchedAt, now).isNotEmpty)
             Text(S.fetched(s.fetchedAt, now), style: Ink.type(12, 400, Ink.faint), textAlign: TextAlign.center),
         ],
+        if (failure?.task == Task.refresh) ...[const SizedBox(height: 8), Notice(S.failure(failure!))],
         const SizedBox(height: 8),
         if (_adding)
-          Panel(
-            child: _AddForm(model: model, onDone: () => setState(() => _adding = false)),
+          _AddForm(
+            model: model,
+            onDone: () => setState(() => _adding = false),
+            onCancel: () {
+              model.dismiss();
+              setState(() => _adding = false);
+            },
           )
         else
           QuietButton(label: S.addAnother, onTap: () => setState(() => _adding = true)),

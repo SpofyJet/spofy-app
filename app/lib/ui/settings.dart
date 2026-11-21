@@ -312,15 +312,26 @@ class AdvancedScreen extends StatelessWidget {
                     ChoiceTile(Glyph.pulse, probeUrlKey, model: model, open: open),
                     gap,
                     Padding(
-                      padding: const EdgeInsets.fromLTRB(4, 4, 4, 8),
-                      child: Text(S.probeWaitHint, style: Ink.note),
+                      padding: const EdgeInsets.fromLTRB(4, 8, 4, 8),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(S.probeWait, style: Ink.strong),
+                          const SizedBox(height: 2),
+                          Text(S.probeWaitHint, style: Ink.note),
+                        ],
+                      ),
                     ),
-                    Segments<int>(
-                      options: [
-                        for (final n in const [2, 3, 4, 6, 10]) (n, S.seconds(n)),
-                      ],
-                      value: wait,
-                      onChanged: (value) => model.set(probeTimeoutKey, value == 4 ? null : value),
+                    Semantics(
+                      label: S.probeWait,
+                      container: true,
+                      child: Segments<int>(
+                        options: [
+                          for (final n in const [2, 3, 4, 6, 10]) (n, S.seconds(n)),
+                        ],
+                        value: wait,
+                        onChanged: (value) => model.set(probeTimeoutKey, value == 4 ? null : value),
+                      ),
                     ),
                   ],
                 ),

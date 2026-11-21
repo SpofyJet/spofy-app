@@ -18,7 +18,7 @@ String _stamp(int seconds) {
   return '${_two(t.day)}.${_two(t.month)} ${_two(t.hour)}:${_two(t.minute)}:${_two(t.second)}';
 }
 
-String supportReport(Snapshot snapshot, Report? report, DateTime now) {
+String supportReport(Snapshot snapshot, Report? report, DateTime now, {bool waiting = false}) {
   final c = snapshot.connection;
   final s = snapshot.subscription;
   final names = {for (final server in snapshot.servers) server.id: S.serverName(server)};
@@ -27,6 +27,7 @@ String supportReport(Snapshot snapshot, Report? report, DateTime now) {
     '${S.app} ${snapshot.version}',
     if (report != null) '${report.os} ${report.osVersion} · ${report.model}',
     if (report != null) '${S.reportDevice}: ${report.device}',
+    if (report == null && waiting) ...['', ''],
     if (s == null)
       S.noSubscriptionTitle
     else
@@ -71,6 +72,7 @@ class SupportScreen extends StatefulWidget {
 
 class _SupportScreenState extends State<SupportScreen> {
   Report? _report;
+  bool _waiting = true;
   bool _copied = false;
   Timer? _later;
 
@@ -82,8 +84,11 @@ class _SupportScreenState extends State<SupportScreen> {
 
   Future<void> _load() async {
     final report = await widget.model.report();
-    if (mounted && report != null) {
-      setState(() => _report = report);
+    if (mounted) {
+      setState(() {
+        _report = report ?? _report;
+        _waiting = false;
+      });
     }
   }
 
@@ -109,7 +114,7 @@ class _SupportScreenState extends State<SupportScreen> {
       child: ListenableBuilder(
         listenable: widget.model,
         builder: (context, _) {
-          final text = supportReport(widget.model.snapshot, _report, widget.now());
+          final text = supportReport(widget.model.snapshot, _report, widget.now(), waiting: _waiting);
           final address = Uri.tryParse(widget.model.subscription?.supportUrl ?? '');
           final browse = widget.model.browse;
           return Column(
@@ -127,7 +132,7 @@ class _SupportScreenState extends State<SupportScreen> {
                     padding: EdgeInsets.zero,
                     child: SingleChildScrollView(
                       padding: const EdgeInsets.all(16),
-                      child: Text(text, style: Ink.label.copyWith(height: 1.45)),
+                      child: Selectable(child: Text(text, style: Ink.label.copyWith(height: 1.45))),
                     ),
                   ),
                 ),

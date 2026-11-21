@@ -125,7 +125,14 @@ class _ServersScreenState extends State<ServersScreen> {
           final rows = <Widget>[
             if (failure?.task == Task.measure) Notice(S.failure(failure!)),
             if (servers.length > 6) SearchField(controller: _query, hint: S.search, clear: S.appsClear),
-            if (query.isEmpty)
+            if (servers.isEmpty) ...[
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 24, 16, 0),
+                child: Balanced(S.noServers, style: Ink.note),
+              ),
+              QuietButton(label: S.refreshSubscription, busy: model.running(Task.refresh), onTap: model.refresh),
+              if (failure?.task == Task.refresh) Notice(S.failure(failure!)),
+            ] else if (query.isEmpty)
               Tile(
                 leading: GlyphMark(Glyph.bolt, color: Ink.accent),
                 title: S.auto,
@@ -156,10 +163,10 @@ class _ServersScreenState extends State<ServersScreen> {
                 title: S.servers,
                 onBack: widget.onDone,
                 action: RoundButton(
-                  glyph: Glyph.refresh,
+                  glyph: Glyph.speed,
                   label: measuring ? S.measuring : S.measure,
                   busy: measuring,
-                  onTap: model.measure,
+                  onTap: servers.isEmpty ? null : model.measure,
                 ),
               ),
               Expanded(
@@ -248,6 +255,9 @@ class ServerTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final via = S.via(server);
     final delay = S.answer(server);
+    final tone = server.silent ? Ink.warning : delayColor(server.delayMs);
+    final tight = MediaQuery.textScalerOf(context).scale(100) > 115 || MediaQuery.sizeOf(context).width < 340;
+    final line = Ink.type(12, 400, selected ? Ink.accent : Ink.faint);
     return Pressable(
       label: [title, via, delay].join(', '),
       onTap: onTap,
@@ -269,24 +279,20 @@ class ServerTile extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Text(title, style: Ink.strong, maxLines: 1, overflow: TextOverflow.ellipsis),
+                      Text(title, style: Ink.strong, maxLines: tight ? 2 : 1, overflow: TextOverflow.ellipsis),
                       const SizedBox(height: 2),
-                      Text(
-                        via,
-                        style: Ink.type(12, 400, selected ? Ink.accent : Ink.faint),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
+                      if (tight)
+                        Folded([via, delay], style: line, last: tone)
+                      else
+                        Text(via, style: line, maxLines: 1, overflow: TextOverflow.ellipsis),
                     ],
                   ),
                 ),
-                Padding(
-                  padding: const EdgeInsets.only(left: 12),
-                  child: Text(
-                    delay,
-                    style: Ink.note.copyWith(color: server.silent ? Ink.warning : delayColor(server.delayMs)),
+                if (!tight)
+                  Padding(
+                    padding: const EdgeInsets.only(left: 12),
+                    child: Text(delay, style: Ink.note.copyWith(color: tone)),
                   ),
-                ),
                 if (selected)
                   Padding(
                     padding: const EdgeInsets.only(left: 10),
@@ -313,6 +319,7 @@ class PlaceTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final best = place.best;
     final count = S.serversCount(place.servers.length);
+    final tight = MediaQuery.textScalerOf(context).scale(100) > 115 || MediaQuery.sizeOf(context).width < 340;
     return Semantics(
       expanded: open,
       child: Pressable(
@@ -332,31 +339,37 @@ class PlaceTile extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Text(place.name, style: Ink.strong, maxLines: 1, overflow: TextOverflow.ellipsis),
+                      Text(place.name, style: Ink.strong, maxLines: tight ? 2 : 1, overflow: TextOverflow.ellipsis),
                       const SizedBox(height: 2),
-                      Text.rich(
-                        TextSpan(
-                          text: count,
-                          children: [
-                            if (best > 0) ...[
-                              const TextSpan(text: ' · '),
-                              TextSpan(
-                                text: S.best(best),
-                                style: TextStyle(color: delayColor(best)),
-                              ),
-                            ] else if (place.silent) ...[
-                              const TextSpan(text: ' · '),
-                              TextSpan(
-                                text: S.silent,
-                                style: TextStyle(color: Ink.warning),
-                              ),
+                      if (tight)
+                        Folded([
+                          count,
+                          if (best > 0) S.best(best) else if (place.silent) S.silent,
+                        ], last: best > 0 ? delayColor(best) : (place.silent ? Ink.warning : null))
+                      else
+                        Text.rich(
+                          TextSpan(
+                            text: count,
+                            children: [
+                              if (best > 0) ...[
+                                const TextSpan(text: ' · '),
+                                TextSpan(
+                                  text: S.best(best),
+                                  style: TextStyle(color: delayColor(best)),
+                                ),
+                              ] else if (place.silent) ...[
+                                const TextSpan(text: ' · '),
+                                TextSpan(
+                                  text: S.silent,
+                                  style: TextStyle(color: Ink.warning),
+                                ),
+                              ],
                             ],
-                          ],
+                          ),
+                          style: Ink.note,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                         ),
-                        style: Ink.note,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
                     ],
                   ),
                 ),
