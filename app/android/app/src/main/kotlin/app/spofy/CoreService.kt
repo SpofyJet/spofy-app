@@ -1,5 +1,6 @@
 package app.spofy
 
+import android.annotation.TargetApi
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -12,6 +13,7 @@ import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
+import android.net.InetAddresses
 import android.net.LocalSocket
 import android.net.LocalSocketAddress
 import android.net.Network
@@ -22,13 +24,17 @@ import android.os.Binder
 import android.os.Build
 import android.os.IBinder
 import android.os.Parcel
+import android.os.UserHandle
 import android.service.quicksettings.TileService
+import android.system.OsConstants
 import android.util.Log
 import java.io.File
 import java.io.FileDescriptor
 import java.io.IOException
+import java.net.InetSocketAddress
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 import org.json.JSONObject
@@ -45,12 +51,16 @@ class CoreService : VpnService() {
     }
     private val writing = Any()
     private val asks = Executors.newSingleThreadExecutor()
+    private val owners = Executors.newFixedThreadPool(4)
     private var core: Process? = null
     private var link: LocalSocket? = null
     private var sent = 100
 
     @Volatile
     private var closing = false
+
+    @Volatile
+    private var routed: Routed? = null
 
     @Volatile
     private var shown = false
@@ -144,6 +154,7 @@ class CoreService : VpnService() {
     override fun onDestroy() {
         closing = true
         release()
+        owners.shutdownNow()
         super.onDestroy()
     }
 
@@ -193,7 +204,7 @@ class CoreService : VpnService() {
         val socket = LocalSocket()
         socket.connect(LocalSocketAddress(path.path, LocalSocketAddress.Namespace.FILESYSTEM))
         link = socket
-        send(JSONObject().put("id", 1).put("op", "platform"))
+        send(JSONObject().put("id", 1).put("op", "platform").put("owners", Build.VERSION.SDK_INT >= 29))
         asks.execute {
             ready = true
             while (true) {
@@ -274,6 +285,13 @@ class CoreService : VpnService() {
         val answer = JSONObject().put("answer", message.getLong("ask"))
         when (message.optString("op")) {
             "tun" -> tunnel(answer, message.getJSONObject("tun"))
+            "owner" -> {
+                val flow = message.optJSONObject("flow")
+                try {
+                    owners.execute { send(answer.put("ok", true).put("in", flow != null && Build.VERSION.SDK_INT >= 29 && inside(flow))) }
+                } catch (e: RejectedExecutionException) {
+                }
+            }
             "untun" -> {
                 if (!wanted) {
                     lower()
@@ -307,11 +325,14 @@ class CoreService : VpnService() {
             val chosen = apps?.optJSONArray("list")
             val names = (0 until (chosen?.length() ?: 0)).map { chosen!!.getString(it) }.filter { it != packageName }
             var only = 0
+            val inside = mutableSetOf<Int>()
+            val outside = mutableSetOf(android.os.Process.myUid())
             if (mode == "only") {
                 for (name in names) {
                     try {
                         builder.addAllowedApplication(name)
                         only++
+                        inside.add(packageManager.getPackageUid(name, 0))
                     } catch (e: PackageManager.NameNotFoundException) {
                     }
                 }
@@ -321,15 +342,20 @@ class CoreService : VpnService() {
                 for (name in if (mode == "except") names else emptyList()) {
                     try {
                         builder.addDisallowedApplication(name)
+                        outside.add(packageManager.getPackageUid(name, 0))
                     } catch (e: PackageManager.NameNotFoundException) {
                     }
                 }
             }
+            val rule = Routed(if (only > 0) inside else null, outside)
             if (Build.VERSION.SDK_INT >= 29) {
                 builder.setMetered(false)
             }
             val before = tunnels()
-            builder.establish()?.also { settle(before) }
+            builder.establish()?.also {
+                routed = rule
+                settle(before)
+            }
         } catch (e: Exception) {
             if (BuildConfig.DEBUG) {
                 Log.e(TAG, "no tunnel", e)
@@ -344,6 +370,34 @@ class CoreService : VpnService() {
         send(answer.put("ok", true).put("file", true), tunnel.fileDescriptor)
         tunnel.close()
     }
+
+    @TargetApi(29)
+    private fun inside(flow: JSONObject): Boolean {
+        val rule = routed ?: return false
+        val began = System.nanoTime()
+        val uid = try {
+            getSystemService(ConnectivityManager::class.java).getConnectionOwnerUid(
+                if (flow.getString("network") == "udp") OsConstants.IPPROTO_UDP else OsConstants.IPPROTO_TCP,
+                address(flow.getString("source")),
+                address(flow.getString("destination")),
+            )
+        } catch (e: Exception) {
+            android.os.Process.INVALID_UID
+        }
+        val inside = uid != android.os.Process.INVALID_UID &&
+            UserHandle.getUserHandleForUid(uid) == android.os.Process.myUserHandle() &&
+            (rule.only?.contains(uid) ?: (uid !in rule.out))
+        note("owner ${flow.optString("network")} uid=$uid in=$inside us=${(System.nanoTime() - began) / 1000} from=${flow.optString("source")} to=${flow.optString("destination")}")
+        return inside
+    }
+
+    @TargetApi(29)
+    private fun address(text: String): InetSocketAddress {
+        val at = text.lastIndexOf(':')
+        return InetSocketAddress(InetAddresses.parseNumericAddress(text.substring(0, at).removeSurrounding("[", "]")), text.substring(at + 1).toInt())
+    }
+
+    private class Routed(val only: Set<Int>?, val out: Set<Int>)
 
     private fun tunnels(): Set<String> {
         if (Build.VERSION.SDK_INT >= 29) {

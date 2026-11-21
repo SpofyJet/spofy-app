@@ -282,6 +282,7 @@ func (o served) run(ctx context.Context, out io.Writer) error {
 		g = guards(wall, device(opts.Tun.Name))
 	}
 	var platform *host.Platform
+	var owner supervisor.Owner
 	var carried func() *os.File
 	var retune func() (bool, error)
 	var a *app.App
@@ -290,6 +291,7 @@ func (o served) run(ctx context.Context, out io.Writer) error {
 			return errors.New("-platform needs -listen and the tun mode")
 		}
 		platform = &host.Platform{}
+		owner = platform
 		t := &host.Tun{Platform: platform, Spec: host.Spec{
 			Name: opts.Tun.Name, MTU: opts.Tun.MTU, Addresses: []string{"172.19.0.1/30", "fdfe:5f0f::1/126"}, Routes: []string{"0.0.0.0/0", "::/0"}, DNS: []string{resolver},
 		}}
@@ -317,6 +319,7 @@ func (o served) run(ctx context.Context, out io.Writer) error {
 		Guard:     g,
 		HoldGuard: true,
 		Tunnel:    carried,
+		Owner:     owner,
 		Command:   cmd,
 		OnEvent: func(e supervisor.Event) {
 			switch e.Kind {

@@ -60,6 +60,9 @@ func TestMain(m *testing.M) {
 	case "tunnel":
 		tunnelEngine()
 		os.Exit(0)
+	case "asking":
+		askingEngine()
+		os.Exit(0)
 	case "parent":
 		cfg, _ := os.ReadFile(os.Getenv("SPOFY_TEST_CONFIG"))
 		s := New(Options{Command: child("serve")})
@@ -569,5 +572,57 @@ func TestGuardHeldAfterCrashLoopInStrictMode(t *testing.T) {
 	}
 	if up, _ := g.state(); up {
 		t.Fatal("guard is still up after the user stopped")
+	}
+}
+
+func askingEngine() {
+	say := json.NewEncoder(os.Stdout)
+	say.Encode(engine.Reply{Ev: "ready"})
+	sc := bufio.NewScanner(os.Stdin)
+	var start uint64
+	verdicts := map[uint64]bool{}
+	for sc.Scan() {
+		var req engine.Request
+		json.Unmarshal(sc.Bytes(), &req)
+		switch {
+		case req.Op == "start" && !req.Owners:
+			say.Encode(engine.Reply{Re: req.ID, Code: engine.CodeStart, Error: "not asked to check owners"})
+		case req.Op == "start":
+			start = req.ID
+			say.Encode(engine.Reply{Ev: "owner", Ask: 1, Flow: &engine.Flow{Network: "tcp", Source: "172.19.0.1:40000", Destination: "1.2.3.4:443"}})
+			say.Encode(engine.Reply{Ev: "owner", Ask: 2, Flow: &engine.Flow{Network: "udp", Source: "172.19.0.1:40001", Destination: "1.2.3.4:443"}})
+		case req.Op == "owner":
+			verdicts[req.Ask] = req.In
+			if len(verdicts) == 2 {
+				say.Encode(engine.Reply{Re: start, Code: "verdicts", Error: fmt.Sprintf("1=%v 2=%v", verdicts[1], verdicts[2])})
+			}
+		default:
+			say.Encode(engine.Reply{Re: req.ID, OK: true})
+		}
+	}
+}
+
+type owned map[string]bool
+
+func (o owned) Knows() bool { return o != nil }
+
+func (o owned) Inside(network, source, _ string) bool { return o[network+" "+source] }
+
+func TestTheEngineLearnsTheOwnerOfAConnectionFromThePlatform(t *testing.T) {
+	for _, c := range []struct {
+		owner Owner
+		want  string
+	}{
+		{owned{"tcp 172.19.0.1:40000": true}, "1=true 2=false"},
+		{owned{"udp 172.19.0.1:40001": true}, "1=false 2=true"},
+		{nil, "not asked to check owners"},
+		{owned(nil), "not asked to check owners"},
+	} {
+		s := New(Options{Command: child("asking"), Owner: c.owner})
+		_, err := s.Start([]byte(`{}`))
+		s.Close()
+		if err == nil || !strings.HasSuffix(err.Error(), c.want) {
+			t.Fatalf("owner %v: %v, want %q", c.owner, err, c.want)
+		}
 	}
 }

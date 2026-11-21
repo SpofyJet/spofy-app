@@ -36,6 +36,8 @@ type Request struct {
 	OK     bool            `json:"ok,omitempty"`
 	Error  string          `json:"error,omitempty"`
 	File   bool            `json:"file,omitempty"`
+	In     bool            `json:"in,omitempty"`
+	Owners bool            `json:"owners,omitempty"`
 }
 
 type Reply struct {
@@ -109,7 +111,7 @@ func Serve(ctx context.Context, r io.Reader, w io.Writer, a *app.App, p *host.Pl
 				file = files.TakeFile("tun")
 			}
 			if attached {
-				p.Answer(req.Answer, host.Answer{OK: req.OK, Error: req.Error, File: file})
+				p.Answer(req.Answer, host.Answer{OK: req.OK, Error: req.Error, File: file, In: req.In})
 			} else if file != nil {
 				file.Close()
 			}
@@ -127,7 +129,7 @@ func Serve(ctx context.Context, r io.Reader, w io.Writer, a *app.App, p *host.Pl
 			}
 			if !attached {
 				attached = true
-				detach = p.Attach(func(ask host.Ask) { send(ask) })
+				detach = p.Attach(func(ask host.Ask) { send(ask) }, req.Owners)
 			}
 			send(Reply{Re: req.ID, OK: true})
 		case "hello":

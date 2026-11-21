@@ -48,7 +48,7 @@ func TestSocketServesTheInterfaceAndThePlatform(t *testing.T) {
 	}
 	ui.conn.Close()
 
-	service.send(`{"id":2,"op":"platform"}`)
+	service.send(`{"id":2,"op":"platform","owners":true}`)
 	if m := service.reply(2); m["ok"] != true {
 		t.Fatalf("platform: %v", m)
 	}
@@ -109,6 +109,21 @@ func TestSocketServesTheInterfaceAndThePlatform(t *testing.T) {
 	service.send(fmt.Sprintf(`{"answer":%v,"ok":false,"error":"denied by the user"}`, m["ask"]))
 	if got := <-pending; got.err == nil || !strings.Contains(got.err.Error(), "denied by the user") {
 		t.Fatalf("refusal: %+v", got)
+	}
+
+	if !p.Knows() {
+		t.Fatal("the platform said it names the owners of connections")
+	}
+	inside := make(chan bool, 1)
+	go func() { inside <- p.Inside("tcp", "172.19.0.1:40000", "[2001:db8::1]:443") }()
+	m = service.until(func(m map[string]any) bool { return m["ask"] != nil })
+	flow, _ := m["flow"].(map[string]any)
+	if m["op"] != "owner" || flow["network"] != "tcp" || flow["source"] != "172.19.0.1:40000" || flow["destination"] != "[2001:db8::1]:443" {
+		t.Fatalf("owner ask: %v", m)
+	}
+	service.send(fmt.Sprintf(`{"answer":%v,"ok":true,"in":true}`, m["ask"]))
+	if !<-inside {
+		t.Fatal("the verdict of the platform was lost on the way")
 	}
 
 	pending = ask("tun", &host.Spec{})

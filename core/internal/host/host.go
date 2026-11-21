@@ -23,31 +23,42 @@ type Spec struct {
 	Apps      *Apps    `json:"apps,omitempty"`
 }
 
+type Flow struct {
+	Network     string `json:"network"`
+	Source      string `json:"source"`
+	Destination string `json:"destination"`
+}
+
 type Ask struct {
-	N   uint64 `json:"ask"`
-	Op  string `json:"op"`
-	Tun *Spec  `json:"tun,omitempty"`
+	N    uint64 `json:"ask"`
+	Op   string `json:"op"`
+	Tun  *Spec  `json:"tun,omitempty"`
+	Flow *Flow  `json:"flow,omitempty"`
 }
 
 type Answer struct {
 	OK    bool
 	Error string
 	File  *os.File
+	In    bool
 }
+
+const ownerWait = 1500 * time.Millisecond
 
 type Platform struct {
 	mu      sync.Mutex
 	send    func(Ask)
+	owners  bool
 	owner   int
 	next    uint64
 	waiting map[uint64]chan Answer
 }
 
-func (p *Platform) Attach(send func(Ask)) (detach func()) {
+func (p *Platform) Attach(send func(Ask), owners bool) (detach func()) {
 	p.mu.Lock()
 	p.owner++
 	owner := p.owner
-	p.send = send
+	p.send, p.owners = send, owners
 	p.mu.Unlock()
 	return func() {
 		p.mu.Lock()
@@ -55,7 +66,7 @@ func (p *Platform) Attach(send func(Ask)) (detach func()) {
 		if p.owner != owner {
 			return
 		}
-		p.send = nil
+		p.send, p.owners = nil, false
 		for n, ch := range p.waiting {
 			ch <- Answer{Error: "the platform is gone"}
 			delete(p.waiting, n)
@@ -78,7 +89,22 @@ func (p *Platform) Answer(n uint64, a Answer) bool {
 	return true
 }
 
+func (p *Platform) Knows() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.send != nil && p.owners
+}
+
+func (p *Platform) Inside(network, source, destination string) bool {
+	a, err := p.ask(Ask{Op: "owner", Flow: &Flow{Network: network, Source: source, Destination: destination}}, ownerWait)
+	return err == nil && a.In
+}
+
 func (p *Platform) Ask(op string, spec *Spec, wait time.Duration) (Answer, error) {
+	return p.ask(Ask{Op: op, Tun: spec}, wait)
+}
+
+func (p *Platform) ask(ask Ask, wait time.Duration) (Answer, error) {
 	p.mu.Lock()
 	send := p.send
 	if send == nil {
@@ -93,7 +119,8 @@ func (p *Platform) Ask(op string, spec *Spec, wait time.Duration) (Answer, error
 	}
 	p.waiting[n] = ch
 	p.mu.Unlock()
-	send(Ask{N: n, Op: op, Tun: spec})
+	ask.N = n
+	send(ask)
 	timer := time.NewTimer(wait)
 	defer timer.Stop()
 	var a Answer

@@ -1,8 +1,10 @@
-import http.server, json, os, re, signal, socket, socketserver, ssl, subprocess, sys, threading, time
+import http.server, ipaddress, json, os, re, signal, socket, socketserver, ssl, subprocess, sys, threading, time
 
 APK, CORE, OUT = sys.argv[1], os.path.abspath(sys.argv[2]), os.path.abspath(sys.argv[3])
 RELEASE = sys.argv[4] if len(sys.argv) > 4 else ""
 INSIDE = "127.0.0.2"
+RESOLVER = "172.19.0.2"
+PRIVATE = {"8.8.8.8", "8.8.4.4", "2001:4860:4860::8888", "2001:4860:4860::8844"}
 PACKAGE = "app.spofy"
 DATA = "/data/user/0/" + PACKAGE
 GATE = "10.0.2.2"
@@ -275,15 +277,20 @@ def piped(seconds, target, port):
 
 
 def learn():
+    until(lambda: shell("getprop sys.boot_completed").strip() == "1", 60, 1)
     phone["sdk"] = int(shell("getprop ro.build.version.sdk").strip() or 0)
     if not shell("timeout 1 true; echo rc=$?").endswith("rc=0"):
         phone["limit"] = ""
-    for tool in ("nc", "/system/xbin/nc", "toybox nc", "busybox nc"):
-        phone["nc"] = tool
-        if " 204" in fetch(HOST, 8081, "/generate_204"):
-            break
-    else:
+
+    def reach():
+        adb("wait-for-device", limit=30)
+        for tool in ("nc", "/system/xbin/nc", "toybox nc", "busybox nc"):
+            phone["nc"] = tool
+            if " 204" in fetch(HOST, 8081, "/generate_204"):
+                return True
         phone["nc"] = ""
+        return False
+    until(reach, 60, 2)
     print("device: Android %s (API %d, %s), connections are made with %r, time limit %r"
           % (shell("getprop ro.build.version.release").strip(), phone["sdk"], shell("getprop ro.product.cpu.abi").strip(), phone["nc"], phone["limit"]), flush=True)
     need("the device can open connections for the checks", phone["nc"] != "")
@@ -292,6 +299,32 @@ def learn():
 def fetch(target, port, path, host=None):
     request = "GET %s HTTP/1.0\\r\\nHost: %s\\r\\n\\r\\n" % (path, host or target)
     return shell("printf '%s' | %s" % (request, piped(8, target, port)), limit=30)
+
+
+def owners(since=None):
+    text = adb("logcat", "-d", "-s", "spofy:D", limit=60)
+    if since:
+        at = text.rfind(since)
+        text = text[at:] if at >= 0 else ""
+    return re.findall(r"owner (tcp|udp) uid=(-?\d+) in=(true|false) us=(\d+) from=\S+ to=(\S+)", text)
+
+
+def probe(o):
+    return o[4] == RESOLVER + ":853"
+
+
+def https(o):
+    host, port = o[4].rsplit(":", 1)
+    return port == "443" and host.strip("[]") in PRIVATE
+
+
+def past(o):
+    host, port = o[4].rsplit(":", 1)
+    return port == "53" or (o[0] == "tcp" and port == "853" and ipaddress.ip_address(host.strip("[]")).is_global)
+
+
+def named(name):
+    return re.search(r"PING %s \(\d+\.\d+\.\d+\.\d+\)" % re.escape(name), shell("su 2000,2000,3003 ping -c 1 -W 2 %s" % name, limit=15)) is not None
 
 
 def as_shell(path="/ip"):
@@ -379,12 +412,14 @@ def scenario():
     time.sleep(3)
     adb("wait-for-device")
     learn()
+    ready = until(lambda: "package:" in shell("pm path android"), 120)
     for attempt in (1, 2):
         code, out = run("adb", "install", "-r", "-g", APK, limit=240)
         if code == 0 and "Success" in out:
             break
+        adb("reconnect")
         adb("wait-for-device")
-    need("the app installs", code == 0 and "Success" in out, "attempt=%d %s" % (attempt, out[-300:]))
+    need("the app installs", code == 0 and "Success" in out, "attempt=%d code=%d packages_ready=%s booted=%s %s" % (attempt, code, bool(ready), shell("getprop sys.boot_completed"), out[-300:]))
     shell("appops set %s ACTIVATE_VPN allow" % PACKAGE)
     cert = open(OUT + "/cert.pem", "rb").read()
     run("adb", "shell", "run-as %s sh -c 'mkdir -p files && cat > files/test-ca.pem'" % PACKAGE, data=cert)
@@ -554,13 +589,69 @@ def scenario():
     mine, rest = as_shell(), fetch(HOST, 8081, "/ip")
     expect("an app taken out of the VPN goes past the tunnel and the rest stay inside", ok and "site sees" in mine and not mine.endswith(INSIDE) and rest.endswith("site sees " + INSIDE),
            "s=%.1f app=%s rest=%s device=%s" % (took, mine[-24:], rest[-24:], tunnel()))
+    run("adb", "push", os.path.join(os.path.dirname(CORE), "bind"), "/data/local/tmp/bind")
+    shell("chmod 755 /data/local/tmp/bind")
+    shell("log -p d -t spofy mark-bind")
+    bound = shell("su 2000,2000,3003 /data/local/tmp/bind %s %s 8081 /ip" % (tunnel(), HOST), limit=30)
+    tried = [o for o in owners("mark-bind") if o[2] == "false" and not probe(o) and not past(o)]
+    if "operation not permitted" in bound:
+        print("     this kernel does not let an app bind to an interface: the way past the app list through the tunnel does not exist here", flush=True)
+    else:
+        expect("an app taken out of the VPN cannot reach anything through the tunnel by binding to it",
+               "site sees" not in bound and bool(tried) and all(o[1] in ("2000", "-1") for o in tried),
+               "%s refused=%s" % (bound.strip()[-60:], [(o[0], o[1]) for o in tried]))
     ok, took = chosen({"mode": "only", "list": ["com.android.shell"]})
     mine, rest = as_shell(), fetch(HOST, 8081, "/ip")
     expect("only the chosen app is in the VPN: it goes through the tunnel and the rest go past it", ok and mine.endswith("site sees " + INSIDE) and "site sees" in rest and not rest.endswith(INSIDE),
            "s=%.1f app=%s rest=%s device=%s" % (took, mine[-24:], rest[-24:], tunnel()))
+    shell("log -p d -t spofy mark-only")
+    found = until(lambda: named("example.edu"), 20, 1)
+    lookups = [o for o in owners("mark-only") if o[4].endswith(":53")]
+    if phone["sdk"] >= 29:
+        expect("the only app in the VPN resolves names, and its DNS goes through the tunnel", bool(found) and bool(lookups) and all(o[1] == "2000" and o[2] == "true" for o in lookups),
+               "names=%s dns=%s" % (bool(found), [(o[0], o[1], o[2]) for o in lookups]))
+    else:
+        expect("the only app in the VPN resolves names", bool(found))
     ok, took = chosen(None)
     mine = as_shell()
     expect("the choice is cleared: every app is in the VPN again", ok and mine.endswith("site sees " + INSIDE) and through(), "s=%.1f app=%s device=%s" % (took, mine[-24:], tunnel()))
+    if phone["sdk"] >= 29:
+        expect("names resolve inside the VPN", bool(until(lambda: named("example.org"), 20, 1)))
+        shell("log -p d -t spofy mark-dot")
+        shell("settings put global private_dns_specifier dns.google; settings put global private_dns_mode hostname")
+        began = time.time()
+        strict = until(lambda: named("example.net"), 60, 1)
+        expect("with the system's private DNS set to a server, names resolve inside the VPN", bool(strict), "s=%.1f" % (time.time() - began))
+        ok, took = chosen({"mode": "only", "list": ["com.android.shell"]})
+        began = time.time()
+        strict = ok and until(lambda: named("www.example.com"), 60, 1)
+        expect("with the system's private DNS set to a server, names resolve for the only app in the VPN", bool(strict), "s=%.1f" % (time.time() - began))
+        shell("settings put global private_dns_mode opportunistic; settings delete global private_dns_specifier")
+        ok, took = chosen(None)
+        expect("private DNS back to automatic and every app in the VPN again", ok and through(), "s=%.1f" % took)
+        dot = [o for o in owners("mark-dot") if o[4].endswith(":853") or o[2] == "false"]
+        print("     private DNS: %s" % (", ".join("%s uid=%s %s to=%s" % (o[0], o[1], "inside" if o[2] == "true" else "past the tunnel" if past(o) else "refused", o[4]) for o in dot) or "none"), flush=True)
+    checked = owners()
+    log = adb("logcat", "-d", "-s", "spofy:D", limit=60).splitlines()
+    probes = [o for o in checked if o[2] == "false" and probe(o)]
+    passed = [o for o in checked if o[2] == "false" and past(o)]
+    tls = [o for o in checked if o[2] == "false" and https(o)]
+    refused = [o for o in checked if o[2] == "false" and not probe(o) and not past(o) and not https(o)]
+    if probes:
+        print("     the system's check for DNS over TLS on the tunnel's DNS address was refused %d times: there is no such server, it uses plain DNS there" % len(probes), flush=True)
+    if tls:
+        print("     the system's DNS over HTTPS to the private DNS server was refused %d times: it then uses DNS over TLS, which goes past the tunnel" % len(tls), flush=True)
+    if passed:
+        print("     DNS whose owner the system does not name went past the tunnel %d times (port 53 %d, DNS over TLS %d)" % (
+            len(passed), sum(o[4].endswith(":53") for o in passed), sum(o[4].endswith(":853") for o in passed)), flush=True)
+    expect("no connection of an app inside the VPN was refused", len(refused) == len(tried),
+           "refused=%d of them while binding=%d: %s" % (len(refused), len(tried),
+                                                         " | ".join(line[:18] + " " + line.split("): ", 1)[-1] for line in log if "in=false" in line or "mark-" in line)))
+    if checked:
+        took = sorted(int(o[3]) for o in checked)
+        print("     owners asked %d times (tcp %d, udp %d), refused %d, owner unknown %d, lookup p50 %.1f ms p95 %.1f ms max %.1f ms" % (
+            len(checked), sum(o[0] == "tcp" for o in checked), sum(o[0] == "udp" for o in checked), sum(o[2] == "false" for o in checked),
+            sum(o[1] == "-1" for o in checked), took[len(took) // 2] / 1000, took[len(took) * 95 // 100] / 1000, took[-1] / 1000), flush=True)
 
     d = ui.call("disconnect")
     gone = until(lambda: tunnel() == "", 10)
