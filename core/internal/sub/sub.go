@@ -45,11 +45,13 @@ type Profile struct {
 	ETag        string            `json:"etag"`
 	Servers     []Server          `json:"servers"`
 	Notes       []string          `json:"notes,omitempty"`
+	Format      string            `json:"format"`
 }
 
 func Parse(body []byte, h http.Header) (*Profile, error) {
 	body = bytes.TrimSpace(bytes.TrimPrefix(body, []byte("\xef\xbb\xbf")))
 	var raws []json.RawMessage
+	format := FormatJSON
 	switch {
 	case len(body) > 0 && body[0] == '[':
 		if err := json.Unmarshal(body, &raws); err != nil {
@@ -61,7 +63,7 @@ func Parse(body []byte, h http.Header) (*Profile, error) {
 		}
 		raws = []json.RawMessage{body}
 	default:
-		return nil, ErrFormat
+		raws, format = links(string(body)), FormatLinks
 	}
 	p := &Profile{
 		Title:       decode(h.Get("Profile-Title")),
@@ -72,6 +74,7 @@ func Parse(body []byte, h http.Header) (*Profile, error) {
 		Usage:       usage(h.Get("Subscription-Userinfo")),
 		Flags:       map[string]string{},
 		ETag:        h.Get("Etag"),
+		Format:      format,
 	}
 	for k, v := range h {
 		lk := strings.ToLower(k)
@@ -79,6 +82,10 @@ func Parse(body []byte, h http.Header) (*Profile, error) {
 			p.Flags[strings.TrimPrefix(lk, "x-")] = v[0]
 		}
 	}
+	return collect(p, raws)
+}
+
+func collect(p *Profile, raws []json.RawMessage) (*Profile, error) {
 	seen := map[string]int{}
 	for _, raw := range raws {
 		s, real, ok := server(raw)
@@ -106,12 +113,23 @@ func decode(v string) string {
 	if !ok {
 		return v
 	}
+	b, _ := unbase64(rest)
+	return string(b)
+}
+
+func unbase64(v string) ([]byte, bool) {
+	v = strings.Map(func(r rune) rune {
+		if unicode.IsSpace(r) {
+			return -1
+		}
+		return r
+	}, v)
 	for _, enc := range []*base64.Encoding{base64.StdEncoding, base64.RawStdEncoding, base64.URLEncoding, base64.RawURLEncoding} {
-		if b, err := enc.DecodeString(rest); err == nil {
-			return string(b)
+		if b, err := enc.DecodeString(v); err == nil {
+			return b, true
 		}
 	}
-	return ""
+	return nil, false
 }
 
 func interval(v string) time.Duration {

@@ -500,9 +500,9 @@ func (a *App) Subscribe(ctx context.Context, address string) error {
 		return fail(CodeBadURL, "the address must start with https://")
 	}
 	p, err := sub.Fetch(ctx, a.cfg.HTTP, u.String(), a.cfg.Device, "")
-	if errors.Is(err, sub.ErrFormat) {
+	if errors.Is(err, sub.ErrFormat) || (err == nil && p.Format == sub.FormatLinks) {
 		named := u.JoinPath("json")
-		if again, failed := sub.Fetch(ctx, a.cfg.HTTP, named.String(), a.cfg.Device, ""); failed == nil {
+		if again, failed := sub.Fetch(ctx, a.cfg.HTTP, named.String(), a.cfg.Device, ""); failed == nil && again.Format == sub.FormatJSON {
 			u, p, err = named, again, nil
 		}
 	}

@@ -58,7 +58,8 @@ type Panel struct {
 	last    http.Header
 	usage   string
 	holding chan struct{}
-	links   bool
+	links   []byte
+	noJSON  bool
 	paths   []string
 }
 
@@ -77,8 +78,13 @@ func (p *Panel) serve(w http.ResponseWriter, r *http.Request) {
 	p.last = r.Header.Clone()
 	p.paths = append(p.paths, r.URL.Path)
 	body, header, status, usage, holding := p.body, p.header.Clone(), p.status, p.usage, p.holding
-	if p.links && !strings.HasSuffix(r.URL.Path, "/json") {
-		body, header = []byte("dmxlc3M6Ly9saW5rcy5leGFtcGxl"), http.Header{"Content-Type": {"text/plain; charset=utf-8"}}
+	named := strings.HasSuffix(r.URL.Path, "/json")
+	if p.links != nil && !named {
+		body = p.links
+		header.Set("Content-Type", "text/plain; charset=utf-8")
+	}
+	if p.noJSON && named && status == 0 {
+		status = http.StatusNotFound
 	}
 	p.mu.Unlock()
 	if holding != nil {
@@ -150,9 +156,15 @@ func (p *Panel) Hold() (release func()) {
 	}
 }
 
-func (p *Panel) Links() {
+func (p *Panel) Links(list string) {
 	p.mu.Lock()
-	p.links = true
+	p.links = []byte(list)
+	p.mu.Unlock()
+}
+
+func (p *Panel) WithoutJSON() {
+	p.mu.Lock()
+	p.noJSON = true
 	p.mu.Unlock()
 }
 
@@ -259,6 +271,14 @@ func key(cfg []byte) string {
 	b, _ := json.Marshal(c.Outbounds[0])
 	sum := sha256.Sum256(b)
 	return string(sum[:])
+}
+
+func (t *Tunnel) Know(servers []sub.Server) {
+	t.mu.Lock()
+	for _, s := range servers {
+		t.ids[key(s.Config)] = s.ID
+	}
+	t.mu.Unlock()
 }
 
 func (t *Tunnel) Answer(delays map[string]time.Duration) {
