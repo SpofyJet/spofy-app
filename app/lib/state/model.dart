@@ -136,6 +136,8 @@ class AppModel extends ChangeNotifier {
 
   bool running(Task task) => _running.contains(task);
 
+  bool get reviving => _reviving;
+
   Server? get current => snapshot.server(connection.server);
 
   Future<void> start() async {
@@ -178,6 +180,7 @@ class AppModel extends ChangeNotifier {
       return;
     }
     _reviving = true;
+    _changed();
     try {
       final client = await open();
       if (_disposed) {

@@ -1,5 +1,7 @@
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
@@ -31,6 +33,7 @@ class Pressable extends StatefulWidget {
 class _PressableState extends State<Pressable> {
   bool _down = false;
   bool _focused = false;
+  bool _hovered = false;
 
   void _press(bool down) {
     if (_down != down) {
@@ -51,6 +54,7 @@ class _PressableState extends State<Pressable> {
         enabled: enabled,
         mouseCursor: enabled ? SystemMouseCursors.click : MouseCursor.defer,
         onShowFocusHighlight: (focused) => setState(() => _focused = focused),
+        onShowHoverHighlight: (hovered) => setState(() => _hovered = hovered),
         actions: {
           ActivateIntent: CallbackAction<ActivateIntent>(
             onInvoke: (_) {
@@ -76,6 +80,7 @@ class _PressableState extends State<Pressable> {
             child: DecoratedBox(
               position: DecorationPosition.foreground,
               decoration: BoxDecoration(
+                color: _hovered && enabled ? Ink.text.withAlpha(0x0F) : null,
                 borderRadius: widget.radius,
                 border: _focused ? Border.all(color: Ink.accent, width: 2) : null,
               ),
@@ -227,58 +232,59 @@ class Tile extends StatelessWidget {
     final trailingColor = this.trailingColor ?? Ink.muted;
     final tight = MediaQuery.textScalerOf(context).scale(100) > 115 || MediaQuery.sizeOf(context).width < 340;
     final folded = tight && subtitle.isNotEmpty && trailing.isNotEmpty;
+    Widget side(Widget child) => wrap ? SizedBox(height: 40, child: Center(child: child)) : child;
     final row = Panel(
       color: selected ? Color.alphaBlend(Ink.selected, Ink.surface) : Ink.surface,
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       child: ConstrainedBox(
         constraints: const BoxConstraints(minHeight: 40),
         child: Row(
+          crossAxisAlignment: wrap ? CrossAxisAlignment.start : CrossAxisAlignment.center,
           children: [
             if (leading != null) ...[leading!, const SizedBox(width: 12)],
             Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(title, style: Ink.strong, maxLines: wrap ? 2 : 1, overflow: TextOverflow.ellipsis),
-                  if (subtitle.isNotEmpty)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 2),
-                      child: Text.rich(
-                        TextSpan(
-                          text: folded ? subtitle.replaceAll(' ', '\u00A0') : subtitle,
-                          children: [
-                            if (folded) ...[
-                              const TextSpan(text: ' · '),
-                              TextSpan(
-                                text: trailing.replaceAll(' ', '\u00A0'),
-                                style: TextStyle(color: trailingColor),
-                              ),
-                            ],
-                          ],
-                        ),
-                        style: Ink.note,
-                        maxLines: wrap ? null : (tight ? 2 : 1),
-                        overflow: wrap ? TextOverflow.clip : TextOverflow.ellipsis,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(minHeight: wrap ? 40 : 0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(title, style: Ink.strong, maxLines: wrap ? 2 : 1, overflow: TextOverflow.ellipsis),
+                    if (subtitle.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 2),
+                        child: wrap || tight
+                            ? Folded([
+                                ...subtitle.split(' · '),
+                                if (folded) trailing,
+                              ], last: folded ? trailingColor : null)
+                            : Text(subtitle, style: Ink.note, maxLines: 1, overflow: TextOverflow.ellipsis),
                       ),
-                    ),
-                ],
+                  ],
+                ),
               ),
             ),
             if (trailing.isNotEmpty && !folded)
-              Padding(
-                padding: const EdgeInsets.only(left: 12),
-                child: Text(trailing, style: Ink.note.copyWith(color: trailingColor)),
+              side(
+                Padding(
+                  padding: const EdgeInsets.only(left: 12),
+                  child: Text(trailing, style: Ink.note.copyWith(color: trailingColor)),
+                ),
               ),
             if (selected)
-              Padding(
-                padding: const EdgeInsets.only(left: 10),
-                child: GlyphIcon(Glyph.check, color: Ink.accent, size: 20),
+              side(
+                Padding(
+                  padding: const EdgeInsets.only(left: 10),
+                  child: GlyphIcon(Glyph.check, color: Ink.accent, size: 20),
+                ),
               )
             else if (arrow && onTap != null)
-              Padding(
-                padding: const EdgeInsets.only(left: 6),
-                child: GlyphIcon(Glyph.forward, color: Ink.faint, size: 20),
+              side(
+                Padding(
+                  padding: const EdgeInsets.only(left: 6),
+                  child: GlyphIcon(Glyph.forward, color: Ink.faint, size: 20),
+                ),
               ),
           ],
         ),
@@ -288,10 +294,236 @@ class Tile extends StatelessWidget {
       return row;
     }
     return Pressable(
-      label: semantic ?? [title, subtitle, trailing].where((p) => p.isNotEmpty).join(', '),
+      label: spoken(semantic ?? [title, subtitle, trailing].where((p) => p.isNotEmpty).join(', ')),
       onTap: onTap,
       child: row,
     );
+  }
+}
+
+String spoken(String text) => text.replaceAll(' · ', ', ').replaceAll('\n', ', ');
+
+class Folded extends StatelessWidget {
+  const Folded(this.parts, {super.key, this.style, this.last});
+
+  final List<String> parts;
+  final TextStyle? style;
+  final Color? last;
+
+  @override
+  Widget build(BuildContext context) {
+    final style = this.style ?? Ink.note;
+    final parts = this.parts.where((p) => p.isNotEmpty).toList();
+    return _Fold(
+      children: [
+        for (var i = 0; i < parts.length; i++) ...[
+          if (i > 0) ExcludeSemantics(child: Text(' · ', style: style)),
+          Text(parts[i], style: i == parts.length - 1 && last != null ? style.copyWith(color: last) : style),
+        ],
+      ],
+    );
+  }
+}
+
+class _Fold extends MultiChildRenderObjectWidget {
+  const _Fold({required super.children});
+
+  @override
+  RenderObject createRenderObject(BuildContext context) => _RenderFold();
+}
+
+class _FoldData extends ContainerBoxParentData<RenderBox> {
+  bool shown = true;
+}
+
+class _RenderFold extends RenderBox
+    with ContainerRenderObjectMixin<RenderBox, _FoldData>, RenderBoxContainerDefaultsMixin<RenderBox, _FoldData> {
+  @override
+  void setupParentData(RenderBox child) {
+    if (child.parentData is! _FoldData) {
+      child.parentData = _FoldData();
+    }
+  }
+
+  Size _flow(double width, Size Function(RenderBox child, BoxConstraints constraints) measure, {bool place = false}) {
+    var x = 0.0;
+    var y = 0.0;
+    var line = 0.0;
+    var widest = 0.0;
+    var open = true;
+    var index = 0;
+    RenderBox? gap;
+    var child = firstChild;
+    while (child != null) {
+      if (index.isOdd) {
+        gap = child;
+      } else {
+        final natural = child.getMaxIntrinsicWidth(double.infinity);
+        if (gap != null) {
+          final space = measure(gap, const BoxConstraints()).width;
+          final same = open && x + space + natural <= width + 0.01;
+          if (place) {
+            (gap.parentData! as _FoldData)
+              ..shown = same
+              ..offset = Offset(x, y);
+          }
+          if (same) {
+            x += space;
+          } else {
+            y += line;
+            x = 0;
+            line = 0;
+          }
+        }
+        final room = math.max(0.0, width - x);
+        final size = measure(child, BoxConstraints(maxWidth: room));
+        if (place) {
+          (child.parentData! as _FoldData)
+            ..shown = true
+            ..offset = Offset(x, y);
+        }
+        x += size.width;
+        widest = math.max(widest, x);
+        line = math.max(line, size.height);
+        open = natural <= room + 0.01;
+        gap = null;
+      }
+      index++;
+      child = childAfter(child);
+    }
+    return Size(widest, y + line);
+  }
+
+  static Size _dry(RenderBox child, BoxConstraints constraints) => child.getDryLayout(constraints);
+
+  static Size _layout(RenderBox child, BoxConstraints constraints) {
+    child.layout(constraints, parentUsesSize: true);
+    return child.size;
+  }
+
+  @override
+  Size computeDryLayout(BoxConstraints constraints) => constraints.constrain(_flow(constraints.maxWidth, _dry));
+
+  @override
+  void performLayout() {
+    size = constraints.constrain(_flow(constraints.maxWidth, _layout, place: true));
+  }
+
+  @override
+  double computeMinIntrinsicWidth(double height) {
+    var widest = 0.0;
+    var child = firstChild;
+    while (child != null) {
+      widest = math.max(widest, child.getMinIntrinsicWidth(double.infinity));
+      child = childAfter(child);
+    }
+    return widest;
+  }
+
+  @override
+  double computeMaxIntrinsicWidth(double height) {
+    var sum = 0.0;
+    var child = firstChild;
+    while (child != null) {
+      sum += child.getMaxIntrinsicWidth(double.infinity);
+      child = childAfter(child);
+    }
+    return sum;
+  }
+
+  @override
+  double computeMinIntrinsicHeight(double width) => _flow(width, _dry).height;
+
+  @override
+  double computeMaxIntrinsicHeight(double width) => _flow(width, _dry).height;
+
+  @override
+  double? computeDistanceToActualBaseline(TextBaseline baseline) =>
+      defaultComputeDistanceToFirstActualBaseline(baseline);
+
+  @override
+  bool hitTestChildren(BoxHitTestResult result, {required Offset position}) =>
+      defaultHitTestChildren(result, position: position);
+
+  @override
+  void paint(PaintingContext context, Offset offset) {
+    var child = firstChild;
+    while (child != null) {
+      final data = child.parentData! as _FoldData;
+      if (data.shown) {
+        context.paintChild(child, offset + data.offset);
+      }
+      child = data.nextSibling;
+    }
+  }
+}
+
+class Balanced extends StatelessWidget {
+  const Balanced(this.text, {super.key, required this.style, this.maxLines});
+
+  final String text;
+  final TextStyle style;
+  final int? maxLines;
+
+  @override
+  Widget build(BuildContext context) {
+    return Balance(
+      child: Text(
+        text,
+        style: style,
+        textAlign: TextAlign.center,
+        maxLines: maxLines,
+        overflow: maxLines == null ? null : TextOverflow.ellipsis,
+      ),
+    );
+  }
+}
+
+class Balance extends SingleChildRenderObjectWidget {
+  const Balance({super.key, required super.child});
+
+  @override
+  RenderObject createRenderObject(BuildContext context) => _RenderBalance();
+}
+
+class _RenderBalance extends RenderShiftedBox {
+  _RenderBalance() : super(null);
+
+  @override
+  Size computeDryLayout(BoxConstraints constraints) {
+    final inner = child?.getDryLayout(constraints.loosen()) ?? Size.zero;
+    return constraints.constrain(Size(constraints.hasBoundedWidth ? constraints.maxWidth : inner.width, inner.height));
+  }
+
+  @override
+  void performLayout() {
+    final child = this.child;
+    if (child == null) {
+      size = constraints.smallest;
+      return;
+    }
+    final loose = constraints.loosen();
+    child.layout(loose, parentUsesSize: true);
+    final height = child.size.height;
+    bool cut() => child is RenderParagraph && child.didExceedMaxLines;
+    if (constraints.hasBoundedWidth && !cut() && height > child.getMinIntrinsicHeight(double.infinity) + 0.5) {
+      var low = child.getMinIntrinsicWidth(double.infinity);
+      var high = loose.maxWidth;
+      while (high - low > 1) {
+        final middle = (low + high) / 2;
+        child.layout(BoxConstraints(maxWidth: middle), parentUsesSize: true);
+        if (child.size.height > height + 0.5 || cut()) {
+          low = middle;
+        } else {
+          high = middle;
+        }
+      }
+      child.layout(BoxConstraints(maxWidth: math.min(high + 1, loose.maxWidth)), parentUsesSize: true);
+    }
+    size = constraints.constrain(
+      Size(constraints.hasBoundedWidth ? constraints.maxWidth : child.size.width, child.size.height),
+    );
+    (child.parentData! as BoxParentData).offset = Offset((size.width - child.size.width) / 2, 0);
   }
 }
 
@@ -362,12 +594,19 @@ class PrimaryButton extends StatelessWidget {
       radius: radius,
       child: DecoratedBox(
         decoration: BoxDecoration(color: onTap == null ? Ink.raised : Ink.accent, borderRadius: radius),
-        child: SizedBox(
-          height: 56,
-          child: Center(
-            child: busy
-                ? Spinner(size: 22, color: Ink.onAccent, stroke: 2.5)
-                : Text(label, style: onTap == null ? Ink.button.copyWith(color: Ink.faint) : Ink.button),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: 56),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Center(
+              child: busy
+                  ? Spinner(size: 22, color: Ink.onAccent, stroke: 2.5)
+                  : Text(
+                      label,
+                      style: onTap == null ? Ink.button.copyWith(color: Ink.faint) : Ink.button,
+                      textAlign: TextAlign.center,
+                    ),
+            ),
           ),
         ),
       ),
@@ -391,12 +630,19 @@ class QuietButton extends StatelessWidget {
       label: label,
       onTap: busy ? null : onTap,
       radius: radius,
-      child: SizedBox(
-        height: 48,
-        child: Center(
-          child: busy
-              ? Spinner(size: 20, color: color, stroke: 2.5)
-              : Text(label, style: Ink.strong.copyWith(color: onTap == null ? Ink.faint : color)),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minHeight: 48),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          child: Center(
+            child: busy
+                ? Spinner(size: 20, color: color, stroke: 2.5)
+                : Text(
+                    label,
+                    style: Ink.strong.copyWith(color: onTap == null ? Ink.faint : color),
+                    textAlign: TextAlign.center,
+                  ),
+          ),
         ),
       ),
     );
@@ -805,15 +1051,23 @@ class _SearchFieldState extends State<SearchField> {
       excludeFromSemantics: true,
       onTap: () => _field.currentState?.requestKeyboard(),
       child: Panel(
-        padding: const EdgeInsets.fromLTRB(16, 4, 4, 4),
+        padding: const EdgeInsets.fromLTRB(14, 4, 4, 4),
         child: ValueListenableBuilder<TextEditingValue>(
           valueListenable: widget.controller,
           builder: (context, value, _) => Row(
             children: [
+              GlyphIcon(Glyph.search, color: Ink.faint, size: 20),
+              const SizedBox(width: 10),
               Expanded(
                 child: Stack(
                   children: [
-                    if (value.text.isEmpty) Text(widget.hint, style: Ink.body.copyWith(color: Ink.faint), maxLines: 1),
+                    if (value.text.isEmpty)
+                      Text(
+                        widget.hint,
+                        style: Ink.body.copyWith(color: Ink.faint),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     Semantics(
                       textField: true,
                       label: widget.hint,
@@ -841,6 +1095,44 @@ class _SearchFieldState extends State<SearchField> {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+class Selectable extends StatefulWidget {
+  const Selectable({super.key, required this.child});
+
+  final Widget child;
+
+  @override
+  State<Selectable> createState() => _SelectableState();
+}
+
+class _SelectableState extends State<Selectable> {
+  final _focus = FocusNode();
+
+  @override
+  void dispose() {
+    _focus.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final desktop = switch (defaultTargetPlatform) {
+      TargetPlatform.windows || TargetPlatform.linux || TargetPlatform.macOS => true,
+      _ => false,
+    };
+    if (!desktop) {
+      return widget.child;
+    }
+    return DefaultSelectionStyle(
+      selectionColor: Ink.accent.withAlpha(0x59),
+      cursorColor: Ink.accent,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.text,
+        child: SelectableRegion(focusNode: _focus, selectionControls: emptyTextSelectionControls, child: widget.child),
       ),
     );
   }

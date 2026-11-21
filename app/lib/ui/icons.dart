@@ -30,6 +30,7 @@ enum Glyph {
   home,
   pulse,
   infinity,
+  speed,
 }
 
 class GlyphIcon extends StatelessWidget {
@@ -243,6 +244,16 @@ class _GlyphPainter extends CustomPainter {
             ..cubicTo(8.5, 16, 10, 15, 12, 12),
           line,
         );
+      case Glyph.speed:
+        canvas.drawArc(
+          Rect.fromCircle(center: const Offset(12, 13.5), radius: 8.5),
+          5 * math.pi / 6,
+          4 * math.pi / 3,
+          false,
+          line,
+        );
+        canvas.drawLine(const Offset(12, 13.5), const Offset(15.5, 10), line);
+        canvas.drawCircle(const Offset(12, 13.5), 0.4, line);
     }
   }
 

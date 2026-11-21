@@ -120,6 +120,7 @@ abstract final class S {
   static String get add => _t('Добавить', 'Add');
   static String get refresh => _t('Обновить', 'Refresh');
   static String get checkAgain => _t('Проверить ещё раз', 'Check again');
+  static String get tryAgain => _t('Попробовать ещё раз', 'Try again');
   static String get renew => _t('Продлить подписку', 'Renew subscription');
   static String get manage => _t('Управление подпиской', 'Manage subscription');
 
@@ -136,10 +137,7 @@ abstract final class S {
       'The VPN is off until you renew. Pay by SBP or card',
     ),
     'spent' => _t('Докупите трафик, чтобы продолжить пользоваться VPN', 'Buy more data to keep using the VPN'),
-    'devices' => _t(
-      'Это устройство не подключится, пока вы не отключите одно из своих или не добавите место',
-      'This device can’t connect until you remove one of your devices or add a slot',
-    ),
+    'devices' => _t('Отключите одно из своих устройств или добавьте место', 'Remove one of your devices or add a slot'),
     _ => _said(s.notes),
   };
 
@@ -179,6 +177,7 @@ abstract final class S {
   static String get replaceConfirm => _t('Добавить подписку по ссылке?', 'Add the subscription from this link?');
   static String get replace => _t('Добавить', 'Add');
   static String get addAnother => _t('Добавить ещё подписку', 'Add another subscription');
+  static String get newSubscription => _t('Новая подписка', 'New subscription');
   static String get subscriptions => _t('Подписки', 'Subscriptions');
   static String get ownKeys => _t('Свои ключи', 'My keys');
   static String get switchHint =>
@@ -188,7 +187,12 @@ abstract final class S {
   static String replaceFrom(String address) =>
       _t('Новая ссылка: ${Uri.tryParse(address)?.host ?? ''}', 'New link: ${Uri.tryParse(address)?.host ?? ''}');
 
-  static String briefTitle(Brief b) => b.title.trim().isNotEmpty ? b.title.trim() : (b.links ? ownKeys : subscription);
+  static String briefTitle(Brief b) {
+    final title = b.title
+        .replaceFirst(RegExp(r'^[^\p{L}\p{N}@«"(]+', unicode: true), '')
+        .replaceFirst(RegExp(r'[^\p{L}\p{N}»")!?.+]+$', unicode: true), '');
+    return title.isNotEmpty ? title : (b.links ? ownKeys : subscription);
+  }
 
   static String serversCount(int n) =>
       _t('$n ${plural(n, 'сервер', 'сервера', 'серверов')}', _count(n, 'server', 'servers'));
@@ -247,8 +251,9 @@ abstract final class S {
   static const russian = 'Русский';
   static const english = 'English';
 
-  static String languageNow(Lang lang) =>
-      _t('Как в системе: ', 'Follows the system: ') + (lang == Lang.en ? english : russian);
+  static String languageNow(Lang lang) => lang == Lang.en
+      ? _t('Как в системе: $english', 'Follows the system: $english')
+      : _t('Как в системе: русский', 'Follows the system: $russian');
   static String get checking => _t('Проверка серверов', 'Server check');
   static String get probeTarget => _t('Адрес проверки', 'Check address');
   static String get probeAuto => _t('Google и Cloudflare', 'Google and Cloudflare');
@@ -262,17 +267,15 @@ abstract final class S {
   static String get probeOwnHint =>
       _t('Адрес, который отвечает кодом 204 или 200', 'An address that answers with code 204 or 200');
   static String get probeWait => _t('Ждать ответа', 'Wait for an answer');
-  static String get probeWaitHint => _t(
-    'Сколько ждать ответа сервера. Больше — для медленной связи, но проверка дольше',
-    'How long to wait for a server. More suits a slow connection, but checks take longer',
-  );
+  static String get probeWaitHint =>
+      _t('Больше — для медленной связи, но проверка дольше', 'More suits a slow connection, but checks take longer');
 
   static String seconds(int n) => _t('$n с', '$n s');
   static String get tunnel => _t('Туннель', 'Tunnel');
   static String get fragment => _t('Фрагментация', 'Fragmentation');
   static String get fragmentHint => _t(
-    'Включите, если VPN не подключается у вашего оператора. Делит начало соединения на две части, чтобы его не узнали. На скорость не влияет',
-    'Turn on if the VPN won’t connect with your provider. Splits the start of the connection in two so it isn’t recognised. Doesn’t affect speed',
+    'Включите, если VPN не подключается у вашего оператора. На скорость не влияет',
+    'Turn on if the VPN won’t connect with your provider. Doesn’t affect speed',
   );
   static const dns = 'DNS';
   static String get dnsDefault => _t('Как в подписке', 'From the subscription');
@@ -284,6 +287,8 @@ abstract final class S {
   static String get dnsOwn => _t('Свой DNS', 'Custom DNS');
   static String get dnsOwnHint =>
       _t('Адрес IPv4 или IPv6, например 1.1.1.1', 'An IPv4 or IPv6 address, such as 1.1.1.1');
+  static const dnsExample = '1.1.1.1';
+  static const probeExample = 'https://cp.cloudflare.com/generate_204';
   static String get dnsSafe => _t('без вредоносных сайтов', 'blocks malicious sites');
   static String get dnsClean => _t('без рекламы', 'blocks ads');
   static const ipv6 = 'IPv6';
@@ -321,7 +326,9 @@ abstract final class S {
   static String get coreSource => _t('Исходный код ядра в Spofy', 'Source code of the core in Spofy');
   static String get coreModules => _t('Модули ядра', 'Core modules');
   static String get coreModulesHint => _t('Список и версии', 'List and versions');
-  static String get search => _t('Поиск страны или сервера', 'Search for a country or server');
+  static String get search => _t('Страна или сервер', 'Country or server');
+  static String get noServers => _t('В подписке пока нет серверов', 'The subscription has no servers yet');
+  static String get refreshSubscription => _t('Обновить подписку', 'Refresh the subscription');
   static String get nothingFound => _t('Ничего не найдено', 'Nothing found');
 
   static String best(int ms) => ms > 0 ? _t('лучший ${delay(ms)}', 'best ${delay(ms)}') : '';
@@ -751,7 +758,7 @@ abstract final class S {
           : _t('Нажмите, чтобы выключить', 'Press to turn off'),
     VpnState.switching => _t('Прежний перестал отвечать', 'The previous one stopped responding'),
     VpnState.stalled => _t('Трафик не идёт мимо VPN. Пробуем снова', 'Nothing leaks past the VPN. Trying again'),
-    VpnState.offline => _t('VPN включится сам, когда сеть вернётся', 'The VPN will reconnect when the network is back'),
+    VpnState.offline => _t('VPN подключится снова, когда вернётся сеть', 'The VPN reconnects when the network is back'),
     VpnState.failed => reason(c.code),
   };
 
