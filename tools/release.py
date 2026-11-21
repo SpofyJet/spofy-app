@@ -194,8 +194,13 @@ def main():
     status, rel = call("PATCH", API + "/releases/%d" % rel["id"], {"draft": False, "make_latest": "true"})
     if status != 200:
         fail("publish release: %s" % status)
-    if fetch("https://github.com/%s/releases/latest/download/update.json" % REPO) != open(os.path.join(out, "update.json"), "rb").read():
-        fail("the latest update.json on GitHub is not the one signed here")
+    signed = open(os.path.join(out, "update.json"), "rb").read()
+    for _ in range(24):
+        if fetch("https://github.com/%s/releases/latest/download/update.json" % REPO) == signed:
+            break
+        time.sleep(5)
+    else:
+        fail("the latest update.json on GitHub is not the one signed here after 2 minutes")
     manifest = json.load(open(os.path.join(work, "manifest.json")))
     for platform, f in manifest["files"].items():
         for url in f["urls"]:
