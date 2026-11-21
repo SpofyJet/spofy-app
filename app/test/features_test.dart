@@ -44,6 +44,11 @@ Future<void> scrollTo(WidgetTester tester, Finder target) async {
   await tester.pump(const Duration(milliseconds: 300));
 }
 
+String _clockOf(int at) {
+  final t = DateTime.fromMillisecondsSinceEpoch(at * 1000);
+  return [t.hour, t.minute, t.second].map((n) => n.toString().padLeft(2, '0')).join(':');
+}
+
 void main() {
   test('the time of the last update is told in plain words', () {
     final now = DateTime.utc(2026, 11, 21, 12);
@@ -336,33 +341,93 @@ void main() {
     expect(S.remindBefore(5), 'За 5 дней');
   });
 
-  testWidgets('the log is read from the core, copied whole and cleared', (tester) async {
-    final copied = copies(tester);
-    final scene = home(VpnState.idle);
-    await show(tester, scene, phone);
+  Future<void> openLogs(WidgetTester tester, Scene scene, String logs) async {
     await open(tester, S.settings);
     await scrollTo(tester, find.text(S.logsHint));
     await tester.tap(find.text(S.logsHint));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
     expect(scene.transport.sent.last, '{"id":1,"op":"logs"}');
+    scene.transport.answer('{"re":1,"ok":true,"logs":$logs}');
+    await tester.pump();
+    await tester.pump();
+  }
+
+  String sample(int at) =>
+      '[{"at":${at - 60},"source":"app","text":"connected to nl in 412 ms"},'
+      '{"at":${at - 50},"source":"engine","text":"[Warning] a stream ended early"},'
+      '{"at":${at - 45},"last":${at - 5},"count":19,"source":"engine","cause":"direct_name",'
+      '"text":"[Error] [4063193517] transport/internet: failed to resolve ip > features/dns: empty response"},'
+      '{"at":${at - 30},"last":${at - 20},"count":2,"source":"engine","text":"[Error] [12] something the app does not know"}]';
+
+  testWidgets('the log is read from the core, explains known causes, copied whole and cleared', (tester) async {
+    final copied = copies(tester);
+    final semantics = tester.ensureSemantics();
+    final scene = home(VpnState.idle);
+    await show(tester, scene, phone);
     final at = clock.millisecondsSinceEpoch ~/ 1000;
-    scene.transport.answer(
-      '{"re":1,"ok":true,"logs":[{"at":${at - 60},"source":"app","text":"connected to nl in 412 ms"},'
-      '{"at":${at - 30},"source":"engine","text":"[Warning] a stream ended early"}]}',
-    );
-    await tester.pump();
-    await tester.pump();
+    await openLogs(tester, scene, sample(at));
+    final cause = S.logsCause('direct_name')!;
+    expect(find.textContaining(cause, findRichText: true), findsOneWidget);
+    expect(find.text(S.logsRepeat(19, _clockOf(at - 5))), findsOneWidget);
+    expect(find.text(S.logsRepeat(2, _clockOf(at - 20))), findsOneWidget);
+    expect(find.textContaining('failed to resolve ip', findRichText: true), findsNothing);
     await golden(tester, 'logs_360');
+    await expectLater(tester, meetsGuideline(androidTapTargetGuideline));
+    await expectLater(tester, meetsGuideline(labeledTapTargetGuideline));
+    await tester.tap(find.bySemanticsLabel(RegExp('^${RegExp.escape(cause)}')));
+    await tester.pump();
+    expect(find.textContaining('[Error] [4063193517] transport/internet', findRichText: true), findsOneWidget);
+    await golden(tester, 'logs_raw_360');
     await tester.tap(find.bySemanticsLabel(S.copy));
     await tester.pump();
     expect(copied.single, startsWith('Spofy 0.1.0\n'));
     expect(copied.single, contains('app  connected to nl in 412 ms'));
     expect(copied.single, contains('engine  [Warning] a stream ended early'));
+    expect(copied.single, contains('engine  [Error] [4063193517] transport/internet: failed to resolve ip > features/dns: empty response  ×19 … ${_clockOf(at - 5)}'));
     await tester.tap(find.bySemanticsLabel(S.clear));
     await tester.pump();
     expect(scene.transport.sent.last, '{"id":2,"op":"clearLogs"}');
     await tester.pump(const Duration(seconds: 3));
+    semantics.dispose();
+  });
+
+  testWidgets('the log in the light theme and on a small phone', (tester) async {
+    final scene = home(VpnState.idle, settings: {themeKey: 'light'});
+    await show(tester, scene, small, brightness: Brightness.light);
+    await openLogs(tester, scene, sample(clock.millisecondsSinceEpoch ~/ 1000));
+    await golden(tester, 'logs_light_small');
+  });
+
+  testWidgets('the log fits a 320 px phone with 130 % text in English', (tester) async {
+    final scene = home(VpnState.idle);
+    await show(tester, scene, const Size(320, 568), textScale: 1.3, locales: const [Locale('en', 'US')]);
+    await openLogs(tester, scene, sample(clock.millisecondsSinceEpoch ~/ 1000));
+    expect(tester.takeException(), isNull);
+    expect(find.textContaining(S.logsCause('direct_name')!, findRichText: true), findsOneWidget);
+  });
+
+  testWidgets('a full log builds only the lines on screen', (tester) async {
+    final scene = home(VpnState.idle);
+    await show(tester, scene, phone);
+    final at = clock.millisecondsSinceEpoch ~/ 1000;
+    final lines = [
+      for (var i = 0; i < 400; i++)
+        i.isEven
+            ? '{"at":${at - 400 + i},"source":"engine","text":"[Info] [$i] app/dispatcher: taking detour [proxy] for [tcp:site$i.example.test:443] ${'x' * 60}"}'
+            : '{"at":${at - 400 + i},"last":$at,"count":$i,"source":"engine","cause":"name_server","text":"[Error] app/dns: failed to retrieve response for site$i.example.test."}',
+    ];
+    final watch = Stopwatch()..start();
+    await openLogs(tester, scene, '[${lines.join(',')}]');
+    for (var i = 0; i < 5; i++) {
+      await tester.pump();
+    }
+    watch.stop();
+    final built = find.byWidgetPredicate((w) => w.runtimeType.toString() == '_Line').evaluate().length;
+    expect(built, lessThan(30));
+    expect(find.textContaining('site399.example.test', findRichText: true), findsNothing);
+    expect(find.text(S.logsRepeat(399, _clockOf(at))), findsOneWidget);
+    debugPrint('400 lines: built $built, ${watch.elapsedMilliseconds} ms');
   });
 
   testWidgets('about tells the version, build, engine and device and checks for updates on request', (tester) async {

@@ -453,23 +453,43 @@ class Update {
 }
 
 class LogLine {
-  const LogLine({required this.at, required this.source, required this.text});
+  const LogLine({
+    required this.at,
+    required this.source,
+    required this.text,
+    this.last = 0,
+    this.count = 1,
+    this.cause = '',
+  });
 
   factory LogLine.fromJson(Object? json) {
     const what = 'log line';
-    final m = _object(json, what, const ['at', 'source', 'text']);
+    final m = _object(json, what, const ['at', 'source', 'text'], const ['last', 'count', 'cause']);
     return LogLine(
       at: _get<int>(m, 'at', what),
       source: _get<String>(m, 'source', what),
       text: _get<String>(m, 'text', what),
+      last: _get<int?>(m, 'last', what) ?? 0,
+      count: _get<int?>(m, 'count', what) ?? 1,
+      cause: _get<String?>(m, 'cause', what) ?? '',
     );
   }
 
   final int at;
   final String source;
   final String text;
+  final int last;
+  final int count;
+  final String cause;
 
-  Map<String, Object?> toJson() => {'at': at, 'source': source, 'text': text};
+  Map<String, Object?> toJson() => {
+    'at': at,
+    if (last != 0) 'last': last,
+    if (count > 1) 'count': count,
+    'source': source,
+    if (cause.isNotEmpty) 'cause': cause,
+    'text': text,
+  };
 }
 
 List<Brief> _briefs(Object? json) {
