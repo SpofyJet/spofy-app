@@ -180,4 +180,5 @@ func TestIdentityIsStableAndSaysNothingRaw(t *testing.T) {
 	if !regexp.MustCompile(`^\d+\.\d+\.\d+$`).MatchString(release) || model == "" {
 		t.Fatalf("release %q, model %q", release, model)
 	}
+	t.Logf("this machine is %q", model)
 }

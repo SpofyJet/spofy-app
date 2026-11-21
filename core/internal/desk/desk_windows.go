@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 	"unsafe"
 
@@ -158,11 +157,9 @@ func Identity() (hwid, release, model string) {
 	if k, err := registry.OpenKey(registry.LOCAL_MACHINE, `HARDWARE\DESCRIPTION\System\BIOS`, registry.QUERY_VALUE); err == nil {
 		maker, _, _ := k.GetStringValue("SystemManufacturer")
 		product, _, _ := k.GetStringValue("SystemProductName")
+		version, _, _ := k.GetStringValue("SystemVersion")
 		k.Close()
-		model = strings.TrimSpace(strings.TrimSpace(maker) + " " + strings.TrimSpace(product))
+		return hwid, release, Model(maker, product, version)
 	}
-	if model == "" {
-		model = "PC"
-	}
-	return hwid, release, model
+	return hwid, release, Model("", "", "")
 }
