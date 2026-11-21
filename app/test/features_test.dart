@@ -381,7 +381,7 @@ void main() {
     await tester.pump();
     expect(find.text(S.release('0.1.0', 1)), findsOneWidget);
     expect(find.text('xray-406c64d'), findsOneWidget);
-    expect(find.text('Pixel 8 · Android 15'), findsOneWidget);
+    expect([find.text('Pixel 8'), find.text('Android 15')], everyElement(findsOneWidget));
     await tester.tap(find.bySemanticsLabel(S.updateCheck));
     await tester.pump();
     expect(scene.transport.sent.last, '{"id":2,"op":"checkUpdate"}');

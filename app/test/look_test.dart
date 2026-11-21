@@ -215,7 +215,7 @@ void main() {
     await show(tester, scene, phone);
     await open(tester, 'Настройки');
     await open(tester, 'Язык');
-    expect(find.text('Как в системе: Русский'), findsOneWidget);
+    expect(find.text('Как в системе: русский'), findsOneWidget);
     await open(tester, 'English');
     expect(scene.transport.sent.single, '{"id":1,"op":"set","key":"language","value":"en"}');
     scene.transport.answer('{"ev":"settings","settings":{"language":"en"}}');
