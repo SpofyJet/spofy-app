@@ -294,8 +294,12 @@ def fetch(target, port, path, host=None):
     return shell("printf '%s' | %s" % (request, piped(8, target, port)), limit=30)
 
 
-def owners():
-    return re.findall(r"owner (tcp|udp) uid=(-?\d+) in=(true|false) us=(\d+)", adb("logcat", "-d", "-s", "spofy:D", limit=60))
+def owners(since=None):
+    text = adb("logcat", "-d", "-s", "spofy:D", limit=60)
+    if since:
+        at = text.rfind(since)
+        text = text[at:] if at >= 0 else ""
+    return re.findall(r"owner (tcp|udp) uid=(-?\d+) in=(true|false) us=(\d+)", text)
 
 
 def as_shell(path="/ip"):
@@ -562,12 +566,15 @@ def scenario():
            "s=%.1f app=%s rest=%s device=%s" % (took, mine[-24:], rest[-24:], tunnel()))
     run("adb", "push", os.path.join(os.path.dirname(CORE), "bind"), "/data/local/tmp/bind")
     shell("chmod 755 /data/local/tmp/bind")
+    shell("log -p d -t spofy mark-bind")
     bound = shell("su 2000,2000,3003 /data/local/tmp/bind %s %s 8081 /ip" % (tunnel(), HOST), limit=30)
+    tried = [o for o in owners("mark-bind") if o[2] == "false"]
     if "operation not permitted" in bound:
         print("     this kernel does not let an app bind to an interface: the way past the app list through the tunnel does not exist here", flush=True)
     else:
-        refused = [o for o in owners() if o[1] == "2000" and o[2] == "false"]
-        expect("an app taken out of the VPN cannot reach anything through the tunnel by binding to it", "site sees" not in bound and bool(refused), "%s refused=%d" % (bound.strip()[-60:], len(refused)))
+        expect("an app taken out of the VPN cannot reach anything through the tunnel by binding to it",
+               "site sees" not in bound and bool(tried) and all(o[1] in ("2000", "-1") for o in tried),
+               "%s refused=%s" % (bound.strip()[-60:], [(o[0], o[1]) for o in tried]))
     ok, took = chosen({"mode": "only", "list": ["com.android.shell"]})
     mine, rest = as_shell(), fetch(HOST, 8081, "/ip")
     expect("only the chosen app is in the VPN: it goes through the tunnel and the rest go past it", ok and mine.endswith("site sees " + INSIDE) and "site sees" in rest and not rest.endswith(INSIDE),
@@ -576,6 +583,8 @@ def scenario():
     mine = as_shell()
     expect("the choice is cleared: every app is in the VPN again", ok and mine.endswith("site sees " + INSIDE) and through(), "s=%.1f app=%s device=%s" % (took, mine[-24:], tunnel()))
     checked = owners()
+    expect("no connection of an app inside the VPN was refused", sum(o[2] == "false" for o in checked) == len(tried),
+           "refused=%d of them while binding=%d" % (sum(o[2] == "false" for o in checked), len(tried)))
     if checked:
         took = sorted(int(o[3]) for o in checked)
         print("     owners asked %d times (tcp %d, udp %d), refused %d, owner unknown %d, lookup p50 %.1f ms p95 %.1f ms max %.1f ms" % (
