@@ -13,6 +13,7 @@ import (
 	"github.com/SpofyJet/spofy-app/core/internal/app"
 	"github.com/SpofyJet/spofy-app/core/internal/engine"
 	"github.com/SpofyJet/spofy-app/core/internal/host"
+	"github.com/SpofyJet/spofy-app/core/internal/logbook"
 )
 
 const (
@@ -46,6 +47,7 @@ type Reply struct {
 	Changed  *bool           `json:"changed,omitempty"`
 	Traffic  *engine.Traffic `json:"traffic,omitempty"`
 	Report   *app.Report     `json:"report,omitempty"`
+	Logs     *[]logbook.Line `json:"logs,omitempty"`
 }
 
 func Serve(ctx context.Context, r io.Reader, w io.Writer, a *app.App, p *host.Platform) error {
@@ -176,6 +178,12 @@ func Serve(ctx context.Context, r io.Reader, w io.Writer, a *app.App, p *host.Pl
 		case "report":
 			r := a.Report()
 			send(Reply{Re: req.ID, OK: true, Report: &r})
+		case "logs":
+			lines := a.Logs()
+			send(Reply{Re: req.ID, OK: true, Logs: &lines})
+		case "clearLogs":
+			a.ClearLogs()
+			send(Reply{Re: req.ID, OK: true})
 		default:
 			send(Reply{Re: req.ID, Code: CodeOp, Error: "unknown operation"})
 		}

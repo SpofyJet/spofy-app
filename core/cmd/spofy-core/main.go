@@ -321,6 +321,7 @@ func (o served) run(ctx context.Context, out io.Writer) error {
 			switch e.Kind {
 			case supervisor.KindLog:
 				fmt.Fprintln(o.logs, e.Line)
+				a.Note("engine", e.Line)
 			case supervisor.KindRestored, supervisor.KindFailed:
 				checks.Add(1)
 				go func() {

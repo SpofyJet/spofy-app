@@ -8,6 +8,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
@@ -19,6 +21,7 @@ import (
 	"time"
 
 	"github.com/SpofyJet/spofy-app/core/internal/engine"
+	"github.com/SpofyJet/spofy-app/core/internal/logbook"
 	"github.com/SpofyJet/spofy-app/core/internal/session"
 	"github.com/SpofyJet/spofy-app/core/internal/store"
 	"github.com/SpofyJet/spofy-app/core/internal/sub"
@@ -299,7 +302,10 @@ type Report struct {
 	Journal   []Entry `json:"journal"`
 }
 
-const journalSize = 40
+const (
+	journalSize = 40
+	logSize     = 400
+)
 
 type Snapshot struct {
 	Version      string                     `json:"version"`
@@ -361,6 +367,7 @@ type App struct {
 	closed  bool
 	tasks   sync.WaitGroup
 	journal []Entry
+	book    *logbook.Book
 	started int64
 	renews  bool
 	tried   time.Time
@@ -389,6 +396,8 @@ func New(cfg Config) *App {
 		cfg.Settle = 10 * time.Second
 	}
 	a := &App{cfg: cfg, hearers: map[int]func(Event){}}
+	a.book = logbook.New(logSize, a.now)
+	a.conceal(cfg.Store.Get())
 	a.started = a.now().Unix()
 	a.ctx, a.cancel = context.WithCancel(context.Background())
 	a.online.Store(true)
@@ -498,7 +507,9 @@ func (a *App) Subscribe(ctx context.Context, address string) error {
 		}
 	}
 	if err != nil {
-		return fetchError(err)
+		err = fetchError(err)
+		a.Note("app", "subscription not added: "+err.Error())
+		return err
 	}
 	return a.adopt(u.String(), p)
 }
@@ -528,7 +539,9 @@ func (a *App) Refresh(ctx context.Context) (bool, error) {
 	}
 	if err != nil {
 		a.plan(st, true)
-		return false, fetchError(err)
+		err = fetchError(err)
+		a.Note("app", "subscription not refreshed: "+err.Error())
+		return false, err
 	}
 	return true, a.adopt(st.URL, p)
 }
@@ -627,6 +640,7 @@ func (a *App) Unsubscribe(id string) error {
 	a.emit(Event{Ev: EvSubscription, Subscription: subscription(st, a.now())})
 	a.emit(Event{Ev: EvServers, Servers: a.servers(st)})
 	a.listed(before)
+	a.conceal(st)
 	return nil
 }
 
@@ -890,6 +904,7 @@ func (a *App) Set(key string, value json.RawMessage) error {
 	if err != nil {
 		return err
 	}
+	a.Note("app", "setting "+key+" = "+shown(key, value))
 	if key == KeyKillSwitch {
 		strict := a.cfg.Strict || on(a.cfg.Store.Get(), KeyKillSwitch)
 		a.sess.SetStrict(strict)
@@ -1023,6 +1038,7 @@ func (a *App) adopt(address string, p *sub.Profile) error {
 	a.emit(Event{Ev: EvSubscription, Subscription: subscription(st, a.now())})
 	a.emit(Event{Ev: EvServers, Servers: a.servers(st)})
 	a.listed(before)
+	a.conceal(st)
 	if len(p.Servers) == 0 {
 		a.sess.Disconnect()
 		return nil
@@ -1065,13 +1081,18 @@ func (a *App) onState(e session.Event) {
 	conn := Connection{State: e.State, Choice: a.conn.Choice, Server: e.Server, DelayMs: e.Delay.Milliseconds(), Code: e.Code, Error: e.Error}
 	same := conn == a.conn
 	arrived := e.State == session.Connected && a.conn.State != session.Connected
-	if conn.State != a.conn.State || conn.Server != a.conn.Server || conn.Code != a.conn.Code {
+	moved := conn.State != a.conn.State || conn.Server != a.conn.Server || conn.Code != a.conn.Code
+	if moved {
 		a.journal = append(a.journal, Entry{At: a.now().Unix(), State: conn.State, Server: conn.Server, Code: conn.Code})
 		a.journal = a.journal[max(len(a.journal)-journalSize, 0):]
 	}
 	a.conn = conn
 	hush := a.hush
 	a.mu.Unlock()
+	if moved {
+		parts := slices.DeleteFunc([]string{string(conn.State), a.named(conn.Server), string(conn.Code), conn.Error}, func(p string) bool { return p == "" })
+		a.Note("app", strings.Join(parts, " "))
+	}
 	if !same {
 		a.emit(Event{Ev: EvConnection, Connection: conn})
 	}
@@ -1254,4 +1275,91 @@ func fetchError(err error) error {
 		return fail(CodeUnreachable, ue.Err.Error())
 	}
 	return fail(CodeUnreachable, "the subscription server did not answer")
+}
+
+func (a *App) Note(source, text string) {
+	a.book.Add(source, text)
+}
+
+func (a *App) Logs() []logbook.Line {
+	return a.book.Lines()
+}
+
+func (a *App) ClearLogs() {
+	a.book.Clear()
+}
+
+func (a *App) named(id string) string {
+	if id == "" {
+		return ""
+	}
+	if p := a.cfg.Store.Get().Profile; p != nil {
+		for _, s := range p.Servers {
+			if s.ID == id {
+				return s.Name
+			}
+		}
+	}
+	return id
+}
+
+func shown(key string, value json.RawMessage) string {
+	if key != KeyApps || len(value) == 0 {
+		return cmp.Or(string(value), "null")
+	}
+	var chosen Apps
+	json.Unmarshal(value, &chosen)
+	return fmt.Sprintf("%s, %d apps", chosen.Mode, len(chosen.List))
+}
+
+var secretKeys = map[string]bool{"address": true, "serverName": true, "id": true, "password": true, "publicKey": true, "shortId": true, "host": true, "path": true, "serviceName": true, "auth": true, "seed": true, "user": true, "pass": true, "spiderX": true}
+
+func (a *App) conceal(st store.State) {
+	var words []string
+	add := func(address string, p *sub.Profile) {
+		if address != "" {
+			words = append(words, address)
+			if u, err := url.Parse(address); err == nil {
+				words = append(words, u.Host, u.Hostname(), u.Path)
+			}
+		}
+		if p == nil {
+			return
+		}
+		words = append(words, p.SupportURL, p.WebPageURL)
+		for _, s := range p.Servers {
+			if host, _, err := net.SplitHostPort(s.Endpoint); err == nil {
+				words = append(words, host)
+			}
+			words = append(words, s.Endpoint)
+			var walk func(any)
+			walk = func(v any) {
+				switch t := v.(type) {
+				case map[string]any:
+					for k, inner := range t {
+						if text, ok := inner.(string); ok && secretKeys[k] {
+							words = append(words, text, strings.Trim(text, "/"))
+							continue
+						}
+						walk(inner)
+					}
+				case []any:
+					for _, inner := range t {
+						walk(inner)
+					}
+				}
+			}
+			var cfg struct {
+				Outbounds []any `json:"outbounds"`
+			}
+			if json.Unmarshal(s.Config, &cfg) == nil {
+				walk(cfg.Outbounds)
+			}
+		}
+	}
+	add(st.URL, st.Profile)
+	for _, o := range st.Others {
+		add(o.URL, o.Profile)
+	}
+	a.book.Hide(words)
 }

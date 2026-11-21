@@ -1437,3 +1437,42 @@ func TestTunnelAndProbeSettings(t *testing.T) {
 		t.Fatalf("settings after restart: %s", s)
 	}
 }
+
+func TestTheLogBookTellsWhatHappenedWithoutSecrets(t *testing.T) {
+	b := newBench(t, nil).subscribed()
+	if err := b.app.Connect("de"); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.app.Set(KeyFragment, json.RawMessage(`true`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.app.Set(KeyApps, json.RawMessage(`{"mode":"except","list":["org.example.one"]}`)); err != nil {
+		t.Fatal(err)
+	}
+	st := b.app.cfg.Store.Get()
+	var endpoint string
+	for _, s := range st.Profile.Servers {
+		if s.ID == "de" {
+			endpoint = s.Endpoint
+		}
+	}
+	host, _, _ := strings.Cut(endpoint, ":")
+	b.app.Note("engine", "dial tcp "+endpoint+" via "+st.URL)
+	var text []string
+	for _, l := range b.app.Logs() {
+		text = append(text, l.Source+": "+l.Text)
+	}
+	all := strings.Join(text, "\n")
+	for _, want := range []string{"app: connected 🇩🇪 (DE)", "app: setting fragment = true", "app: setting apps = except, 1 apps", "engine: dial tcp •••"} {
+		if !strings.Contains(all, want) {
+			t.Fatalf("no %q in\n%s", want, all)
+		}
+	}
+	if host == "" || strings.Contains(all, host) || strings.Contains(all, "TESTTOKEN") || strings.Contains(all, "org.example.one") {
+		t.Fatalf("secret in the book:\n%s", all)
+	}
+	b.app.ClearLogs()
+	if n := len(b.app.Logs()); n != 0 {
+		t.Fatalf("%d lines after clearing", n)
+	}
+}
