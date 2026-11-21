@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -1206,14 +1207,21 @@ func TestARunningConnectionEndsWhenTheSubscriptionGivesNoServers(t *testing.T) {
 	}
 }
 
+var providerLinks = base64.StdEncoding.EncodeToString([]byte(strings.Join([]string{
+	"vless://00000000-0000-4000-8000-0000000000a1@192.0.2.10:443?type=tcp&security=reality&pbk=" + strings.Repeat("BwcH", 10) + "Bwc&sni=www.example.com&flow=xtls-rprx-vision#%F0%9F%87%A9%F0%9F%87%AA%20(DE)",
+	"trojan://secret@example.org:443?type=ws&host=cdn.example.org&path=%2Ftj#%F0%9F%87%B1%F0%9F%87%B9%20(LT)",
+	"socks://dXNlcjpwYXNz@192.0.2.1:1080#Socks",
+	"hy2://letmein@192.0.2.40:443?sni=hy.example.com&obfs=salamander&obfs-password=pw#%F0%9F%87%AB%F0%9F%87%AE%20(FL)",
+}, "\r\n")))
+
 func TestAnAddressThatAnswersWithLinksIsAskedAgainForJSON(t *testing.T) {
 	b := newBench(t, nil)
-	b.panel.Links()
+	b.panel.Links(providerLinks)
 	if err := b.app.Subscribe(context.Background(), apptest.Address+"/"); err != nil {
 		t.Fatal(err)
 	}
-	if len(b.app.Snapshot().Servers) == 0 {
-		t.Fatal("no servers")
+	if n := len(b.app.Snapshot().Servers); n != 19 {
+		t.Fatalf("servers %d: the links were taken over the JSON", n)
 	}
 	b.panel.Set(func(_ *[]byte, h http.Header) { h.Set("Etag", `W/"next"`) })
 	if _, err := b.app.Refresh(context.Background()); err != nil {
@@ -1222,9 +1230,54 @@ func TestAnAddressThatAnswersWithLinksIsAskedAgainForJSON(t *testing.T) {
 	path := strings.TrimPrefix(apptest.Address, "https://sub.example.test")
 	same(t, b.panel.Paths(), []string{path + "/", path + "/json", path + "/json"})
 	b2 := newBench(t, nil)
-	b2.panel.Links()
+	b2.panel.Links("dmxlc3M6Ly9saW5rcy5leGFtcGxl")
 	b2.panel.Set(func(body *[]byte, _ http.Header) { *body = []byte("<html>") })
 	if err := b2.app.Subscribe(context.Background(), apptest.Address); code(err) != CodeFormat {
 		t.Fatalf("neither form is a list: %v", err)
+	}
+}
+
+func TestSubscribeKeepsTheLinksWhenThereIsNoJSON(t *testing.T) {
+	links, err := sub.ParseLinks(providerLinks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := strings.TrimPrefix(apptest.Address, "https://sub.example.test")
+	for name, hide := range map[string]func(*apptest.Panel){
+		"not found": func(p *apptest.Panel) { p.WithoutJSON() },
+		"a page":    func(p *apptest.Panel) { p.Set(func(body *[]byte, _ http.Header) { *body = []byte("<html>") }) },
+		"links":     func(p *apptest.Panel) { p.Set(func(body *[]byte, _ http.Header) { *body = []byte(providerLinks) }) },
+	} {
+		b := newBench(t, nil)
+		b.panel.Links(providerLinks)
+		hide(b.panel)
+		if err := b.app.Subscribe(context.Background(), apptest.Address); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		snap := b.app.Snapshot()
+		var ids []string
+		for _, s := range snap.Servers {
+			ids = append(ids, s.ID+" "+s.Country+" "+s.Protocol)
+		}
+		same(t, ids, []string{"de DE vless", "lt LT trojan", "fl FI hysteria"})
+		if s := snap.Subscription; s.Title != "🛡 Spofy VPN" || s.Total != 107374182400 || s.Stop != "" {
+			t.Fatalf("%s: subscription = %+v", name, s)
+		}
+		same(t, b.panel.Paths(), []string{path, path + "/json"})
+		b.tunnel.Know(links.Servers)
+		b.tunnel.Answer(map[string]time.Duration{"de": ms(50), "lt": ms(30), "fl": ms(70)})
+		if err := b.app.Connect(Auto); err != nil || b.tunnel.Running() != "lt" {
+			t.Fatalf("%s: err %v, running %q", name, err, b.tunnel.Running())
+		}
+		b.panel.Set(func(_ *[]byte, h http.Header) { h.Set("Etag", `W/"next"`) })
+		if changed, err := b.app.Refresh(context.Background()); err != nil || !changed {
+			t.Fatalf("%s: changed %v, err %v", name, changed, err)
+		}
+		same(t, b.panel.Paths(), []string{path, path + "/json", path})
+		b.app.Disconnect()
+		b.open(nil)
+		if again := b.app.Snapshot(); len(again.Servers) != 3 || find(again.Servers, "fl").Protocol != "hysteria" {
+			t.Fatalf("%s: after restart %+v", name, again.Servers)
+		}
 	}
 }
