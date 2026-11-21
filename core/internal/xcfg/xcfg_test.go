@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -178,7 +179,7 @@ func TestNoServerOpensAWayIn(t *testing.T) {
 		t.Fatal("no servers in the sample", err)
 	}
 	for i, server := range servers {
-		for _, o := range []Options{tunOptions, {Mode: ModeProbe}} {
+		for _, o := range []Options{tunOptions, {Mode: ModeProbe}, proxyOptions} {
 			built, err := Build(server, o)
 			if err != nil {
 				t.Fatalf("#%d: %v", i, err)
@@ -190,6 +191,10 @@ func TestNoServerOpensAWayIn(t *testing.T) {
 					Protocol string          `json:"protocol"`
 					Listen   json.RawMessage `json:"listen"`
 					Port     json.RawMessage `json:"port"`
+					Settings struct {
+						Auth string `json:"auth"`
+						IP   string `json:"ip"`
+					} `json:"settings"`
 				} `json:"inbounds"`
 			}
 			if err := json.Unmarshal(built, &out); err != nil {
@@ -199,11 +204,138 @@ func TestNoServerOpensAWayIn(t *testing.T) {
 				t.Fatalf("#%d mode %d: a control port is kept: %s", i, o.Mode, built)
 			}
 			for _, in := range out.Inbounds {
-				if in.Protocol != "tun" || in.Listen != nil || (in.Port != nil && string(in.Port) != "0") {
+				tunnel := in.Protocol == "tun" && in.Listen == nil && (in.Port == nil || string(in.Port) == "0")
+				local := o.Mode == ModeProxy && in.Protocol == "mixed" && string(in.Listen) == `"127.0.0.1"` && string(in.Port) == "41234" && in.Settings.IP == Loopback
+				if !tunnel && !local {
 					t.Fatalf("#%d mode %d: a way in that other programs can reach: %s", i, o.Mode, built)
 				}
 			}
+			if want := map[Mode]int{ModeTun: 1, ModeProbe: 0, ModeProxy: 1}[o.Mode]; len(out.Inbounds) != want {
+				t.Fatalf("#%d mode %d: %d ways in", i, o.Mode, len(out.Inbounds))
+			}
 		}
+	}
+}
+
+var proxyOptions = Options{Mode: ModeProxy, Port: 41234}
+
+func TestBuildProxyKeepsServerLogicAndListensOnlyOnTheLoopback(t *testing.T) {
+	faked := 0
+	for i, raw := range servers(t, "../../testdata/sub/sub.json") {
+		built, err := Build(raw, proxyOptions)
+		if err != nil {
+			t.Fatalf("server %d: %v", i, err)
+		}
+		var in, out map[string]json.RawMessage
+		json.Unmarshal(raw, &in)
+		if err := json.Unmarshal(built, &out); err != nil {
+			t.Fatalf("server %d: %v", i, err)
+		}
+		for _, k := range []string{"outbounds", "routing", "burstObservatory"} {
+			if !bytes.Equal(in[k], out[k]) {
+				t.Fatalf("server %d: section %s changed", i, k)
+			}
+		}
+		if _, ok := in["fakedns"]; ok {
+			faked++
+		}
+		if _, ok := out["fakedns"]; ok || bytes.Contains(built, []byte("fakedns")) {
+			t.Fatalf("server %d: fake addresses are kept where no program asks the core for names: %s", i, built)
+		}
+		var was, now struct {
+			Servers []json.RawMessage `json:"servers"`
+			Rest    map[string]any    `json:"hosts"`
+			Order   string            `json:"queryStrategy"`
+		}
+		json.Unmarshal(in["dns"], &was)
+		json.Unmarshal(out["dns"], &now)
+		kept := slices.DeleteFunc(slices.Clone(was.Servers), fake)
+		if len(now.Servers) != len(kept) || !reflect.DeepEqual(was.Rest, now.Rest) || was.Order != now.Order {
+			t.Fatalf("server %d: dns = %s", i, out["dns"])
+		}
+		for n := range kept {
+			if !bytes.Equal(kept[n], now.Servers[n]) {
+				t.Fatalf("server %d: dns server %d = %s", i, n, now.Servers[n])
+			}
+		}
+		var inbounds []struct {
+			Tag      string `json:"tag"`
+			Protocol string `json:"protocol"`
+			Listen   string `json:"listen"`
+			Port     int    `json:"port"`
+			Settings struct {
+				Auth string `json:"auth"`
+				UDP  bool   `json:"udp"`
+				IP   string `json:"ip"`
+			} `json:"settings"`
+			Sniffing struct {
+				Enabled  bool     `json:"enabled"`
+				Over     []string `json:"destOverride"`
+				Excluded []string `json:"ipsExcluded"`
+			} `json:"sniffing"`
+		}
+		json.Unmarshal(out["inbounds"], &inbounds)
+		if len(inbounds) != 1 || inbounds[0].Tag != TagTun || inbounds[0].Protocol != "mixed" || inbounds[0].Listen != Loopback || inbounds[0].Port != 41234 ||
+			inbounds[0].Settings.Auth != "noauth" || !inbounds[0].Settings.UDP || inbounds[0].Settings.IP != Loopback {
+			t.Fatalf("server %d: inbounds = %s", i, out["inbounds"])
+		}
+		if s := inbounds[0].Sniffing; !s.Enabled || !reflect.DeepEqual(s.Over, []string{"http", "tls", "quic"}) || len(s.Excluded) != len(nearby) {
+			t.Fatalf("server %d: sniffing = %+v", i, s)
+		}
+	}
+	if faked == 0 {
+		t.Fatal("the sample has no server with fake addresses: the test checks nothing")
+	}
+	for _, port := range []int{0, -1, 65536} {
+		if _, err := Build(servers(t, "../../testdata/sub/sub.json")[0], Options{Mode: ModeProxy, Port: port}); !errors.Is(err, ErrConfig) {
+			t.Fatalf("port %d: %v", port, err)
+		}
+	}
+}
+
+func TestInProxyModeOnlyTheFragmentApplies(t *testing.T) {
+	server := json.RawMessage(`{"outbounds":[{"tag":"proxy","protocol":"vless","streamSettings":{"network":"tcp","security":"reality"}},{"tag":"dns-out","protocol":"dns","settings":{"blockTypes":[28]}}],
+		"dns":{"servers":["8.8.8.8",{"address":"fakedns","domains":["domain:x.example"]}],"queryStrategy":"UseIPv4"},
+		"inbounds":[{"tag":"socks","protocol":"socks","listen":"0.0.0.0","port":1080}],
+		"routing":{"rules":[{"type":"field","inboundTag":["socks"],"port":"53","outboundTag":"dns-out"}]}}`)
+	o := proxyOptions
+	o.Tweaks = Tweaks{Fragment: true, DNS: []string{"1.1.1.1"}, NoIPv6: true, LAN: true}
+	built, err := Build(server, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var c struct {
+		DNS struct {
+			Servers  []any  `json:"servers"`
+			Strategy string `json:"queryStrategy"`
+		} `json:"dns"`
+		Outbounds []struct {
+			Tag      string                     `json:"tag"`
+			Settings map[string]json.RawMessage `json:"settings"`
+			Stream   struct {
+				Sockopt struct {
+					Dialer string `json:"dialerProxy"`
+				} `json:"sockopt"`
+			} `json:"streamSettings"`
+		} `json:"outbounds"`
+		Routing struct {
+			Rules []struct {
+				In  []string `json:"inboundTag"`
+				Out string   `json:"outboundTag"`
+			} `json:"rules"`
+		} `json:"routing"`
+	}
+	if err := json.Unmarshal(built, &c); err != nil {
+		t.Fatal(err)
+	}
+	if c.Outbounds[0].Stream.Sockopt.Dialer != TagFragment || len(c.Outbounds) != 3 || c.Outbounds[2].Tag != TagFragment {
+		t.Fatalf("the fragment is the outbound's business and applies: %+v", c.Outbounds)
+	}
+	if len(c.DNS.Servers) != 1 || c.DNS.Servers[0] != "8.8.8.8" || c.DNS.Strategy != "UseIPv4" || string(c.Outbounds[1].Settings["blockTypes"]) != "[28]" {
+		t.Fatalf("programs ask the system for names, the subscription keeps its own: %+v", c.DNS)
+	}
+	if r := c.Routing.Rules; len(r) != 1 || r[0].In[0] != TagTun || r[0].Out != "dns-out" {
+		t.Fatalf("no rules of the tunnel: %+v", r)
 	}
 }
 
