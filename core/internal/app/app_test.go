@@ -1539,6 +1539,36 @@ func TestTheLogBookTellsWhatHappenedWithoutSecrets(t *testing.T) {
 	}
 }
 
+func TestTheCoresNoiseReachesTheBookOnlyInTheDetailedLog(t *testing.T) {
+	b := newBench(t, nil)
+	noise := `[Warning] common/errors: The feature WebSocket transport (with ALPN http/1.1, etc.) is deprecated, not recommended for using and might be removed.`
+	shown := func() int {
+		n := 0
+		for _, l := range b.app.Logs() {
+			if l.Source == "engine" {
+				n++
+			}
+		}
+		return n
+	}
+	b.app.Note("engine", noise)
+	if n := shown(); n != 0 {
+		t.Fatalf("%d noise lines by default", n)
+	}
+	if err := b.app.Set(KeyLogLevel, json.RawMessage(`"detailed"`)); err != nil {
+		t.Fatal(err)
+	}
+	b.app.Note("engine", noise)
+	if n := shown(); n != 1 {
+		t.Fatalf("%d noise lines in the detailed log", n)
+	}
+	b.open(nil)
+	b.app.Note("engine", noise)
+	if n := shown(); n != 1 {
+		t.Fatalf("the detailed log was forgotten after a restart: %d", n)
+	}
+}
+
 func TestSubscribeKeepsTheLinksWhenThereIsNoJSON(t *testing.T) {
 	links, err := sub.ParseLinks(providerLinks)
 	if err != nil {

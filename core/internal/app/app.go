@@ -449,6 +449,7 @@ func New(cfg Config) *App {
 	}
 	a := &App{cfg: cfg, hearers: map[int]func(Event){}}
 	a.book = logbook.New(logSize, a.now)
+	a.book.Verbose(detailed(cfg.Store.Get()))
 	a.conceal(cfg.Store.Get())
 	a.started = a.now().Unix()
 	a.ctx, a.cancel = context.WithCancel(context.Background())
@@ -1043,6 +1044,7 @@ func (a *App) Set(key string, value json.RawMessage) error {
 		return err
 	}
 	a.Note("app", "setting "+key+" = "+shown(key, value))
+	a.book.Verbose(detailed(a.cfg.Store.Get()))
 	if key == KeyKillSwitch {
 		strict := a.cfg.Strict || on(a.cfg.Store.Get(), KeyKillSwitch)
 		a.sess.SetStrict(strict)
@@ -1088,6 +1090,11 @@ func (a *App) Resume() error {
 	return err
 }
 
+func detailed(st store.State) bool {
+	level, _ := text(st.Settings[KeyLogLevel])
+	return level == "detailed"
+}
+
 func on(st store.State, key string) bool {
 	return string(st.Settings[key]) == "true"
 }
@@ -1109,7 +1116,7 @@ func (a *App) options(st store.State) (run, probe xcfg.Options) {
 	}
 	run = a.cfg.Run
 	run.Tweaks = t
-	if level, _ := text(st.Settings[KeyLogLevel]); level == "detailed" {
+	if detailed(st) {
 		run.LogLevel = "info"
 	}
 	return run, xcfg.Options{Mode: xcfg.ModeProbe, LogLevel: "none", Tweaks: xcfg.Tweaks{Fragment: t.Fragment}}

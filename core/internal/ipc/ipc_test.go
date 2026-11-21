@@ -168,6 +168,9 @@ func TestSessionTranscript(t *testing.T) {
 	step("measure", "", "connected")
 	step("disconnect", "", "")
 	step("report", "", "")
+	for _, id := range []string{"11", "12"} {
+		r.app.Note("engine", "[Error] ["+id+"] transport/internet: failed to resolve ip > features/dns: empty response")
+	}
 	step("logs", "", "")
 	step("clearLogs", "", "")
 	step("logs", "", "")
