@@ -3,6 +3,7 @@ import http.server, json, os, re, signal, socket, socketserver, ssl, subprocess,
 APK, CORE, OUT = sys.argv[1], os.path.abspath(sys.argv[2]), os.path.abspath(sys.argv[3])
 RELEASE = sys.argv[4] if len(sys.argv) > 4 else ""
 INSIDE = "127.0.0.2"
+RESOLVER = "172.19.0.2"
 PACKAGE = "app.spofy"
 DATA = "/data/user/0/" + PACKAGE
 GATE = "10.0.2.2"
@@ -304,7 +305,15 @@ def owners(since=None):
     if since:
         at = text.rfind(since)
         text = text[at:] if at >= 0 else ""
-    return re.findall(r"owner (tcp|udp) uid=(-?\d+) in=(true|false) us=(\d+)", text)
+    return re.findall(r"owner (tcp|udp) uid=(-?\d+) in=(true|false) us=(\d+) from=\S+ to=(\S+)", text)
+
+
+def probe(o):
+    return o[4] == RESOLVER + ":853"
+
+
+def named(name):
+    return re.search(r"PING %s \(\d+\.\d+\.\d+\.\d+\)" % re.escape(name), shell("su 2000,2000,3003 ping -c 1 -W 2 %s" % name, limit=15)) is not None
 
 
 def as_shell(path="/ip"):
@@ -573,7 +582,7 @@ def scenario():
     shell("chmod 755 /data/local/tmp/bind")
     shell("log -p d -t spofy mark-bind")
     bound = shell("su 2000,2000,3003 /data/local/tmp/bind %s %s 8081 /ip" % (tunnel(), HOST), limit=30)
-    tried = [o for o in owners("mark-bind") if o[2] == "false"]
+    tried = [o for o in owners("mark-bind") if o[2] == "false" and not probe(o)]
     if "operation not permitted" in bound:
         print("     this kernel does not let an app bind to an interface: the way past the app list through the tunnel does not exist here", flush=True)
     else:
@@ -587,10 +596,30 @@ def scenario():
     ok, took = chosen(None)
     mine = as_shell()
     expect("the choice is cleared: every app is in the VPN again", ok and mine.endswith("site sees " + INSIDE) and through(), "s=%.1f app=%s device=%s" % (took, mine[-24:], tunnel()))
+    if phone["sdk"] >= 29:
+        expect("names resolve inside the VPN", bool(until(lambda: named("example.org"), 20, 1)))
+        shell("log -p d -t spofy mark-dot")
+        shell("settings put global private_dns_specifier dns.google; settings put global private_dns_mode hostname")
+        began = time.time()
+        strict = until(lambda: named("example.net"), 60, 1)
+        expect("with the system's private DNS set to a server, names resolve inside the VPN", bool(strict), "s=%.1f" % (time.time() - began))
+        ok, took = chosen({"mode": "only", "list": ["com.android.shell"]})
+        began = time.time()
+        strict = ok and until(lambda: named("www.example.com"), 60, 1)
+        expect("with the system's private DNS set to a server, names resolve for the only app in the VPN", bool(strict), "s=%.1f" % (time.time() - began))
+        shell("settings put global private_dns_mode opportunistic; settings delete global private_dns_specifier")
+        ok, took = chosen(None)
+        expect("private DNS back to automatic and every app in the VPN again", ok and through(), "s=%.1f" % took)
+        dot = [o for o in owners("mark-dot") if o[4].endswith(":853")]
+        print("     private DNS connections through the tunnel: %s" % (", ".join("%s uid=%s in=%s to=%s" % (o[0], o[1], o[2], o[4]) for o in dot) or "none"), flush=True)
     checked = owners()
     log = adb("logcat", "-d", "-s", "spofy:D", limit=60).splitlines()
-    expect("no connection of an app inside the VPN was refused", sum(o[2] == "false" for o in checked) == len(tried),
-           "refused=%d of them while binding=%d: %s" % (sum(o[2] == "false" for o in checked), len(tried),
+    probes = [o for o in checked if o[2] == "false" and probe(o)]
+    refused = [o for o in checked if o[2] == "false" and not probe(o)]
+    if probes:
+        print("     the system's check for DNS over TLS on the tunnel's DNS address was refused %d times: there is no such server, it uses plain DNS there" % len(probes), flush=True)
+    expect("no connection of an app inside the VPN was refused", len(refused) == len(tried),
+           "refused=%d of them while binding=%d: %s" % (len(refused), len(tried),
                                                          " | ".join(line[:18] + " " + line.split("): ", 1)[-1] for line in log if "in=false" in line or "mark-" in line)))
     if checked:
         took = sorted(int(o[3]) for o in checked)
