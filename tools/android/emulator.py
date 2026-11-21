@@ -554,7 +554,7 @@ def scenario():
     need("another app's traffic goes through the tunnel", body.endswith("site sees " + INSIDE) and accepted(first, "%s:8081" % HOST) > 0, "body=%s accepted=%d" % (body[-60:], accepted(first, "%s:8081" % HOST)))
     if open6:
         six()
-        expect("IPv6 from another app goes into the tunnel, not past it", len(seen6) == open6 and accepted(first, "fec0::2") > 0,
+        expect("IPv6 from another app stays inside the tunnel, and the IPv4-only subscription closes it there", len(seen6) == open6 and accepted(first, "fec0::2") == 0,
                "direct before the tunnel=%d, direct with it=%d, through the server=%d" % (open6, len(seen6) - open6, accepted(first, "fec0::2")))
     leaked, flowing = outside(), len(seen)
     loop = "while [ -e /data/local/tmp/noise ]; do printf 'GET /ip HTTP/1.0\\r\\n\\r\\n' | %s >/dev/null 2>&1; sleep 0.2; done\n" % piped(2, HOST, 8081)
