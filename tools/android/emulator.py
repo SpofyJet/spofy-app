@@ -588,8 +588,10 @@ def scenario():
     mine = as_shell()
     expect("the choice is cleared: every app is in the VPN again", ok and mine.endswith("site sees " + INSIDE) and through(), "s=%.1f app=%s device=%s" % (took, mine[-24:], tunnel()))
     checked = owners()
+    log = adb("logcat", "-d", "-s", "spofy:D", limit=60).splitlines()
     expect("no connection of an app inside the VPN was refused", sum(o[2] == "false" for o in checked) == len(tried),
-           "refused=%d of them while binding=%d" % (sum(o[2] == "false" for o in checked), len(tried)))
+           "refused=%d of them while binding=%d: %s" % (sum(o[2] == "false" for o in checked), len(tried),
+                                                         " | ".join(line[:18] + " " + line.split("): ", 1)[-1] for line in log if "in=false" in line or "mark-" in line)))
     if checked:
         took = sorted(int(o[3]) for o in checked)
         print("     owners asked %d times (tcp %d, udp %d), refused %d, owner unknown %d, lookup p50 %.1f ms p95 %.1f ms max %.1f ms" % (

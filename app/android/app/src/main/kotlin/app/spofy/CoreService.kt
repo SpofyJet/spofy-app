@@ -387,7 +387,7 @@ class CoreService : VpnService() {
         val inside = uid != android.os.Process.INVALID_UID &&
             UserHandle.getUserHandleForUid(uid) == android.os.Process.myUserHandle() &&
             (rule.only?.contains(uid) ?: (uid !in rule.out))
-        note("owner ${flow.optString("network")} uid=$uid in=$inside us=${(System.nanoTime() - began) / 1000}")
+        note("owner ${flow.optString("network")} uid=$uid in=$inside us=${(System.nanoTime() - began) / 1000} from=${flow.optString("source")} to=${flow.optString("destination")}")
         return inside
     }
 
