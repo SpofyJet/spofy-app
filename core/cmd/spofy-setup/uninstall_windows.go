@@ -149,8 +149,10 @@ func (s *setup) takeOut(p *progress) outcome {
 		k.DeleteValue("Spofy")
 		k.Close()
 	}
-	if programs, err := windows.KnownFolderPath(windows.FOLDERID_CommonPrograms, 0); err == nil {
-		os.Remove(filepath.Join(programs, "Spofy.lnk"))
+	for _, folder := range []*windows.KNOWNFOLDERID{windows.FOLDERID_CommonPrograms, windows.FOLDERID_PublicDesktop} {
+		if dir, err := windows.KnownFolderPath(folder, 0); err == nil {
+			os.Remove(filepath.Join(dir, "Spofy.lnk"))
+		}
 	}
 	entries, _ := os.ReadDir(s.home)
 	for _, e := range entries {

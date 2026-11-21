@@ -21,6 +21,7 @@ SERVICE = r"SYSTEM\CurrentControlSet\Services\Spofy"
 HOME = os.path.join(os.environ["ProgramFiles"], "Spofy")
 DATA = os.path.join(os.environ["ProgramData"], "Spofy")
 SHORTCUT = os.path.join(os.environ["ProgramData"], r"Microsoft\Windows\Start Menu\Programs\Spofy.lnk")
+DESKTOP = os.path.join(os.environ.get("PUBLIC", r"C:\Users\Public"), "Desktop", "Spofy.lnk")
 RUN = r"Software\Microsoft\Windows\CurrentVersion\Run"
 ENTRY = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\Spofy"
 KEPT = "5f0f5a7e-1d2b-4c3a-9b61-73706f667901"
@@ -65,6 +66,7 @@ def traces():
         "service": subprocess.run(["sc", "query", "Spofy"], capture_output=True).returncode == 0,
         "files": os.path.exists(HOME),
         "shortcut": os.path.exists(SHORTCUT),
+        "desktop": os.path.exists(DESKTOP),
         "run": value(RUN, "Spofy") is not None,
         "entry": value(ENTRY, "DisplayVersion") is not None,
         "state": os.path.exists(DATA),
@@ -262,6 +264,22 @@ def launches(source, ui, installer):
            % (code, time.time() - began, seen["shown"], seen["content"], before, after, outage, leaks, seen["others"]))
     if seen["hwnd"]:
         shut(seen["hwnd"])
+    os.remove(DESKTOP)
+    answer = []
+
+    def person():
+        try:
+            answer.append(stand.as_person([installer], 60))
+        except OSError as e:
+            answer.append("refused %s" % e.winerror)
+    before = stand.service_pid()
+    seen = stand.launch(lambda: threading.Thread(target=person, daemon=True).start(), "setup-person", shots, limit=10.0)
+    until(lambda: answer, 60, 0.1)
+    expect("a person without administrator rights opens Spofy with the installer: no request for rights, the window opens, the service stays",
+           answer == [0] and seen["shown"] is not None and stand.service_pid() == before,
+           "code=%s shown_ms=%s content_ms=%s others=%s" % (answer, seen["shown"], seen["content"], seen["others"]))
+    if seen["hwnd"]:
+        shut(seen["hwnd"])
 
 
 def scenario():
@@ -289,9 +307,9 @@ def scenario():
     up = until(pipe_open, 30, 0.2)
     size = sum(os.path.getsize(os.path.join(d, f)) for d, _, fs in os.walk(HOME) for f in fs) if os.path.exists(HOME) else 0
     tray = until(stand.tray_window, 30, 0.1)
-    expect("installed silently: the service runs, the tray is up and starts at logon, the window is in the Start menu",
+    expect("installed silently: the service runs, the tray is up and starts at logon, the window is in the Start menu and on the desktop",
            code == 0 and bool(up) and bool(tray) and stand.tray_icon(tray) and value(RUN, "Spofy") == '"%s"' % os.path.join(HOME, "spofy-tray.exe")
-           and os.path.exists(SHORTCUT) and value(ENTRY, "DisplayVersion") == "0.0.0.1",
+           and os.path.exists(SHORTCUT) and os.path.exists(DESKTOP) and value(ENTRY, "DisplayVersion") == "0.0.0.1",
            "code=%d s=%.1f on_disk=%.1f MB run=%s tray=%s" % (code, took, size / 1e6, value(RUN, "Spofy"), bool(tray)))
     if not up:
         return
@@ -319,8 +337,9 @@ def scenario():
     back = connected()
     outage, leaks = watch.stop(began)
     tray = until(lambda: owner(stand.tray_window()) not in (0, before), 30, 0.1)
-    expect("upgraded over itself with the kill switch and the window open: no reboot, the window closed, the tray replaced, the service connects by itself, nothing leaks",
-           code == 0 and bool(shown) and window.poll() is not None and bool(tray) and back and leaks == 0 and value(ENTRY, "DisplayVersion") == "0.0.0.2",
+    expect("upgraded over itself with the kill switch and the window open: no reboot, the window closed, the tray replaced, the service connects by itself, nothing leaks, the desktop shortcut the person removed stays removed",
+           code == 0 and bool(shown) and window.poll() is not None and bool(tray) and back and leaks == 0 and value(ENTRY, "DisplayVersion") == "0.0.0.2"
+           and not os.path.exists(DESKTOP),
            "code=%d setup=%.1f s vpn_down=%.1f s leaks=%d window=%s tray=%s signed=%s" % (code, took, outage, leaks, window.poll(), bool(tray), signed))
 
     kept = files(HOME)

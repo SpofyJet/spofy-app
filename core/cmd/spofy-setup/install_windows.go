@@ -22,12 +22,13 @@ import (
 )
 
 const (
-	entryKey = `SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Spofy`
-	runKey   = `SOFTWARE\Microsoft\Windows\CurrentVersion\Run`
-	window   = "spofy.exe"
-	tray     = "spofy-tray.exe"
-	core     = "spofy-core.exe"
-	unpacked = 850
+	entryKey    = `SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Spofy`
+	runKey      = `SOFTWARE\Microsoft\Windows\CurrentVersion\Run`
+	desktopMark = "DesktopShortcut"
+	window      = "spofy.exe"
+	tray        = "spofy-tray.exe"
+	core        = "spofy-core.exe"
+	unpacked    = 850
 )
 
 var errCancelled = errors.New("cancelled by the person")
@@ -301,7 +302,7 @@ func (s *setup) restore(before map[string]any) {
 }
 
 func (s *setup) register(a *pack.Archive) error {
-	k, _, err := registry.CreateKey(registry.LOCAL_MACHINE, entryKey, registry.SET_VALUE)
+	k, _, err := registry.CreateKey(registry.LOCAL_MACHINE, entryKey, registry.SET_VALUE|registry.QUERY_VALUE)
 	if err != nil {
 		return err
 	}
@@ -340,7 +341,21 @@ func (s *setup) register(a *pack.Archive) error {
 	if err != nil {
 		return err
 	}
-	return shortcut(filepath.Join(programs, "Spofy.lnk"), filepath.Join(s.home, window), "Spofy VPN")
+	if err := shortcut(filepath.Join(programs, "Spofy.lnk"), filepath.Join(s.home, window), "Spofy VPN"); err != nil {
+		return err
+	}
+	if placed, _, err := k.GetIntegerValue(desktopMark); err == nil && placed != 0 {
+		return nil
+	}
+	desktop, err := windows.KnownFolderPath(windows.FOLDERID_PublicDesktop, 0)
+	if err == nil {
+		err = shortcut(filepath.Join(desktop, "Spofy.lnk"), filepath.Join(s.home, window), "Spofy VPN")
+	}
+	if err == nil {
+		err = k.SetDWordValue(desktopMark, 1)
+	}
+	s.printf("a shortcut on the desktop: %v", err)
+	return nil
 }
 
 func exists(path string) bool {

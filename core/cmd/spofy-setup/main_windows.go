@@ -47,6 +47,7 @@ func run(args []string) int {
 	from := fs.String("from", "", "")
 	report := fs.Uint64("report", 0, "")
 	logTo := fs.String("log", "", "")
+	raised := fs.Bool("raised", false, "")
 	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
 		return codeUsage
 	}
@@ -55,9 +56,7 @@ func run(args []string) int {
 	if err := windows.ProcessIdToSessionId(windows.GetCurrentProcessId(), &s.session); err != nil {
 		s.session = 0
 	}
-	if !windows.GetCurrentProcessToken().IsElevated() {
-		return s.fail(codeFailed, says().admin, errors.New("not elevated"))
-	}
+	elevated := windows.GetCurrentProcessToken().IsElevated()
 	pf, err := windows.KnownFolderPath(windows.FOLDERID_ProgramFiles, 0)
 	if err != nil {
 		return s.fail(codeFailed, says().failed, err)
@@ -68,13 +67,19 @@ func run(args []string) int {
 		return s.fail(codeFailed, says().failed, err)
 	}
 	if *from != "" {
+		if !elevated {
+			return s.fail(codeFailed, says().admin, errors.New("not elevated"))
+		}
 		return s.removeFrom(*from, self, uintptr(*report))
 	}
 	inside := strings.EqualFold(filepath.Clean(self), filepath.Join(s.home, uninstaller))
 	if *remove || inside {
+		if !elevated {
+			return s.elevate(self, args, *raised)
+		}
 		return s.handOff(self)
 	}
-	if s.logPath == "" {
+	if elevated && s.logPath == "" {
 		if root, err := desk.Root(); err == nil && desk.Secure(root) == nil {
 			defer s.open(filepath.Join(root, "setup.log"))()
 		}
@@ -84,6 +89,12 @@ func run(args []string) int {
 		return s.fail(codeFailed, says().damaged, err)
 	}
 	defer f.Close()
+	if s.serving(a.Version) {
+		return s.show(elevated)
+	}
+	if !elevated {
+		return s.elevate(self, args, *raised)
+	}
 	release, ok := single()
 	if !ok {
 		return s.fail(codeBusy, says().busy, errors.New("another setup runs"))
