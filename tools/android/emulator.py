@@ -275,15 +275,20 @@ def piped(seconds, target, port):
 
 
 def learn():
+    until(lambda: shell("getprop sys.boot_completed").strip() == "1", 60, 1)
     phone["sdk"] = int(shell("getprop ro.build.version.sdk").strip() or 0)
     if not shell("timeout 1 true; echo rc=$?").endswith("rc=0"):
         phone["limit"] = ""
-    for tool in ("nc", "/system/xbin/nc", "toybox nc", "busybox nc"):
-        phone["nc"] = tool
-        if " 204" in fetch(HOST, 8081, "/generate_204"):
-            break
-    else:
+
+    def reach():
+        adb("wait-for-device", limit=30)
+        for tool in ("nc", "/system/xbin/nc", "toybox nc", "busybox nc"):
+            phone["nc"] = tool
+            if " 204" in fetch(HOST, 8081, "/generate_204"):
+                return True
         phone["nc"] = ""
+        return False
+    until(reach, 60, 2)
     print("device: Android %s (API %d, %s), connections are made with %r, time limit %r"
           % (shell("getprop ro.build.version.release").strip(), phone["sdk"], shell("getprop ro.product.cpu.abi").strip(), phone["nc"], phone["limit"]), flush=True)
     need("the device can open connections for the checks", phone["nc"] != "")
