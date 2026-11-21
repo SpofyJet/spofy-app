@@ -98,7 +98,7 @@ Future<void> page(
 }
 
 void main() {
-  setUpAll(loadFonts);
+  setUpAll(loadAssets);
 
   testWidgets('home', (tester) async {
     await sheet(tester, '1-home', [

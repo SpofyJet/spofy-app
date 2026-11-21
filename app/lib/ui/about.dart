@@ -5,6 +5,7 @@ import 'package:flutter/widgets.dart';
 
 import '../core/protocol.dart';
 import '../state/model.dart';
+import 'flags.dart';
 import 'icons.dart';
 import 'strings.dart';
 import 'theme.dart';
@@ -21,6 +22,7 @@ const coreLicenses = [
   ('Wintun', 'Prebuilt Binaries License, WireGuard LLC\nhttps://www.wintun.net'),
   ('wireguard-go', 'MIT License, WireGuard LLC'),
   ('Go', 'BSD 3-Clause License, The Go Authors\nhttps://go.dev/LICENSE'),
+  ('flag-icons', flagLicense),
   ('Модули ядра', 'Список и версии: $sourceAddress/blob/main/core/go.mod'),
 ];
 

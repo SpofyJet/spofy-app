@@ -43,7 +43,7 @@ Future<void> scrollTo(WidgetTester tester, Finder target) async {
 }
 
 void main() {
-  setUpAll(loadFonts);
+  setUpAll(loadAssets);
 
   test('each server says how it connects, in the words its makers use', () {
     final named = {for (final s in servers()) s.id: S.via(s)};

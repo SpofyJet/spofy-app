@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
+import 'flags.dart';
 import 'icons.dart';
 import 'theme.dart';
 
@@ -422,6 +423,27 @@ class CountryMark extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final flag = code.toLowerCase();
+    if (flagCodes.contains(flag)) {
+      return DecoratedBox(
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          border: active ? Border.all(color: Ink.accent, width: 2) : null,
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(3),
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: Ink.raised,
+              shape: BoxShape.circle,
+              image: DecorationImage(image: AssetImage('assets/flags/$flag.webp'), fit: BoxFit.cover),
+              border: Border.all(color: Ink.faint.withValues(alpha: 0.5)),
+            ),
+            child: const SizedBox.square(dimension: 34),
+          ),
+        ),
+      );
+    }
     final text = code.length > 3 ? code.substring(0, 3) : code;
     return DecoratedBox(
       decoration: BoxDecoration(
