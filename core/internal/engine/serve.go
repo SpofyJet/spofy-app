@@ -18,6 +18,9 @@ type Request struct {
 	URL     string          `json:"url,omitempty"`
 	Timeout int64           `json:"timeout,omitempty"`
 	Tun     bool            `json:"tun,omitempty"`
+	Owners  bool            `json:"owners,omitempty"`
+	Ask     uint64          `json:"ask,omitempty"`
+	In      bool            `json:"in,omitempty"`
 }
 
 type Reply struct {
@@ -29,6 +32,8 @@ type Reply struct {
 	Ms      int64    `json:"ms,omitempty"`
 	Traffic *Traffic `json:"traffic,omitempty"`
 	Line    string   `json:"line,omitempty"`
+	Ask     uint64   `json:"ask,omitempty"`
+	Flow    *Flow    `json:"flow,omitempty"`
 }
 
 const (
@@ -48,12 +53,14 @@ func Serve(r io.Reader, w io.Writer) error {
 	defer SetLogSink(nil)
 
 	var inst *Instance
+	var own owners
 	var probes sync.WaitGroup
 	live, cancel := context.WithCancel(context.Background())
 	stop := func() {
 		cancel()
 		probes.Wait()
 		live, cancel = context.WithCancel(context.Background())
+		own.shut()
 		if inst != nil {
 			inst.Close()
 			inst = nil
@@ -103,14 +110,20 @@ func Serve(r io.Reader, w io.Writer) error {
 					continue
 				}
 			}
+			if req.Owners {
+				own.open(send)
+			}
 			next, err := StartOn(req.Config, tun)
 			release()
 			if err != nil {
+				own.shut()
 				send(failure(req.ID, err))
 				continue
 			}
 			inst = next
 			send(Reply{Re: req.ID, OK: true, Ms: max(time.Since(began).Milliseconds(), 1)})
+		case "owner":
+			own.answer(req.Ask, req.In)
 		case "stop":
 			stop()
 			send(Reply{Re: req.ID, OK: true})

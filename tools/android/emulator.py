@@ -294,6 +294,10 @@ def fetch(target, port, path, host=None):
     return shell("printf '%s' | %s" % (request, piped(8, target, port)), limit=30)
 
 
+def owners():
+    return re.findall(r"owner (tcp|udp) uid=(-?\d+) in=(true|false) us=(\d+)", adb("logcat", "-d", "-s", "spofy:D", limit=60))
+
+
 def as_shell(path="/ip"):
     return shell("su 2000,2000,3003 sh /data/local/tmp/get.sh %s 8081 %s" % (HOST, path), limit=30)
 
@@ -379,12 +383,14 @@ def scenario():
     time.sleep(3)
     adb("wait-for-device")
     learn()
+    ready = until(lambda: "package:" in shell("pm path android"), 120)
     for attempt in (1, 2):
         code, out = run("adb", "install", "-r", "-g", APK, limit=240)
         if code == 0 and "Success" in out:
             break
+        adb("reconnect")
         adb("wait-for-device")
-    need("the app installs", code == 0 and "Success" in out, "attempt=%d %s" % (attempt, out[-300:]))
+    need("the app installs", code == 0 and "Success" in out, "attempt=%d code=%d packages_ready=%s booted=%s %s" % (attempt, code, bool(ready), shell("getprop sys.boot_completed"), out[-300:]))
     shell("appops set %s ACTIVATE_VPN allow" % PACKAGE)
     cert = open(OUT + "/cert.pem", "rb").read()
     run("adb", "shell", "run-as %s sh -c 'mkdir -p files && cat > files/test-ca.pem'" % PACKAGE, data=cert)
@@ -560,7 +566,8 @@ def scenario():
     if "operation not permitted" in bound:
         print("     this kernel does not let an app bind to an interface: the way past the app list through the tunnel does not exist here", flush=True)
     else:
-        expect("an app taken out of the VPN cannot reach anything through the tunnel by binding to it", "site sees" not in bound, bound.strip()[-80:])
+        refused = [o for o in owners() if o[1] == "2000" and o[2] == "false"]
+        expect("an app taken out of the VPN cannot reach anything through the tunnel by binding to it", "site sees" not in bound and bool(refused), "%s refused=%d" % (bound.strip()[-60:], len(refused)))
     ok, took = chosen({"mode": "only", "list": ["com.android.shell"]})
     mine, rest = as_shell(), fetch(HOST, 8081, "/ip")
     expect("only the chosen app is in the VPN: it goes through the tunnel and the rest go past it", ok and mine.endswith("site sees " + INSIDE) and "site sees" in rest and not rest.endswith(INSIDE),
@@ -568,6 +575,12 @@ def scenario():
     ok, took = chosen(None)
     mine = as_shell()
     expect("the choice is cleared: every app is in the VPN again", ok and mine.endswith("site sees " + INSIDE) and through(), "s=%.1f app=%s device=%s" % (took, mine[-24:], tunnel()))
+    checked = owners()
+    if checked:
+        took = sorted(int(o[3]) for o in checked)
+        print("     owners asked %d times (tcp %d, udp %d), refused %d, owner unknown %d, lookup p50 %.1f ms p95 %.1f ms max %.1f ms" % (
+            len(checked), sum(o[0] == "tcp" for o in checked), sum(o[0] == "udp" for o in checked), sum(o[2] == "false" for o in checked),
+            sum(o[1] == "-1" for o in checked), took[len(took) // 2] / 1000, took[len(took) * 95 // 100] / 1000, took[-1] / 1000), flush=True)
 
     d = ui.call("disconnect")
     gone = until(lambda: tunnel() == "", 10)

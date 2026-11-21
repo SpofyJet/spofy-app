@@ -33,7 +33,7 @@ func TestTunAsksThePlatformOnceAndGivesTheDescriptorToTheEngine(t *testing.T) {
 	detach := p.Attach(func(a Ask) {
 		asked = append(asked, a)
 		go p.Answer(a.N, Answer{OK: true, File: map[string]*os.File{"tun": file}[a.Op]})
-	})
+	}, false)
 	for range 2 {
 		if err := tun.Raise(); err != nil {
 			t.Fatal(err)
@@ -76,7 +76,7 @@ func TestRenewedTunnelCarriesTheChosenAppsAndReplacesTheOldOne(t *testing.T) {
 		file := files[0]
 		files = files[1:]
 		go p.Answer(a.N, Answer{OK: true, File: file})
-	})
+	}, false)
 	if again, err := tun.Renew(); again || err != nil || len(asked) != 0 {
 		t.Fatalf("a tunnel that is not up was renewed: %v %v, asked %d", again, err, len(asked))
 	}
@@ -97,7 +97,7 @@ func TestRenewedTunnelCarriesTheChosenAppsAndReplacesTheOldOne(t *testing.T) {
 		t.Fatal("the shared description was changed by a request")
 	}
 	chosen = nil
-	p.Attach(func(a Ask) { go p.Answer(a.N, Answer{Error: "no"}) })
+	p.Attach(func(a Ask) { go p.Answer(a.N, Answer{Error: "no"}) }, false)
 	if again, err := tun.Renew(); again || err == nil || tun.File() != second || closed(second) {
 		t.Fatalf("a refused renewal dropped the working tunnel: %v %v", again, err)
 	}
@@ -106,16 +106,16 @@ func TestRenewedTunnelCarriesTheChosenAppsAndReplacesTheOldOne(t *testing.T) {
 func TestPlatformRefusalSilenceAndLoss(t *testing.T) {
 	p := &Platform{}
 	tun := &Tun{Platform: p, Wait: 50 * time.Millisecond}
-	p.Attach(func(a Ask) { go p.Answer(a.N, Answer{Error: "the user said no"}) })
+	p.Attach(func(a Ask) { go p.Answer(a.N, Answer{Error: "the user said no"}) }, false)
 	if err := tun.Raise(); err == nil || !strings.Contains(err.Error(), "the user said no") || tun.Up() {
 		t.Fatalf("refusal: %v", err)
 	}
-	p.Attach(func(a Ask) { go p.Answer(a.N, Answer{OK: true}) })
+	p.Attach(func(a Ask) { go p.Answer(a.N, Answer{OK: true}) }, false)
 	if err := tun.Raise(); err == nil || tun.Up() {
 		t.Fatalf("an answer without a tunnel: %v", err)
 	}
 	var late Ask
-	p.Attach(func(a Ask) { late = a })
+	p.Attach(func(a Ask) { late = a }, false)
 	if err := tun.Raise(); err == nil || !strings.Contains(err.Error(), "did not answer") {
 		t.Fatalf("silence: %v", err)
 	}
@@ -124,7 +124,7 @@ func TestPlatformRefusalSilenceAndLoss(t *testing.T) {
 		t.Fatal("a late answer was accepted or its descriptor was left open")
 	}
 	slow := &Tun{Platform: p, Wait: 5 * time.Second}
-	detach := p.Attach(func(Ask) {})
+	detach := p.Attach(func(Ask) {}, false)
 	done := make(chan error, 1)
 	go func() { done <- slow.Raise() }()
 	time.Sleep(20 * time.Millisecond)
@@ -137,10 +137,41 @@ func TestPlatformRefusalSilenceAndLoss(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("a lost platform left the request waiting")
 	}
-	stale := p.Attach(func(Ask) {})
-	p.Attach(func(a Ask) { go p.Answer(a.N, Answer{OK: true, File: pipe(t)}) })
+	stale := p.Attach(func(Ask) {}, false)
+	p.Attach(func(a Ask) { go p.Answer(a.N, Answer{OK: true, File: pipe(t)}) }, false)
 	stale()
 	if err := tun.Raise(); err != nil {
 		t.Fatalf("an old detach removed the new platform: %v", err)
+	}
+}
+
+func TestPlatformNamesTheOwnerOnlyWhenItSaidItCan(t *testing.T) {
+	p := &Platform{}
+	if p.Knows() || p.Inside("tcp", "172.19.0.1:40000", "1.2.3.4:443") {
+		t.Fatal("no platform knows the owner of a connection")
+	}
+	var asked []Ask
+	detach := p.Attach(func(a Ask) {
+		asked = append(asked, a)
+		go p.Answer(a.N, Answer{OK: true, In: a.Flow.Source == "172.19.0.1:40000"})
+	}, true)
+	if !p.Knows() || !p.Inside("tcp", "172.19.0.1:40000", "1.2.3.4:443") || p.Inside("udp", "172.19.0.1:40001", "1.2.3.4:443") {
+		t.Fatal("the verdict of the platform was not taken")
+	}
+	if len(asked) != 2 || asked[0].Op != "owner" || asked[0].Tun != nil || *asked[1].Flow != (Flow{Network: "udp", Source: "172.19.0.1:40001", Destination: "1.2.3.4:443"}) {
+		t.Fatalf("asked %+v", asked)
+	}
+	detach()
+	if p.Knows() || p.Inside("tcp", "172.19.0.1:40000", "1.2.3.4:443") {
+		t.Fatal("a platform that is gone still lets connections in")
+	}
+	p.Attach(func(a Ask) { go p.Answer(a.N, Answer{OK: true, In: true}) }, false)
+	if p.Knows() {
+		t.Fatal("a platform that cannot name owners is asked")
+	}
+	began := time.Now()
+	p.Attach(func(Ask) {}, true)
+	if p.Inside("tcp", "172.19.0.1:40000", "1.2.3.4:443") || time.Since(began) < ownerWait || time.Since(began) > ownerWait+time.Second {
+		t.Fatalf("a silent platform must refuse after %v, took %v", ownerWait, time.Since(began))
 	}
 }
