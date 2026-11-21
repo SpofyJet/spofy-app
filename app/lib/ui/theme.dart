@@ -65,7 +65,7 @@ abstract final class Ink {
     raised: Color(0xFF1A2740),
     text: Color(0xFFF3F6FB),
     muted: Color(0xFFA4B3CA),
-    faint: Color(0xFF64748B),
+    faint: Color(0xFF8290A5),
     accent: Color(0xFF60A5FA),
     onAccent: Color(0xFF07152E),
     selected: Color(0x262563EB),

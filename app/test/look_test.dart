@@ -8,6 +8,12 @@ import 'package:spofy/ui/widgets.dart';
 
 import 'scenes.dart';
 
+double contrast(Color a, Color b) {
+  final x = a.computeLuminance() + 0.05;
+  final y = b.computeLuminance() + 0.05;
+  return x > y ? x / y : y / x;
+}
+
 Set<Color> grounds(WidgetTester tester) {
   final found = <Color>{};
   for (final backdrop in find.byType(Backdrop, skipOffstage: false).evaluate()) {
@@ -33,6 +39,38 @@ void main() {
     S.use(Lang.ru);
     Ink.use(Ink.dark);
   });
+
+  for (final palette in [Ink.dark, Ink.light]) {
+    test('the ${palette.brightness.name} palette keeps every text readable by WCAG AA', () {
+      final grounds = {
+        'background': palette.background,
+        'surface': palette.surface,
+        'raised': palette.raised,
+        'selected surface': Color.alphaBlend(palette.selected, palette.surface),
+      };
+      final inks = {
+        'text': palette.text,
+        'muted': palette.muted,
+        'faint': palette.faint,
+        'accent': palette.accent,
+        'warning': palette.warning,
+        'good': palette.good,
+        'danger': palette.danger,
+      };
+      for (final MapEntry(key: ground, value: back) in grounds.entries) {
+        for (final MapEntry(key: ink, value: fore) in inks.entries) {
+          expect(contrast(fore, back), greaterThanOrEqualTo(4.5), reason: '$ink on $ground');
+        }
+      }
+      final chosenMark = Color.alphaBlend(palette.selected, palette.raised);
+      for (final MapEntry(key: ink, value: fore) in {'text': palette.text, 'accent': palette.accent}.entries) {
+        expect(contrast(fore, chosenMark), greaterThanOrEqualTo(4.5), reason: '$ink on a chosen country mark');
+      }
+      expect(contrast(palette.onAccent, palette.accent), greaterThanOrEqualTo(4.5), reason: 'button text');
+      expect(contrast(palette.muted, palette.raised), greaterThanOrEqualTo(3), reason: 'switch knob when off');
+      expect(contrast(palette.accent, palette.surface), greaterThanOrEqualTo(3), reason: 'switch track when on');
+    });
+  }
 
   test('the theme is the chosen one, or the system one when nothing is chosen', () {
     expect(paletteFor(null, Brightness.dark), Ink.dark);
