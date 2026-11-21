@@ -11,6 +11,7 @@ import (
 	"os"
 	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -351,12 +352,13 @@ func TestTheTrayFollowsTheServiceAndLetsGo(t *testing.T) {
 	c.send(`{"ev":"connection","connection":{"state":"idle","choice":"auto","server":"","delayMs":0,"code":"","error":""}}`, fmt.Sprintf(`{"re":%d,"ok":true}`, id))
 	view(func(v tray.View) bool { return v.Icon == tray.Off && v.Toggle.Action == tray.Connect })
 	limit := time.After(10 * time.Second)
-	for answered := false; !answered; {
+	for {
 		s.mu.Lock()
-		for _, a := range s.answered {
-			answered = answered || a == id
-		}
+		answered := slices.Contains(s.answered, id)
 		s.mu.Unlock()
+		if answered {
+			break
+		}
 		select {
 		case <-woke:
 		case <-limit:
