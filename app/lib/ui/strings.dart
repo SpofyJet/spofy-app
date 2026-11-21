@@ -317,6 +317,31 @@ abstract final class S {
     'Also records website addresses. Turn it on only to track down a problem',
   );
   static String get logsEmpty => _t('Записей пока нет', 'No entries yet');
+  static String logsRepeat(int n, String last) =>
+      _t('$n ${plural(n, 'раз', 'раза', 'раз')}, последний в $last', '${_count(n, 'time', 'times')}, last at $last');
+  static String get logsRaw => _t('Нажмите, чтобы увидеть запись ядра', 'Tap to see the core’s entry');
+  static String? logsCause(String cause) => switch (cause) {
+    'direct_name' => _t(
+      'Сайт мимо VPN не открылся: не удалось узнать его адрес',
+      'A site outside the VPN didn’t open: its address wasn’t found',
+    ),
+    'name_server' => _t(
+      'Сервер имён не ответил вовремя, спросили другой',
+      'A name server didn’t answer in time, another one was asked',
+    ),
+    'fake_address' => _t(
+      'Программа зашла по адресу, полученному до переподключения. Она спросит новый',
+      'An app used an address from before reconnecting. It will ask for a new one',
+    ),
+    'reserve' => _t(
+      'Сервер ещё проверяется, соединение пошло запасным путём из подписки',
+      'The server is still being checked, the connection took the backup route from the subscription',
+    ),
+    'server_check' => _t('Сервер не ответил на проверку вовремя', 'The server didn’t answer the check in time'),
+    'no_network' => _t('Проверка сервера: на устройстве нет сети', 'Server check: the device has no network'),
+    'server_silent' => _t('Сервер не принял соединение', 'The server didn’t accept the connection'),
+    _ => null,
+  };
   static String get copy => _t('Скопировать', 'Copy');
   static String get clear => _t('Очистить', 'Clear');
   static String get about => _t('О приложении', 'About');

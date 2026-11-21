@@ -59,6 +59,9 @@ func Build(server json.RawMessage, o Options) ([]byte, error) {
 			out[k] = v
 		}
 	}
+	if err := modernize(out); err != nil {
+		return nil, err
+	}
 	if o.Mode == ModeProbe {
 		out["inbounds"] = json.RawMessage(`[]`)
 		if err := tweak(out, o); err != nil {
@@ -92,6 +95,7 @@ func Build(server json.RawMessage, o Options) ([]byte, error) {
 			out["outbounds"], out["routing"] = mustJSON(outs), routing
 		}
 	}
+	realBehindFake(out)
 	level := o.LogLevel
 	if level == "" {
 		level = "warning"
