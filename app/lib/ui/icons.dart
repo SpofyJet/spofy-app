@@ -31,6 +31,7 @@ enum Glyph {
   pulse,
   infinity,
   speed,
+  motion,
 }
 
 class GlyphIcon extends StatelessWidget {
@@ -254,6 +255,11 @@ class _GlyphPainter extends CustomPainter {
         );
         canvas.drawLine(const Offset(12, 13.5), const Offset(15.5, 10), line);
         canvas.drawCircle(const Offset(12, 13.5), 0.4, line);
+      case Glyph.motion:
+        canvas.drawCircle(const Offset(15, 12), 5.5, line);
+        canvas.drawLine(const Offset(4.5, 8.5), const Offset(7, 8.5), line);
+        canvas.drawLine(const Offset(2.5, 12), const Offset(7, 12), line);
+        canvas.drawLine(const Offset(4.5, 15.5), const Offset(7, 15.5), line);
     }
   }
 

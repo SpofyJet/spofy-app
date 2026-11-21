@@ -254,6 +254,8 @@ abstract final class S {
   static String languageNow(Lang lang) => lang == Lang.en
       ? _t('Как в системе: $english', 'Follows the system: $english')
       : _t('Как в системе: русский', 'Follows the system: $russian');
+  static String get motion => _t('Анимации', 'Animations');
+  static String get motionSystem => _t('Выключены в настройках системы', 'Turned off in the system settings');
   static String get checking => _t('Проверка серверов', 'Server check');
   static String get probeTarget => _t('Адрес проверки', 'Check address');
   static String get probeAuto => _t('Google и Cloudflare', 'Google and Cloudflare');

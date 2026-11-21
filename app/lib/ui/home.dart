@@ -1,10 +1,12 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/widgets.dart';
 
 import '../core/protocol.dart';
 import '../state/model.dart';
 import 'icons.dart';
+import 'motion.dart';
 import 'strings.dart';
 import 'theme.dart';
 import 'welcome.dart';
@@ -85,20 +87,16 @@ class _Stretch extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, box) {
-        return SingleChildScrollView(
-          child: ConstrainedBox(
-            constraints: BoxConstraints(minHeight: box.maxHeight),
-            child: IntrinsicHeight(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(Ink.gutter, 0, Ink.gutter, 16),
-                child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: children),
-              ),
-            ),
+    return CustomScrollView(
+      slivers: [
+        SliverFillRemaining(
+          hasScrollBody: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(Ink.gutter, 0, Ink.gutter, 16),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: children),
           ),
-        );
-      },
+        ),
+      ],
     );
   }
 }
@@ -267,31 +265,35 @@ class _Status extends StatelessWidget {
             ],
           ),
         ),
-        SizedBox(
-          height: Uptime.slot,
-          child: Center(
-            child: _Swap(
-              alignment: Alignment.center,
-              child: state.protecting && connection.since > 0
-                  ? Uptime(
-                      since: connection.since,
-                      now: now,
-                      tone: switch (state) {
-                        VpnState.connected => Ink.good,
-                        VpnState.switching => Ink.faint,
-                        _ => Ink.warning,
-                      },
-                    )
-                  : null,
+        RepaintBoundary(
+          child: SizedBox(
+            height: Uptime.slot,
+            child: Center(
+              child: _Swap(
+                alignment: Alignment.center,
+                child: state.protecting && connection.since > 0
+                    ? Uptime(
+                        since: connection.since,
+                        now: now,
+                        tone: switch (state) {
+                          VpnState.connected => Ink.good,
+                          VpnState.switching => Ink.faint,
+                          _ => Ink.warning,
+                        },
+                      )
+                    : null,
+              ),
             ),
           ),
         ),
         Center(
           child: PowerControl(state: state, onTap: model.running(Task.disconnect) ? null : model.toggle),
         ),
-        SizedBox(
-          height: Speed.slot(context),
-          child: _Swap(child: state == VpnState.connected ? Speed(rate: model.speed) : null),
+        RepaintBoundary(
+          child: SizedBox(
+            height: Speed.slot(context),
+            child: _Swap(child: state == VpnState.connected ? Speed(rate: model.speed) : null),
+          ),
         ),
         Expanded(
           child: _Notices([
@@ -382,9 +384,6 @@ class _SubscriptionTile extends StatelessWidget {
   }
 }
 
-Duration _motion(BuildContext context, [int ms = 200]) =>
-    MediaQuery.disableAnimationsOf(context) ? Duration.zero : Duration(milliseconds: ms);
-
 class _Swap extends StatelessWidget {
   const _Swap({required this.child, this.alignment = Alignment.topCenter});
 
@@ -394,9 +393,9 @@ class _Swap extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return AnimatedSwitcher(
-      duration: _motion(context),
-      switchInCurve: Curves.easeOut,
-      switchOutCurve: Curves.easeIn,
+      duration: Motion.of(context, Motion.medium),
+      switchInCurve: Motion.enter,
+      switchOutCurve: Motion.exit,
       layoutBuilder: (current, previous) => Stack(alignment: alignment, children: [...previous, ?current]),
       transitionBuilder: (child, animation) => AnimatedBuilder(
         animation: animation,
@@ -409,7 +408,7 @@ class _Swap extends StatelessWidget {
   }
 }
 
-class PowerControl extends StatelessWidget {
+class PowerControl extends StatefulWidget {
   const PowerControl({super.key, required this.state, required this.onTap});
 
   static const size = 148.0;
@@ -418,62 +417,201 @@ class PowerControl extends StatelessWidget {
   final VoidCallback? onTap;
 
   @override
+  State<PowerControl> createState() => _PowerControlState();
+}
+
+class _PowerControlState extends State<PowerControl> with TickerProviderStateMixin {
+  late final _turn = AnimationController(vsync: this, duration: Motion.turn);
+  late final _ring = AnimationController(vsync: this, duration: Motion.medium, value: widget.state.busy ? 1 : 0)
+    ..addStatusListener((status) {
+      if (status.isDismissed) {
+        _turn.stop();
+      }
+    });
+  late final _lit = AnimationController(vsync: this, duration: Motion.medium, value: _on ? 1 : 0);
+  late final _seal = AnimationController(vsync: this, duration: Motion.settle, value: 1)
+    ..addStatusListener((status) {
+      if (status.isCompleted && !widget.state.busy) {
+        _ring.value = 0;
+      }
+    });
+  late final _shine = Listenable.merge([_lit, _seal]);
+  late final _spin = Listenable.merge([_turn, _ring, _seal]);
+
+  bool get _on => widget.state == VpnState.connected;
+
+  bool get _sealing => _seal.value < 1;
+
+  double get _fill => _sealing ? _part(_seal.value, 0.3, 0.65, Motion.move) : _lit.value;
+
+  double get _halo => _sealing ? _part(_seal.value, 0.35, 1, Motion.enter) : _lit.value;
+
+  double get _close => _sealing ? _part(_seal.value, 0, 0.4, Motion.enter) : 0;
+
+  double get _shown => _ring.value * (_sealing ? 1 - _part(_seal.value, 0.45, 0.75, Curves.linear) : 1);
+
+  static double _part(double t, double from, double to, Curve curve) =>
+      curve.transform(((t - from) / (to - from)).clamp(0.0, 1.0));
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _run(null);
+  }
+
+  @override
+  void didUpdateWidget(PowerControl old) {
+    super.didUpdateWidget(old);
+    if (old.state != widget.state) {
+      _run(old.state);
+    }
+  }
+
+  void _run(VpnState? was) {
+    final busy = widget.state.busy;
+    if (Motion.still(context)) {
+      _turn.stop();
+      _seal.value = 1;
+      _ring.value = busy ? 1 : 0;
+      _lit.value = _on ? 1 : 0;
+      return;
+    }
+    if (busy && !_turn.isAnimating) {
+      _turn.repeat();
+    }
+    if (_on && was != null && was.busy) {
+      _seal.forward(from: 0);
+    } else {
+      _seal.value = 1;
+      if (busy) {
+        _ring.forward();
+      } else {
+        _ring.reverse();
+      }
+    }
+    _lit.animateTo(_on ? 1 : 0, curve: Motion.move);
+  }
+
+  @override
+  void dispose() {
+    _turn.dispose();
+    _ring.dispose();
+    _lit.dispose();
+    _seal.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final state = widget.state;
     final inviting = state == VpnState.idle || state == VpnState.failed;
     final troubled = state == VpnState.stalled || state == VpnState.offline;
-    final on = state == VpnState.connected;
-    final fill = on ? Ink.accent : Ink.raised;
-    final ink = on
-        ? Ink.onAccent
-        : troubled
+    final ink = troubled
         ? Ink.warning
         : inviting
         ? Ink.accent
         : Ink.muted;
-    final time = _motion(context, 180);
-    const radius = BorderRadius.all(Radius.circular(size / 2));
+    const radius = BorderRadius.all(Radius.circular(PowerControl.size / 2));
     return Pressable(
       label: inviting ? S.connect : (state.busy ? S.stop : S.disconnect),
-      onTap: onTap,
+      onTap: widget.onTap,
       radius: radius,
-      child: SizedBox.square(
-        dimension: size,
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            AnimatedContainer(
-              duration: time,
-              decoration: BoxDecoration(
-                color: fill,
-                shape: BoxShape.circle,
-                boxShadow: [if (on) BoxShadow(color: Ink.accent.withAlpha(0x59), blurRadius: 40, spreadRadius: 4)],
-              ),
-            ),
-            Center(
-              child: TweenAnimationBuilder<Color?>(
-                tween: ColorTween(end: ink),
-                duration: time,
-                builder: (context, color, _) => _Swap(
-                  alignment: Alignment.center,
-                  child: GlyphIcon(
-                    troubled ? Glyph.warning : Glyph.power,
-                    key: ValueKey(troubled),
-                    color: color ?? ink,
-                    size: 56,
-                    stroke: 1.9,
+      child: RepaintBoundary(
+        child: SizedBox.square(
+          dimension: PowerControl.size,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              CustomPaint(painter: _Disc(this, Ink.raised, Ink.accent)),
+              Center(
+                child: TweenAnimationBuilder<Color?>(
+                  tween: ColorTween(end: ink),
+                  duration: Motion.of(context, Motion.medium),
+                  builder: (context, color, _) => AnimatedBuilder(
+                    animation: _shine,
+                    builder: (context, _) => _Swap(
+                      alignment: Alignment.center,
+                      child: GlyphIcon(
+                        troubled ? Glyph.warning : Glyph.power,
+                        key: ValueKey(troubled),
+                        color: Color.lerp(color ?? ink, Ink.onAccent, _fill)!,
+                        size: 56,
+                        stroke: 1.9,
+                      ),
+                    ),
                   ),
                 ),
               ),
-            ),
-            _Swap(
-              alignment: Alignment.center,
-              child: state.busy ? Spinner(size: size, color: Ink.accent, stroke: 4) : null,
-            ),
-          ],
+              RepaintBoundary(child: CustomPaint(painter: _Ring(this, Ink.accent))),
+            ],
+          ),
         ),
       ),
     );
   }
+}
+
+class _Disc extends CustomPainter {
+  _Disc(this.control, this.off, this.on) : super(repaint: control._shine);
+
+  final _PowerControlState control;
+  final Color off;
+  final Color on;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = size.center(Offset.zero);
+    final radius = size.shortestSide / 2;
+    final halo = control._halo;
+    if (halo > 0) {
+      canvas.drawCircle(
+        center,
+        radius + 4 * halo,
+        BoxShadow(color: on.withAlpha((0x59 * halo).round()), blurRadius: 40).toPaint(),
+      );
+    }
+    canvas.drawCircle(center, radius, Paint()..color = Color.lerp(off, on, control._fill)!);
+  }
+
+  @override
+  bool shouldRepaint(_Disc old) => old.off != off || old.on != on || old.control != control;
+}
+
+class _Ring extends CustomPainter {
+  _Ring(this.control, this.color) : super(repaint: control._spin);
+
+  final _PowerControlState control;
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final shown = control._shown;
+    if (shown <= 0) {
+      return;
+    }
+    const stroke = 4.0;
+    final center = size.center(Offset.zero);
+    canvas.transform(
+      (Matrix4.translationValues(center.dx, center.dy, 0)
+            ..multiply(Matrix4.rotationZ(control._turn.value * math.pi * 2))
+            ..multiply(Matrix4.translationValues(-center.dx, -center.dy, 0)))
+          .storage,
+    );
+    canvas.drawArc(
+      (Offset.zero & size).deflate(stroke / 2),
+      -math.pi / 2,
+      1.4 + (2 * math.pi - 1.4) * control._close,
+      false,
+      Paint()
+        ..color = color.withValues(alpha: color.a * shown)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = stroke
+        ..strokeCap = StrokeCap.round,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_Ring old) => old.color != color || old.control != control;
 }
 
 class Speed extends StatelessWidget {
@@ -535,19 +673,44 @@ class Uptime extends StatefulWidget {
   State<Uptime> createState() => _UptimeState();
 }
 
-class _UptimeState extends State<Uptime> {
+class _UptimeState extends State<Uptime> with WidgetsBindingObserver {
   Timer? _tick;
+  bool _covered = false;
 
   @override
   void initState() {
     super.initState();
-    _schedule();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) => setState(_wake);
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _covered = !TickerMode.valuesOf(context).enabled;
+    _wake();
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _tick?.cancel();
     super.dispose();
+  }
+
+  void _wake() {
+    final life = WidgetsBinding.instance.lifecycleState;
+    final live = !_covered && life != AppLifecycleState.hidden && life != AppLifecycleState.paused;
+    if (live == (_tick != null)) {
+      return;
+    }
+    _tick?.cancel();
+    _tick = null;
+    if (live) {
+      _schedule();
+    }
   }
 
   Duration get _elapsed => widget.now().difference(DateTime.fromMillisecondsSinceEpoch(widget.since * 1000));
@@ -565,7 +728,7 @@ class _UptimeState extends State<Uptime> {
   Widget build(BuildContext context) {
     final elapsed = _elapsed;
     final text = S.uptime(elapsed);
-    final still = MediaQuery.disableAnimationsOf(context);
+    final still = Motion.still(context);
     final style = Ink.type(17, 600, Ink.text, height: 1.2).copyWith(fontFeatures: const [FontFeature.tabularFigures()]);
     final tone = widget.tone ?? Ink.good;
     return Semantics(
@@ -622,9 +785,9 @@ class _Digit extends StatelessWidget {
     }
     return ClipRect(
       child: AnimatedSwitcher(
-        duration: const Duration(milliseconds: 240),
-        switchInCurve: Curves.easeOutCubic,
-        switchOutCurve: Curves.easeInCubic,
+        duration: Motion.large,
+        switchInCurve: Motion.enter,
+        switchOutCurve: Motion.exit,
         layoutBuilder: (current, previous) => Stack(alignment: Alignment.center, children: [...previous, ?current]),
         transitionBuilder: (child, animation) {
           final entering = child.key == ValueKey(char);

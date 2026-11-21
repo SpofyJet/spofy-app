@@ -3,6 +3,7 @@ import 'package:flutter/widgets.dart';
 import '../state/model.dart';
 import 'choice.dart';
 import 'icons.dart';
+import 'motion.dart';
 import 'strings.dart';
 import 'theme.dart';
 import 'widgets.dart';
@@ -222,6 +223,16 @@ class SettingsScreen extends StatelessWidget {
                     ChoiceTile(Glyph.theme, themeKey, model: model, open: open),
                     gap,
                     ChoiceTile(Glyph.globe, languageKey, model: model, open: open),
+                    gap,
+                    if (Motion.still(context) && settings[motionKey] != false)
+                      Tile(leading: mark(context, Glyph.motion), title: S.motion, subtitle: S.motionSystem, wrap: true)
+                    else
+                      SwitchTile(
+                        leading: mark(context, Glyph.motion),
+                        title: S.motion,
+                        value: settings[motionKey] != false,
+                        onChanged: (value) => model.set(motionKey, value ? null : false),
+                      ),
                     SectionTitle(S.about),
                     if (onSupport != null) ...[
                       Tile(leading: mark(context, Glyph.chat), title: S.support, onTap: onSupport),
