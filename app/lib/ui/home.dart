@@ -7,6 +7,7 @@ import '../state/model.dart';
 import 'icons.dart';
 import 'strings.dart';
 import 'theme.dart';
+import 'welcome.dart';
 import 'widgets.dart';
 
 class HomeScreen extends StatelessWidget {
@@ -38,6 +39,7 @@ class HomeScreen extends StatelessWidget {
             children: [
               Header(
                 title: S.app,
+                note: model.ready ? model.snapshot.version : '',
                 action: model.ready ? RoundButton(glyph: Glyph.settings, label: S.settings, onTap: onSettings) : null,
               ),
               if (model.fault.isNotEmpty)
@@ -62,7 +64,7 @@ class HomeScreen extends StatelessWidget {
     }
     final subscription = model.subscription;
     if (subscription == null) {
-      return _Empty(model: model, onManual: onSubscription);
+      return Welcome(model: model, onManual: onSubscription);
     }
     if (subscription.stopped) {
       return _Stopped(model: model, subscription: subscription, now: now, onSubscription: onSubscription);
@@ -121,7 +123,7 @@ class _Loading extends StatelessWidget {
     );
     return _Stretch(
       children: [
-        const Spacer(flex: 2),
+        const Spacer(),
         Stack(
           alignment: Alignment.center,
           children: [
@@ -141,7 +143,8 @@ class _Loading extends StatelessWidget {
             child: const SizedBox.square(dimension: PowerControl.size),
           ),
         ),
-        const Spacer(flex: 3),
+        SizedBox(height: Speed.slot(context)),
+        const Spacer(),
         tile,
         const SizedBox(height: 8),
         tile,
@@ -160,109 +163,6 @@ class _Hidden extends StatelessWidget {
 }
 
 const shopAddress = 'https://t.me/spofyvpnbot';
-
-class _Empty extends StatefulWidget {
-  const _Empty({required this.model, required this.onManual});
-
-  final AppModel model;
-  final VoidCallback onManual;
-
-  @override
-  State<_Empty> createState() => _EmptyState();
-}
-
-class _EmptyState extends State<_Empty> {
-  bool _nothing = false;
-
-  Future<void> _paste() async {
-    final text = await clipboardText();
-    if (!mounted) {
-      return;
-    }
-    if (!text.startsWith('https://') || text.contains(RegExp(r'\s'))) {
-      widget.model.dismiss();
-      setState(() => _nothing = true);
-      return;
-    }
-    setState(() => _nothing = false);
-    await widget.model.subscribe(text);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final failure = widget.model.failure;
-    final problem = _nothing ? S.noLink : (failure?.task == Task.subscribe ? S.failure(failure!) : '');
-    return _Stretch(
-      children: [
-        const Spacer(flex: 2),
-        Text(S.noSubscriptionTitle, style: Ink.title, textAlign: TextAlign.center),
-        const SizedBox(height: 8),
-        SizedBox(
-          height: MediaQuery.textScalerOf(context).scale(Ink.note.fontSize!) * Ink.note.height! * 3,
-          child: Semantics(
-            liveRegion: true,
-            child: problem.isEmpty
-                ? Text(
-                    S.noSubscriptionHint,
-                    style: Ink.note,
-                    textAlign: TextAlign.center,
-                    maxLines: 3,
-                    overflow: TextOverflow.ellipsis,
-                  )
-                : Text.rich(
-                    TextSpan(
-                      children: [
-                        WidgetSpan(
-                          alignment: PlaceholderAlignment.middle,
-                          child: Padding(
-                            padding: const EdgeInsets.only(right: 6),
-                            child: GlyphIcon(Glyph.warning, color: Ink.warning, size: 16),
-                          ),
-                        ),
-                        TextSpan(text: problem),
-                      ],
-                    ),
-                    style: Ink.note.copyWith(color: Ink.text),
-                    textAlign: TextAlign.center,
-                    maxLines: 3,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-          ),
-        ),
-        const Spacer(flex: 3),
-        if (widget.model.browse case final browse?)
-          Pressable(
-            label: problem.isEmpty ? '${S.buyAsk} ${S.buy}' : '${S.stuckAsk} ${S.stuck}',
-            onTap: () => browse(shopAddress),
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(minHeight: 44),
-              child: Center(
-                child: ExcludeSemantics(
-                  child: Text.rich(
-                    TextSpan(
-                      text: '${problem.isEmpty ? S.buyAsk : S.stuckAsk} ',
-                      children: [
-                        TextSpan(
-                          text: problem.isEmpty ? S.buy : S.stuck,
-                          style: TextStyle(color: Ink.accent, fontWeight: FontWeight.w600),
-                        ),
-                      ],
-                    ),
-                    style: Ink.note,
-                    textAlign: TextAlign.center,
-                  ),
-                ),
-              ),
-            ),
-          ),
-        const SizedBox(height: 4),
-        QuietButton(label: S.manual, onTap: widget.onManual),
-        const SizedBox(height: 8),
-        PrimaryButton(label: S.pasteLink, busy: widget.model.running(Task.subscribe), onTap: _paste),
-      ],
-    );
-  }
-}
 
 class _Stopped extends StatelessWidget {
   const _Stopped({required this.model, required this.subscription, required this.now, required this.onSubscription});
@@ -295,14 +195,7 @@ class _Stopped extends StatelessWidget {
         ),
         const Spacer(flex: 3),
         if (failure?.task == Task.refresh) ...[Notice(S.failure(failure!)), const SizedBox(height: 8)],
-        Tile(
-          leading: RemainderMark(S.remainder(subscription, now()), low: S.low(subscription, now())),
-          title: S.subscription,
-          subtitle: S.usage(subscription),
-          trailing: subscription.stop == 'ended' ? S.day(subscription, now()) : S.until(subscription, now()),
-          trailingColor: S.low(subscription, now()) ? Ink.warning : Ink.muted,
-          onTap: onSubscription,
-        ),
+        _SubscriptionTile(model: model, subscription: subscription, now: now, onTap: onSubscription),
         const SizedBox(height: 8),
         QuietButton(label: S.checkAgain, busy: model.running(Task.refresh), onTap: model.refresh),
         if (browse != null && page != null && page.isScheme('https')) ...[
@@ -341,29 +234,37 @@ class _Status extends StatelessWidget {
     final hint = refused ? S.reason(AppModel.denied) : S.hint(connection, traffic: model.traffic);
     final delay = state == VpnState.connected ? connection.delayMs : (shown?.delayMs ?? 0);
     final subscription = model.subscription!;
+    final totals = state == VpnState.connected && !refused && (model.traffic.down > 0 || model.traffic.up > 0);
     return _Stretch(
       children: [
-        const Spacer(flex: 2),
+        const Spacer(),
         Semantics(
           liveRegion: true,
           child: Column(
             children: [
               SizedBox(
                 height: MediaQuery.textScalerOf(context).scale(Ink.title.fontSize!) * Ink.title.height!,
-                child: FittedBox(
-                  fit: BoxFit.scaleDown,
-                  child: Text(S.title(state), style: Ink.title, maxLines: 1),
+                child: _Swap(
+                  alignment: Alignment.center,
+                  child: FittedBox(
+                    key: ValueKey(state),
+                    fit: BoxFit.scaleDown,
+                    child: Text(S.title(state), style: Ink.title, maxLines: 1),
+                  ),
                 ),
               ),
               const SizedBox(height: 6),
               SizedBox(
                 height: MediaQuery.textScalerOf(context).scale(Ink.note.fontSize!) * Ink.note.height! * 2,
-                child: Text(
-                  hint,
-                  style: Ink.note,
-                  textAlign: TextAlign.center,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
+                child: _Swap(
+                  child: Text(
+                    hint,
+                    key: ValueKey<String?>(totals ? null : hint),
+                    style: Ink.note,
+                    textAlign: TextAlign.center,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 ),
               ),
             ],
@@ -372,13 +273,20 @@ class _Status extends StatelessWidget {
         SizedBox(
           height: Uptime.slot,
           child: Center(
-            child: state.protecting && connection.since > 0 ? Uptime(since: connection.since, now: now) : null,
+            child: _Swap(
+              alignment: Alignment.center,
+              child: state.protecting && connection.since > 0 ? Uptime(since: connection.since, now: now) : null,
+            ),
           ),
         ),
         Center(
           child: PowerControl(state: state, onTap: model.running(Task.disconnect) ? null : model.toggle),
         ),
-        const Spacer(flex: 3),
+        SizedBox(
+          height: Speed.slot(context),
+          child: _Swap(child: state == VpnState.connected ? Speed(rate: model.speed) : null),
+        ),
+        const Spacer(),
         if (failure != null && failure.task != Task.connect) ...[Notice(S.failure(failure)), const SizedBox(height: 8)],
         if (model.update case final update? when onUpdate != null) ...[
           Pressable(
@@ -389,10 +297,9 @@ class _Status extends StatelessWidget {
           const SizedBox(height: 8),
         ],
         Tile(
-          leading: CountryMark(
-            shown == null ? 'A' : (shown.country.isEmpty ? '—' : shown.country),
-            active: state == VpnState.connected,
-          ),
+          leading: shown == null
+              ? GlyphMark(Glyph.bolt, color: Ink.accent)
+              : CountryMark(shown.country.isEmpty ? '—' : shown.country, active: state == VpnState.connected),
           title: connection.auto ? S.auto : (chosen == null ? connection.choice : S.serverName(chosen)),
           subtitle: connection.auto ? (current == null ? S.autoHint : S.serverName(current)) : S.pinned,
           trailing: delay > 0 ? S.delay(delay) : '',
@@ -401,15 +308,75 @@ class _Status extends StatelessWidget {
               '${S.server}: ${connection.auto ? S.auto : (chosen == null ? connection.choice : S.serverName(chosen))}',
         ),
         const SizedBox(height: 8),
-        Tile(
-          leading: RemainderMark(S.remainder(subscription, now()), low: S.low(subscription, now())),
-          title: S.subscription,
-          subtitle: S.usage(subscription),
-          trailing: S.until(subscription, now()),
-          trailingColor: S.low(subscription, now()) ? Ink.warning : Ink.muted,
-          onTap: onSubscription,
-        ),
+        _SubscriptionTile(model: model, subscription: subscription, now: now, onTap: onSubscription),
       ],
+    );
+  }
+}
+
+class _SubscriptionTile extends StatelessWidget {
+  const _SubscriptionTile({required this.model, required this.subscription, required this.now, required this.onTap});
+
+  final AppModel model;
+  final Subscription subscription;
+  final DateTime Function() now;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = subscription;
+    final today = now();
+    final brief = model.subscriptions.where((b) => b.active).firstOrNull;
+    final keys = brief != null && brief.links;
+    final endless = S.endless(s);
+    final low = S.low(s, today);
+    final title = brief != null && (keys || model.subscriptions.length > 1) ? S.briefTitle(brief) : S.subscription;
+    final subtitle = keys ? S.serversCount(brief.servers) : S.plan(s);
+    final trailing = keys || endless ? '' : (s.stop == 'ended' ? S.day(s, today) : S.until(s, today));
+    return Tile(
+      leading: keys
+          ? CountryMark('#')
+          : endless
+          ? GlyphMark(Glyph.infinity, color: Ink.accent)
+          : RemainderMark(S.remainder(s, today), low: low),
+      title: title,
+      subtitle: subtitle,
+      trailing: trailing,
+      trailingColor: low ? Ink.warning : Ink.muted,
+      wrap: endless,
+      onTap: onTap,
+      semantic: [
+        if (title != S.subscription) '${S.subscription}: $title' else title,
+        subtitle,
+        trailing,
+      ].where((p) => p.isNotEmpty).join(', '),
+    );
+  }
+}
+
+Duration _motion(BuildContext context, [int ms = 200]) =>
+    MediaQuery.disableAnimationsOf(context) ? Duration.zero : Duration(milliseconds: ms);
+
+class _Swap extends StatelessWidget {
+  const _Swap({required this.child, this.alignment = Alignment.topCenter});
+
+  final Widget? child;
+  final AlignmentGeometry alignment;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedSwitcher(
+      duration: _motion(context),
+      switchInCurve: Curves.easeOut,
+      switchOutCurve: Curves.easeIn,
+      layoutBuilder: (current, previous) => Stack(alignment: alignment, children: [...previous, ?current]),
+      transitionBuilder: (child, animation) => AnimatedBuilder(
+        animation: animation,
+        builder: (context, faded) =>
+            ExcludeSemantics(excluding: animation.status == AnimationStatus.reverse, child: faded),
+        child: FadeTransition(opacity: animation, child: child),
+      ),
+      child: child,
     );
   }
 }
@@ -435,6 +402,7 @@ class PowerControl extends StatelessWidget {
         : inviting
         ? Ink.accent
         : Ink.muted;
+    final time = _motion(context, 180);
     const radius = BorderRadius.all(Radius.circular(size / 2));
     return Pressable(
       label: inviting ? S.connect : (state.busy ? S.stop : S.disconnect),
@@ -446,11 +414,79 @@ class PowerControl extends StatelessWidget {
           fit: StackFit.expand,
           children: [
             AnimatedContainer(
-              duration: const Duration(milliseconds: 180),
-              decoration: BoxDecoration(color: fill, shape: BoxShape.circle),
+              duration: time,
+              decoration: BoxDecoration(
+                color: fill,
+                shape: BoxShape.circle,
+                boxShadow: [if (on) BoxShadow(color: Ink.accent.withAlpha(0x59), blurRadius: 40, spreadRadius: 4)],
+              ),
             ),
-            Center(child: GlyphIcon(troubled ? Glyph.warning : Glyph.power, color: ink, size: 56, stroke: 1.9)),
-            if (state.busy) Spinner(size: size, color: Ink.accent, stroke: 4),
+            Center(
+              child: TweenAnimationBuilder<Color?>(
+                tween: ColorTween(end: ink),
+                duration: time,
+                builder: (context, color, _) => _Swap(
+                  alignment: Alignment.center,
+                  child: GlyphIcon(
+                    troubled ? Glyph.warning : Glyph.power,
+                    key: ValueKey(troubled),
+                    color: color ?? ink,
+                    size: 56,
+                    stroke: 1.9,
+                  ),
+                ),
+              ),
+            ),
+            _Swap(
+              alignment: Alignment.center,
+              child: state.busy ? Spinner(size: size, color: Ink.accent, stroke: 4) : null,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class Speed extends StatelessWidget {
+  const Speed({super.key, required this.rate});
+
+  static double slot(BuildContext context) => 16 + MediaQuery.textScalerOf(context).scale(15) * 1.2;
+
+  final Traffic? rate;
+
+  @override
+  Widget build(BuildContext context) {
+    final rate = this.rate;
+    final style = Ink.type(15, 600, Ink.text, height: 1.2);
+    Widget side(String arrow, int? value) => FittedBox(
+      fit: BoxFit.scaleDown,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(arrow, style: style.copyWith(color: Ink.faint)),
+          const SizedBox(width: 4),
+          _Swap(
+            alignment: Alignment.centerLeft,
+            child: value == null ? const Skeleton(width: 72, height: 16) : Text(S.rate(value), style: style),
+          ),
+        ],
+      ),
+    );
+    return Semantics(
+      label: rate == null ? '' : S.speed(rate),
+      excludeSemantics: true,
+      child: Padding(
+        padding: const EdgeInsets.only(top: 16),
+        child: Row(
+          children: [
+            Expanded(
+              child: Align(alignment: Alignment.centerRight, child: side('↓', rate?.down)),
+            ),
+            const SizedBox(width: 24),
+            Expanded(
+              child: Align(alignment: Alignment.centerLeft, child: side('↑', rate?.up)),
+            ),
           ],
         ),
       ),
@@ -556,7 +592,7 @@ class _Digit extends StatelessWidget {
     }
     return ClipRect(
       child: AnimatedSwitcher(
-        duration: const Duration(milliseconds: 260),
+        duration: const Duration(milliseconds: 240),
         switchInCurve: Curves.easeOutCubic,
         switchOutCurve: Curves.easeInCubic,
         layoutBuilder: (current, previous) => Stack(alignment: Alignment.center, children: [...previous, ?current]),

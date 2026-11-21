@@ -10,10 +10,12 @@ import 'package:spofy/state/apps.dart';
 import 'package:spofy/state/model.dart';
 import 'package:spofy/ui/app.dart';
 import 'package:spofy/ui/home.dart';
+import 'package:spofy/ui/icons.dart';
 import 'package:spofy/ui/servers.dart';
 import 'package:spofy/ui/settings.dart';
 import 'package:spofy/ui/strings.dart';
 import 'package:spofy/ui/subscription.dart';
+import 'package:spofy/ui/theme.dart';
 import 'package:spofy/ui/widgets.dart';
 
 import 'replay.dart';
@@ -91,6 +93,188 @@ void main() {
     }
   });
 
+  testWidgets('the version stands right after the wordmark and leaves the settings button in place', (tester) async {
+    for (final (size, scale) in [(phone, 1.0), (const Size(320, 568), 1.3)]) {
+      await show(tester, home(VpnState.idle), size, textScale: scale);
+      final top = tester.renderObject<RenderParagraph>(
+        find.byWidgetPredicate((w) => w is RichText && w.text.toPlainText().startsWith(S.app)),
+      );
+      expect(top.text.toPlainText(), endsWith('0.1.0'));
+      expect(top.didExceedMaxLines, isFalse);
+      expect(tester.getRect(find.byType(RoundButton)), Rect.fromLTWH(size.width - 52, 6, 44, 44));
+    }
+  });
+
+  final plans = <String, Subscription Function()>{
+    'unlimited_forever': () => subscription(total: 0, days: 30000),
+    'unlimited_dated': () => subscription(total: 0),
+    'limited_forever': () => subscription(days: 30000),
+    'limited_dated': subscription,
+  };
+  for (final entry in plans.entries) {
+    for (final (name, size, theme) in [
+      ('360', phone, 'dark'),
+      ('light_360', phone, 'light'),
+      ('small', small, 'dark'),
+    ]) {
+      testWidgets('subscription ${entry.key}, $name', (tester) async {
+        await show(tester, home(VpnState.idle, plan: entry.value(), settings: {themeKey: theme}), size);
+        await golden(tester, 'home_${entry.key}_$name');
+      });
+    }
+  }
+
+  testWidgets('each kind of subscription reads as one plain line with what can run out', (tester) async {
+    final today = clock.millisecondsSinceEpoch ~/ 1000;
+    for (final (plan, mark, line, right) in [
+      (subscription(total: 0, days: 30000), Glyph.infinity, 'Навсегда, без лимита · 13 ГБ', ''),
+      (subscription(total: 0, used: 0, expire: 0), Glyph.infinity, 'Навсегда, без лимита', ''),
+      (subscription(total: 0), null, 'Без лимита', 'до 31 дек'),
+      (subscription(days: 30000), null, '13 из 100 ГБ', 'навсегда'),
+      (subscription(expire: 0), null, '13 из 100 ГБ', ''),
+      (subscription(expire: today + 86400 * 42), null, '13 из 100 ГБ', 'до 31 дек'),
+    ]) {
+      await show(tester, home(VpnState.idle, plan: plan), phone);
+      final tile = tester.widget<Tile>(find.widgetWithText(Tile, S.subscription));
+      expect([tile.subtitle, tile.trailing], [line, right]);
+      expect(
+        find.descendant(of: find.byWidget(tile), matching: find.byType(RemainderMark)),
+        mark == null ? findsOneWidget : findsNothing,
+      );
+      if (mark != null) {
+        expect(
+          tester.widget<GlyphMark>(find.descendant(of: find.byWidget(tile), matching: find.byType(GlyphMark))).glyph,
+          mark,
+        );
+      }
+      for (final (size, scale) in [(small, 1.0), (const Size(320, 568), 1.3)]) {
+        for (final lang in [const Locale('ru', 'RU'), const Locale('en', 'US')]) {
+          await show(
+            tester,
+            home(VpnState.idle, plan: plan),
+            size,
+            textScale: scale,
+            locales: [lang],
+          );
+          for (final text in tester.renderObjectList<RenderParagraph>(find.byType(RichText))) {
+            expect(text.didExceedMaxLines, isFalse, reason: '$line at $size × $scale: ${text.text.toPlainText()}');
+          }
+        }
+      }
+    }
+  });
+
+  testWidgets('with several subscriptions the tile names the chosen one; own keys say how many servers they hold', (
+    tester,
+  ) async {
+    Brief brief(String id, {String title = '', String kind = 'url', bool active = false}) =>
+        Brief(id: id, title: title, kind: kind, active: active, servers: 3, used: 0, total: 0, expire: 0);
+    await show(
+      tester,
+      home(
+        VpnState.idle,
+        briefs: [
+          brief('a', title: 'Дом', active: true),
+          brief('b'),
+        ],
+      ),
+      phone,
+    );
+    expect(find.widgetWithText(Tile, 'Дом'), findsOneWidget);
+    await show(tester, home(VpnState.idle, briefs: [brief('a')]), phone);
+    expect(find.widgetWithText(Tile, S.subscription), findsOneWidget);
+    await show(
+      tester,
+      home(
+        VpnState.idle,
+        plan: subscription(total: 0, used: 0, expire: 0),
+        briefs: [brief('k', kind: 'links', active: true)],
+      ),
+      phone,
+    );
+    final keys = tester.widget<Tile>(find.widgetWithText(Tile, S.ownKeys));
+    expect([keys.subtitle, keys.trailing], [S.serversCount(3), '']);
+  });
+
+  testWidgets('home is balanced: as much room above the title as below the speed, the button at half the height', (
+    tester,
+  ) async {
+    for (final size in [phone, small, tall]) {
+      await show(tester, home(VpnState.connected, server: 'nl', delay: 38), size);
+      final above = tester.getRect(find.text(S.title(VpnState.connected))).top - 56;
+      final below = tester.getRect(find.byType(Tile).first).top - tester.getRect(find.byType(Speed)).bottom;
+      final share = tester.getRect(find.byType(PowerControl)).center.dy / size.height;
+      printOnFailure('$size: ${above.toStringAsFixed(1)} above, ${below.toStringAsFixed(1)} below, center at $share');
+      expect((above - below).abs(), lessThan(1));
+      expect(share, inInclusiveRange(0.50, 0.51));
+    }
+  });
+
+  for (final theme in ['dark', 'light']) {
+    testWidgets('the speed waits for its second sample in a placeholder of its own size, $theme', (tester) async {
+      final scene = home(VpnState.connected, server: 'nl', delay: 38, pending: true, settings: {themeKey: theme});
+      await show(tester, scene, phone);
+      final slot = tester.getRect(find.byType(Speed));
+      expect(find.descendant(of: find.byType(Speed), matching: find.byType(Skeleton)), findsNWidgets(2));
+      expect(find.textContaining('/с'), findsNothing);
+      await golden(tester, theme == 'dark' ? 'home_speed_pending_360' : 'home_speed_pending_light_360');
+      scene.model
+        ..speed = const Traffic(up: 190464, down: 13107200)
+        ..notifyListeners();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+      expect([find.byType(Skeleton), find.text('12,5 МБ/с')], [findsNWidgets(2), findsOneWidget]);
+      await tester.pump(const Duration(milliseconds: 150));
+      expect(tester.getRect(find.byType(Speed)), slot);
+      expect(find.byType(Skeleton), findsNothing);
+      expect([find.text('12,5 МБ/с'), find.text('186 КБ/с')], everyElement(findsOneWidget));
+      expect(find.textContaining('1,2 ГБ'), findsOneWidget);
+      expect(find.bySemanticsLabel('Скорость: загрузка 12,5 МБ/с, отдача 186 КБ/с'), findsOneWidget);
+    });
+  }
+
+  testWidgets('the speed is shown only while the VPN works', (tester) async {
+    for (final state in VpnState.values) {
+      await show(tester, home(state, server: 'nl'), phone);
+      expect(find.byType(Speed), state == VpnState.connected ? findsOneWidget : findsNothing, reason: state.name);
+    }
+  });
+
+  testWidgets('states cross-fade in 200 ms without moving anything; with reduced motion they change at once', (
+    tester,
+  ) async {
+    addTearDown(tester.platformDispatcher.clearAccessibilityFeaturesTestValue);
+    final semantics = tester.ensureSemantics();
+    final said = find.bySemanticsLabel(RegExp(S.title(VpnState.idle)));
+    for (final still in [false, true]) {
+      tester.platformDispatcher.accessibilityFeaturesTestValue = FakeAccessibilityFeatures(disableAnimations: still);
+      final scene = home(VpnState.idle);
+      await show(tester, scene, phone);
+      expect(said, findsOneWidget);
+      final place = tester.getRect(find.byType(PowerControl));
+      Color glyph() => tester
+          .widget<GlyphIcon>(find.descendant(of: find.byType(PowerControl), matching: find.byType(GlyphIcon)))
+          .color;
+      final before = glyph();
+      scene.model
+        ..snapshot = scene.model.snapshot.apply(
+          const ConnectionEvent(Connection(state: VpnState.connecting, server: 'nl')),
+        )
+        ..notifyListeners();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 90));
+      expect(find.text(S.title(VpnState.idle)), still ? findsNothing : findsOneWidget);
+      expect(find.text(S.title(VpnState.connecting)), findsOneWidget);
+      expect(said, findsNothing);
+      expect(tester.getRect(find.byType(PowerControl)), place);
+      expect(glyph(), still ? Ink.muted : isNot(anyOf(before, Ink.muted)));
+      await tester.pump(const Duration(milliseconds: 160));
+      expect(find.text(S.title(VpnState.idle)), findsNothing);
+      expect(glyph(), Ink.muted);
+    }
+    semantics.dispose();
+  });
+
   testWidgets('nothing overflows with large text on a small phone', (tester) async {
     for (final scene in homes.values) {
       await show(tester, scene(), small, textScale: 1.5);
@@ -120,7 +304,7 @@ void main() {
     await show(tester, home(VpnState.idle), phone);
     await open(tester, S.server);
     await golden(tester, 'servers_360');
-    expect(rows(tester).take(4), ['Обход', 'Нидерланды', 'Германия', 'Финляндия']);
+    expect(rows(tester).take(4), ['Нидерланды', 'Германия', 'Финляндия', 'Польша']);
   });
 
   testWidgets('servers on a desktop window', (tester) async {
@@ -236,8 +420,17 @@ void main() {
     await show(tester, home(VpnState.idle, browse: opened.add), phone);
     await open(tester, S.subscription);
     await golden(tester, 'subscription_360');
+    expect(find.text('Обновлено 30 мин назад'), findsOneWidget);
     await tester.tap(find.bySemanticsLabel(S.renew));
     expect(opened, ['https://sub.example.test/page']);
+  });
+
+  testWidgets('a subscription without limits says so on its screen in the words of home', (tester) async {
+    await show(tester, home(VpnState.idle, plan: subscription(total: 0, days: 30000)), phone);
+    await open(tester, S.subscription);
+    await golden(tester, 'subscription_unlimited_360');
+    expect(find.text(S.forever), findsOneWidget);
+    expect(find.text('13 ГБ, без лимита'), findsOneWidget);
   });
 
   testWidgets('subscription that ends soon and is almost used up', (tester) async {
@@ -398,9 +591,13 @@ void main() {
     ]);
     expect(tester.widgetList<Toggle>(find.byType(Toggle)).map((t) => t.value).take(2), [false, false]);
 
-    final on = home(VpnState.idle, settings: {autoConnectKey: true, killSwitchKey: true});
+    final on = home(
+      VpnState.idle,
+      settings: {autoConnectKey: true, killSwitchKey: true, fragmentKey: true, dnsKey: 'cloudflare'},
+    );
     await show(tester, on, phone);
     await open(tester, S.settings);
+    expect(find.text('Изменено: фрагментация, DNS'), findsOneWidget);
     await golden(tester, 'settings_on_360');
     expect(tester.widgetList<Toggle>(find.byType(Toggle)).map((t) => t.value).take(2), [true, true]);
     await tester.tap(find.bySemanticsLabel(S.killSwitch));
@@ -408,6 +605,9 @@ void main() {
     expect(on.transport.sent.single, '{"id":1,"op":"set","key":"killSwitch","value":false}');
     await tester.scrollUntilVisible(find.text(S.version('0.1.0')), 200);
     expect(find.text(S.version('0.1.0')), findsOneWidget);
+    await tester.drag(find.byType(Scrollable).last, const Offset(0, -400));
+    await tester.pump(const Duration(milliseconds: 300));
+    await golden(tester, 'settings_end_360');
   });
 
   testWidgets('an app link opens the form with the address; only the person adds it', (tester) async {
@@ -485,10 +685,18 @@ void main() {
   });
 
   testWidgets('settings fit a 320 px phone with 130 % text', (tester) async {
-    await show(tester, home(VpnState.idle, always: () {}), const Size(320, 568), textScale: 1.3);
+    await show(tester, home(VpnState.idle, always: () {}, apps: FakeApps()), const Size(320, 568), textScale: 1.3);
     await open(tester, S.settings);
     expect(tester.takeException(), isNull);
     expect(find.text(S.alwaysOn), findsOneWidget);
+    expect(find.byType(GlyphMark), findsNothing);
+    for (final label in [S.advanced, S.ipv6]) {
+      for (final text in tester.renderObjectList<RenderParagraph>(find.byType(RichText))) {
+        expect(text.didExceedMaxLines, isFalse, reason: text.text.toPlainText());
+      }
+      await open(tester, label);
+      expect(tester.takeException(), isNull, reason: label);
+    }
     for (final text in tester.renderObjectList<RenderParagraph>(find.byType(RichText))) {
       expect(text.didExceedMaxLines, isFalse, reason: text.text.toPlainText());
     }
@@ -832,6 +1040,7 @@ void main() {
     connected.transport.sent.clear();
     await tester.pump(const Duration(seconds: 10));
     expect(connected.transport.sent, isEmpty);
+    expect(connected.model.speed, isNull);
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
     await tester.pump(const Duration(seconds: 1));
     expect(connected.transport.sent.first, contains('"op":"check"'));
@@ -860,7 +1069,8 @@ void main() {
     expect(S.until(subscription(days: -2), clock), 'закончилась');
     expect(S.usage(subscription(used: 96000)), '93,8 из 100 ГБ');
     expect(S.usage(subscription(used: 1100)), '1,1 из 100 ГБ');
-    expect(S.usage(subscription(used: 1100, total: 0)), 'Без ограничений');
+    expect(S.usage(subscription(used: 1100, total: 0)), '1,1 ГБ, без лимита');
+    expect(S.usage(subscription(used: 0, total: 0)), 'Без лимита');
     expect(S.expiry(subscription(days: 42), clock), 'Ещё 42 дня · до 31 декабря');
     expect(S.expiry(subscription(days: 60), clock), 'Ещё 60 дней · до 18 января 2027');
     expect(S.expiry(subscription(days: 3), clock), 'Ещё 3 дня');
@@ -879,7 +1089,8 @@ void main() {
       updateEvery: 0,
     );
     expect(S.until(lifetime, clock), 'навсегда');
-    expect(S.usage(lifetime), 'Без ограничений');
+    expect(S.usage(lifetime), 'Без лимита');
+    expect(S.plan(lifetime), 'Навсегда, без лимита');
     expect(S.usage(subscription()), '13 из 100 ГБ');
   });
 }

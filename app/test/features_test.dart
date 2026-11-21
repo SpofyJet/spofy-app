@@ -6,7 +6,9 @@ import 'package:spofy/state/model.dart';
 import 'package:spofy/ui/home.dart';
 import 'package:spofy/ui/servers.dart';
 import 'package:spofy/ui/settings.dart';
+import 'package:spofy/ui/app.dart';
 import 'package:spofy/ui/strings.dart';
+import 'package:spofy/ui/theme.dart';
 import 'package:spofy/ui/update.dart';
 
 import 'scenes.dart';
@@ -43,6 +45,17 @@ Future<void> scrollTo(WidgetTester tester, Finder target) async {
 }
 
 void main() {
+  test('the time of the last update is told in plain words', () {
+    final now = DateTime.utc(2026, 11, 21, 12);
+    int ago(Duration d) => now.subtract(d).millisecondsSinceEpoch ~/ 1000;
+    expect(S.fetched(0, now), '');
+    expect(S.fetched(ago(const Duration(seconds: 20)), now), 'Обновлено только что');
+    expect(S.fetched(ago(const Duration(minutes: 59)), now), 'Обновлено 59 мин назад');
+    expect(S.fetched(ago(const Duration(hours: 2)), now), 'Обновлено 2 ч назад');
+    expect(S.fetched(ago(const Duration(days: 3)), now), 'Обновлено 3 дня назад');
+    expect(S.fetched(ago(const Duration(days: 5)), now), 'Обновлено 5 дней назад');
+  });
+
   setUpAll(loadAssets);
 
   test('each server says how it connects, in the words its makers use', () {
@@ -82,33 +95,22 @@ void main() {
       at('f', 'Обход #1', 'RU', 30),
       at('g', 'Обход #2', 'RU', 35),
       at('h', 'Мой сервер', '', 0),
-    ], sort: sortSpeed);
+    ]);
     expect(
       [for (final p in list) (p.name, p.servers.map((s) => s.id).join())],
       [
-        ('Обход', 'fg'),
-        ('Germany', 'ba'),
-        ('Frankfurt', 'd'),
+        ('Germany', 'ab'),
         ('Германия', 'c'),
-        ('Мой сервер', 'h'),
+        ('Frankfurt', 'd'),
         ('🇳🇱 Netherlands', 'e'),
+        ('Обход', 'fg'),
+        ('Мой сервер', 'h'),
       ],
     );
-    expect(places(servers(), sort: sortName).map((p) => p.name), [
-      'Беларусь',
-      'Германия',
-      'Ирландия',
-      'Литва',
-      'Нидерланды',
-      'Обход',
-      'Польша',
-      'Сингапур',
-      'США',
-      'Финляндия',
-    ]);
-    expect(places(servers(), sort: sortSpeed, query: 'hyster').map((p) => p.name), ['Польша']);
-    expect(places(servers(), sort: sortSpeed, query: 'финл').map((p) => p.name), ['Финляндия']);
-    expect(places(servers(), sort: sortSpeed, query: 'ru').map((p) => p.name), ['Обход']);
+    expect(places(servers(), query: 'hyster').map((p) => p.name), ['Польша']);
+    expect(places(servers(), query: 'финл').map((p) => p.name), ['Финляндия']);
+    expect(places(servers(), query: 'ru').map((p) => p.name), ['Обход']);
+    expect(places(servers()).map((p) => p.name), {for (final s in servers()) placeName(s)}.toList());
   });
 
   testWidgets('a place with several servers opens to show them, each with its protocol, and one is chosen', (
@@ -119,9 +121,14 @@ void main() {
     await open(tester, S.server);
     expect(find.text('VLESS · Reality'), findsWidgets);
     expect(find.text('Обход 1'), findsNothing);
-    await tester.tap(find.text('Обход'));
+    await open(tester, 'Обход');
+    await tester.scrollUntilVisible(
+      find.text('Обход 2'),
+      200,
+      scrollable: find.byWidgetPredicate((w) => w is Scrollable && w.axisDirection == AxisDirection.down).last,
+    );
     await tester.pump(const Duration(milliseconds: 300));
-    expect(rows(tester).take(4), ['Обход', 'Обход 1', 'Обход 2', 'Нидерланды']);
+    expect(rows(tester).skipWhile((r) => r != 'Обход').take(3), ['Обход', 'Обход 1', 'Обход 2']);
     await golden(tester, 'servers_open_360');
     await tester.tap(find.text('Обход 2'));
     await tester.pump();
@@ -129,14 +136,13 @@ void main() {
     expect(scene.transport.sent.single, '{"id":1,"op":"connect","server":"bypass2"}');
   });
 
-  test('a server that did not answer is told apart from one not yet checked and goes last', () {
+  test('a server that did not answer is told apart from one not yet checked and keeps its place', () {
     final list = servers();
     final sg = list.firstWhere((s) => s.id == 'sg');
     final unchecked = list.firstWhere((s) => s.id == 'bypass2');
     expect([sg.silent, sg.measured, S.answer(sg)], [true, false, S.silent]);
     expect([unchecked.silent, S.answer(unchecked)], [false, S.noDelay]);
-    expect(ordered(list).last.id, 'sg');
-    expect(places(list, sort: sortSpeed).last.name, 'Сингапур');
+    expect(places(list)[list.indexOf(sg)].servers.single.id, 'sg');
   });
 
   testWidgets('with no subscription the empty screen leads to the shop, and after a failure to help', (tester) async {
@@ -156,10 +162,11 @@ void main() {
     await golden(tester, 'empty_stuck_360');
   });
 
-  testWidgets('search narrows the places, the order can be by name and is kept by the core', (tester) async {
+  testWidgets('search narrows the places, and the list keeps the order of the subscription', (tester) async {
     final scene = home(VpnState.idle);
     await show(tester, scene, phone);
     await open(tester, S.server);
+    expect(rows(tester), places(servers()).map((p) => p.name).take(rows(tester).length).toList());
     await tester.enterText(find.byType(EditableText), 'герм');
     await tester.pump();
     expect(rows(tester), ['Германия']);
@@ -167,17 +174,52 @@ void main() {
     await tester.enterText(find.byType(EditableText), 'нет такой');
     await tester.pump();
     expect(find.text(S.nothingFound), findsOneWidget);
-    await tester.enterText(find.byType(EditableText), '');
-    await tester.pump();
-    await tester.tap(find.text(S.sortName));
-    await tester.pump();
-    expect(scene.transport.sent.single, '{"id":1,"op":"set","key":"serverSort","value":"name"}');
+    expect(scene.transport.sent, isEmpty);
+  });
 
-    final named = home(VpnState.idle, settings: {serverSortKey: sortName});
-    await show(tester, named, phone);
-    await open(tester, S.server);
-    expect(rows(tester).take(3), ['Беларусь', 'Германия', 'Ирландия']);
-    await golden(tester, 'servers_by_name_360');
+  testWidgets('a setting that reconnects the VPN asks first while it protects and goes at once while it is off', (
+    tester,
+  ) async {
+    Finder ask(String label) => find.descendant(of: find.byType(ReconnectAsk), matching: find.text(label));
+    List<String> sets(Scene scene) => [
+      for (final m in scene.transport.sent)
+        if (m.contains('"op":"set"')) m.replaceFirst(RegExp(r'"id":\d+,'), ''),
+    ];
+    const detailed = '{"op":"set","key":"logLevel","value":"detailed"}';
+    final scene = home(VpnState.connected, server: 'nl', delay: 38);
+    await show(tester, scene, phone);
+    await open(tester, S.settings);
+    await open(tester, S.logsDetailed);
+    expect(sets(scene), isEmpty);
+    expect(find.text(S.reconnectAsk), findsOneWidget);
+    await golden(tester, 'settings_reconnect_360');
+    await tester.tap(ask(S.cancel));
+    await tester.pump();
+    expect([find.text(S.reconnectAsk).evaluate().length, sets(scene).length], [0, 0]);
+    await open(tester, S.logsDetailed);
+    await tester.tap(ask(S.apply));
+    await tester.pump();
+    expect(sets(scene), [detailed]);
+    expect(find.text(S.reconnectAsk), findsNothing);
+
+    final idle = home(VpnState.idle);
+    await show(tester, idle, phone);
+    await open(tester, S.settings);
+    await open(tester, S.logsDetailed);
+    expect(sets(idle), [detailed]);
+    expect(find.text(S.reconnectAsk), findsNothing);
+  });
+
+  testWidgets('with reduced motion a screen opens without sliding or fading', (tester) async {
+    tester.platformDispatcher.accessibilityFeaturesTestValue = const FakeAccessibilityFeatures(disableAnimations: true);
+    addTearDown(tester.platformDispatcher.clearAccessibilityFeaturesTestValue);
+    await show(tester, home(VpnState.idle), phone);
+    await tester.tap(find.bySemanticsLabel(RegExp('^${S.settings}')));
+    await tester.pump();
+    await tester.pump();
+    final title = find.text(S.settings).last;
+    expect(find.ancestor(of: title, matching: find.byType(SlideTransition)), findsNothing);
+    expect(find.ancestor(of: title, matching: find.byType(FadeTransition)), findsNothing);
   });
 
   testWidgets('while the VPN protects, home shows for how long', (tester) async {
@@ -190,35 +232,75 @@ void main() {
     expect(S.uptime(const Duration(seconds: -4)), '00:00:00');
   });
 
-  testWidgets('tunnel settings are sent to the core, and a value it refuses is said so', (tester) async {
+  testWidgets('tunnel settings are one level down, sent to the core, and a value it refuses is said so', (
+    tester,
+  ) async {
     final scene = home(VpnState.idle);
     await show(tester, scene, phone);
     await open(tester, S.settings);
-    await scrollTo(tester, find.text(S.fragmentHint));
+    expect(find.text(S.fragment), findsNothing);
+    expect(find.text('Фрагментация, DNS, IPv6, домашняя сеть'), findsOneWidget);
+    await open(tester, S.advanced);
     await golden(tester, 'settings_tunnel_360');
     await press(tester, find.text(S.fragment));
     expect(scene.transport.sent.last, '{"id":1,"op":"set","key":"fragment","value":true}');
+    await open(tester, S.ipv6);
+    expect(find.text(S.ipv6Hint), findsOneWidget);
+    await golden(tester, 'settings_ipv6_360');
+    await tester.tap(find.text(S.ipv6Off));
+    await tester.pump();
+    expect(scene.transport.sent.last, '{"id":2,"op":"set","key":"ipv6","value":false}');
+    await tester.tap(find.text(S.ipv6Auto));
+    await tester.pump();
+    expect(scene.transport.sent.last, '{"id":3,"op":"set","key":"ipv6","value":null}');
+    await open(tester, S.back);
     await open(tester, S.dns);
     await tester.tap(find.text('Cloudflare'));
     await tester.pump();
-    expect(scene.transport.sent.last, '{"id":2,"op":"set","key":"dns","value":"cloudflare"}');
+    expect(scene.transport.sent.last, '{"id":4,"op":"set","key":"dns","value":"cloudflare"}');
     await tester.tap(find.text(S.dnsOwn));
     await tester.pump();
     await tester.enterText(find.byType(EditableText), ' 10.0.0.1 ');
     await tester.tap(find.bySemanticsLabel(S.save));
     await tester.pump();
-    expect(scene.transport.sent.last, '{"id":3,"op":"set","key":"dns","value":"10.0.0.1"}');
-    scene.transport.answer('{"re":3,"ok":false,"code":"bad_value","error":"bad setting"}');
+    expect(scene.transport.sent.last, '{"id":5,"op":"set","key":"dns","value":"10.0.0.1"}');
+    scene.transport.answer('{"re":5,"ok":false,"code":"bad_value","error":"bad setting"}');
     await tester.pump();
     await tester.pump();
     expect(find.text(S.badValue), findsOneWidget);
     await golden(tester, 'settings_dns_own_360');
   });
 
+  testWidgets('IPv6 is Auto unless it was turned off, and the first screen says what was changed', (tester) async {
+    expect(chosen(ipv6Choices, null), S.ipv6Auto);
+    expect(chosen(ipv6Choices, true), S.ipv6Auto);
+    expect(chosen(ipv6Choices, false), S.ipv6Off);
+    final scene = home(VpnState.idle, settings: {themeKey: 'light', ipv6Key: false, lanKey: true});
+    await show(tester, scene, phone);
+    await open(tester, S.settings);
+    expect(find.text('Изменено: IPv6, домашняя сеть'), findsOneWidget);
+    await open(tester, S.advanced);
+    expect(find.text(S.ipv6Off), findsOneWidget);
+    await golden(tester, 'settings_tunnel_light_360');
+    await open(tester, S.ipv6);
+    await golden(tester, 'settings_ipv6_light_360');
+    await tester.tap(find.text(S.ipv6Off));
+    await tester.pump();
+    expect(scene.transport.sent.last, '{"id":1,"op":"set","key":"ipv6","value":false}');
+    addTearDown(() => S.use(Lang.ru));
+    S.use(Lang.en);
+    expect(
+      S.advancedChanged([S.fragment, S.dns, S.ipv6, S.lan, S.checking]),
+      'Changed: fragmentation, DNS, IPv6, local network, server check',
+    );
+  });
+
   testWidgets('how servers are checked is chosen in settings and sent to the core', (tester) async {
     final scene = home(VpnState.idle, settings: {probeTimeoutKey: 6});
     await show(tester, scene, phone);
     await open(tester, S.settings);
+    expect(find.text('Изменено: проверка серверов'), findsOneWidget);
+    await open(tester, S.advanced);
     await scrollTo(tester, find.text(S.checking.toUpperCase()));
     await golden(tester, 'settings_checking_360');
     await tester.tap(find.text(S.seconds(4)));

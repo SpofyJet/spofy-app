@@ -111,12 +111,13 @@ Subscription subscription({
   String stop = '',
   List<String> notes = const [],
   String page = 'https://sub.example.test/page',
+  int? expire,
 }) => Subscription(
   title: 'Spofy VPN',
   upload: 1024 * 1024 * 1024,
   download: used * 1024 * 1024 - 1024 * 1024 * 1024,
   total: total * 1024 * 1024,
-  expire: clock.add(Duration(days: days, hours: 5)).millisecondsSinceEpoch ~/ 1000,
+  expire: expire ?? clock.add(Duration(days: days, hours: 5)).millisecondsSinceEpoch ~/ 1000,
   supportUrl: 'https://support.example.test',
   webPageUrl: page,
   announce: '',
@@ -139,6 +140,7 @@ class Scene {
     Map<String, Object?> settings = const {},
     bool ready = true,
     Traffic traffic = const Traffic(),
+    Traffic? speed,
     String fault = '',
     Failure? failure,
     VoidCallback? always,
@@ -162,6 +164,7 @@ class Scene {
       )
       ..ready = ready
       ..traffic = traffic
+      ..speed = speed
       ..fault = fault
       ..failure = failure;
   }
@@ -185,6 +188,8 @@ Scene home(
   Future<bool> Function(String file)? install,
   List<Brief> briefs = const [],
   Update? update,
+  Subscription? plan,
+  bool pending = false,
 }) => Scene(
   always: always,
   apps: apps,
@@ -200,10 +205,11 @@ Scene home(
     code: code,
     since: state.protecting ? clock.millisecondsSinceEpoch ~/ 1000 - 3725 : 0,
   ),
-  subscription: subscription(),
+  subscription: plan ?? subscription(),
   servers: servers(),
   settings: settings,
   traffic: state.protecting ? const Traffic(up: 83 * 1024 * 1024, down: 1288490188) : const Traffic(),
+  speed: state.protecting && !pending ? const Traffic(up: 190464, down: 13107200) : null,
 );
 
 Future<void> loadAssets() async {
@@ -255,7 +261,7 @@ Future<void> golden(WidgetTester tester, String name) async {
 }
 
 Future<void> open(WidgetTester tester, String label) async {
-  final target = find.bySemanticsLabel(RegExp('^$label'));
+  final target = find.bySemanticsLabel(RegExp('^$label')).hitTestable();
   if (target.evaluate().isEmpty) {
     await tester.scrollUntilVisible(
       target,

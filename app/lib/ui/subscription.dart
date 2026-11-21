@@ -56,6 +56,7 @@ class _AddFormState extends State<_AddForm> {
   final _link = TextEditingController();
   final _focus = FocusNode();
   bool _given = false;
+  bool _empty = false;
 
   @override
   void initState() {
@@ -63,7 +64,8 @@ class _AddFormState extends State<_AddForm> {
     if (widget.first) {
       widget.model.addListener(_offered);
       _offered();
-    } else {
+    }
+    if (!_given) {
       _focus.requestFocus();
     }
   }
@@ -86,6 +88,10 @@ class _AddFormState extends State<_AddForm> {
 
   Future<void> _paste() async {
     final text = await clipboardText();
+    if (!mounted) {
+      return;
+    }
+    setState(() => _empty = text.isEmpty);
     if (text.isNotEmpty) {
       _link.text = text;
       await _submit();
@@ -93,6 +99,9 @@ class _AddFormState extends State<_AddForm> {
   }
 
   Future<void> _submit() async {
+    if (_empty) {
+      setState(() => _empty = false);
+    }
     if (_link.text.trim().isEmpty) {
       _focus.requestFocus();
       return;
@@ -146,7 +155,13 @@ class _AddFormState extends State<_AddForm> {
             ],
           ),
         ),
-        if (failure?.task == Task.subscribe) ...[const SizedBox(height: 8), Notice(S.failure(failure!))],
+        if (_empty) ...[
+          const SizedBox(height: 8),
+          Notice(S.noLink),
+        ] else if (failure?.task == Task.subscribe) ...[
+          const SizedBox(height: 8),
+          Notice(S.failure(failure!)),
+        ],
         const SizedBox(height: 8),
         QuietButton(label: S.paste, onTap: busy ? null : _paste),
         const SizedBox(height: 8),
@@ -276,8 +291,17 @@ class _DetailsState extends State<_Details> {
         if (active == null || !active.links) ...[
           const SizedBox(height: 8),
           QuietButton(label: S.refresh, busy: model.running(Task.refresh), onTap: model.refresh),
+          if (S.fetched(s.fetchedAt, now).isNotEmpty)
+            Text(S.fetched(s.fetchedAt, now), style: Ink.type(12, 400, Ink.faint), textAlign: TextAlign.center),
         ],
         const SizedBox(height: 8),
+        if (_adding)
+          Panel(
+            child: _AddForm(model: model, onDone: () => setState(() => _adding = false)),
+          )
+        else
+          QuietButton(label: S.addAnother, onTap: () => setState(() => _adding = true)),
+        const SizedBox(height: 24),
         if (_removing)
           Panel(
             child: Column(
@@ -304,14 +328,7 @@ class _DetailsState extends State<_Details> {
             ),
           )
         else
-          QuietButton(label: S.remove, color: Ink.muted, onTap: () => setState(() => _removing = true)),
-        const SizedBox(height: 16),
-        if (_adding)
-          Panel(
-            child: _AddForm(model: model, onDone: () => setState(() => _adding = false)),
-          )
-        else
-          QuietButton(label: S.addAnother, onTap: () => setState(() => _adding = true)),
+          QuietButton(label: S.remove, color: Ink.danger, onTap: () => setState(() => _removing = true)),
       ],
     );
   }

@@ -44,18 +44,14 @@ abstract final class S {
   static String get server => _t('Сервер', 'Server');
   static String get servers => _t('Серверы', 'Servers');
   static String get settings => _t('Настройки', 'Settings');
-  static String get autoConnect => _t('Включать VPN при запуске', 'Turn VPN on at launch');
-  static String get autoConnectHint =>
-      _t('Открыли приложение — VPN уже работает', 'Open the app and the VPN is already on');
-  static String get killSwitch => _t('Без VPN — без интернета', 'Block internet without VPN');
+  static String get autoConnect => _t('VPN при запуске', 'Turn VPN on at launch');
+  static String get killSwitch => _t('Без VPN — без сети', 'No VPN, no internet');
   static String get alwaysOn => _t('Постоянная VPN', 'Always-on VPN');
-  static String get alwaysOnHint => _t(
-    'В настройках Android: VPN включается сама, без неё интернет закрыт',
-    'In Android settings: the VPN starts by itself, and without it the internet is blocked',
-  );
+  static String get alwaysOnHint =>
+      _t('VPN включается сама. Задаётся в настройках Android', 'The VPN starts by itself. Set in Android settings');
   static String get killSwitchHint => _t(
-    'Если серверы не отвечают, интернет останавливается, а не идёт напрямую',
-    'If the servers don’t respond, traffic stops instead of going around the VPN',
+    'Если VPN оборвётся, интернет остановится, а не пойдёт напрямую',
+    'If the VPN drops, the internet stops instead of going around it',
   );
 
   static String version(String number) => _t('Версия $number', 'Version $number');
@@ -95,7 +91,11 @@ abstract final class S {
   };
   static String get subscription => _t('Подписка', 'Subscription');
   static String get addSubscription => _t('Добавить подписку', 'Add subscription');
-  static String get noSubscriptionTitle => _t('Подписки пока нет', 'No subscription yet');
+  static String get noSubscriptionTitle => _t('Добавьте подписку', 'Add your subscription');
+  static String get copyLink => _t(
+    'Скопируйте ссылку в\u00A0боте или в\u00A0кабинете\u00A0Spofy',
+    'Copy the link in the Spofy bot or your Spofy\u00A0account',
+  );
   static String get noSubscriptionHint => _t(
     'Скопируйте ссылку в боте или в кабинете Spofy и вставьте её здесь',
     'Copy the link in the Spofy bot or your Spofy account and paste it here',
@@ -109,8 +109,8 @@ abstract final class S {
   static String get pinned => _t('Выбран вручную', 'Chosen manually');
   static String get removeShort => _t('Удалить', 'Remove');
   static String get noLink => _t(
-    'В буфере нет ссылки. Скопируйте её в боте или в кабинете Spofy',
-    'There’s no link on the clipboard. Copy it in the Spofy bot or your Spofy account',
+    'В буфере нет ссылки. Скопируйте её в\u00A0боте или в\u00A0кабинете\u00A0Spofy',
+    'There’s no link on the clipboard. Copy it in the Spofy bot or your Spofy\u00A0account',
   );
   static String get linkHint => _t(
     'Ссылка на подписку или ключи vless://, vmess://, trojan://, ss://, hy2://',
@@ -169,6 +169,11 @@ abstract final class S {
   static String get removeConfirm =>
       _t('Удалить подписку с этого устройства?', 'Remove the subscription from this device?');
   static String get cancel => _t('Отмена', 'Cancel');
+  static String get apply => _t('Применить', 'Apply');
+  static String get reconnectAsk => _t(
+    'VPN переподключится на секунду, чтобы применить настройку',
+    'The VPN reconnects for a moment to apply this setting',
+  );
   static String get offeredHint =>
       _t('Ссылка получена. Проверьте её и нажмите «Добавить»', 'Link received. Check it and press “Add”');
   static String get replaceConfirm => _t('Добавить подписку по ссылке?', 'Add the subscription from this link?');
@@ -213,7 +218,14 @@ abstract final class S {
 
   static String get support => _t('Поддержка', 'Support');
   static String get connection => _t('Подключение', 'Connection');
-  static String get look => _t('Интерфейс', 'Interface');
+  static String get look => _t('Вид', 'Appearance');
+  static String get network => _t('Сеть', 'Network');
+  static String get advanced => _t('Дополнительно', 'Advanced');
+
+  static String _lower(String s) =>
+      s.length > 1 && s[1] == s[1].toLowerCase() ? s[0].toLowerCase() + s.substring(1) : s;
+  static String advancedAll(Iterable<String> parts) => [parts.first, ...parts.skip(1).map(_lower)].join(', ');
+  static String advancedChanged(Iterable<String> parts) => _t('Изменено: ', 'Changed: ') + parts.map(_lower).join(', ');
   static String get notices => _t('Уведомления', 'Notifications');
   static String get remind => _t('Напоминание о подписке', 'Subscription reminder');
   static String get remindHint => _t(
@@ -240,6 +252,10 @@ abstract final class S {
   static String get checking => _t('Проверка серверов', 'Server check');
   static String get probeTarget => _t('Адрес проверки', 'Check address');
   static String get probeAuto => _t('Google и Cloudflare', 'Google and Cloudflare');
+  static String get probeHint => _t(
+    'По нему приложение проверяет, отвечает ли сервер. Смените, если все серверы недоступны, а интернет есть',
+    'The app opens it to check that a server answers. Change it if every server looks down but the internet works',
+  );
   static String get probeAutoHint =>
       _t('Ответ первого из двух. Подходит почти всем', 'Whichever answers first. Works for almost everyone');
   static String get probeOwn => _t('Свой адрес', 'Custom address');
@@ -247,41 +263,46 @@ abstract final class S {
       _t('Адрес, который отвечает кодом 204 или 200', 'An address that answers with code 204 or 200');
   static String get probeWait => _t('Ждать ответа', 'Wait for an answer');
   static String get probeWaitHint => _t(
-    'Сколько ждать сервер, прежде чем считать, что он не отвечает',
-    'How long to wait for a server before treating it as not responding',
+    'Сколько ждать ответа сервера. Больше — для медленной связи, но проверка дольше',
+    'How long to wait for a server. More suits a slow connection, but checks take longer',
   );
 
   static String seconds(int n) => _t('$n с', '$n s');
   static String get tunnel => _t('Туннель', 'Tunnel');
   static String get fragment => _t('Фрагментация', 'Fragmentation');
   static String get fragmentHint => _t(
-    'Делит начало защищённого соединения на мелкие части. Помогает, когда провайдер мешает подключиться. Немного замедляет первое соединение',
-    'Splits the start of a secure connection into small pieces. Helps when your provider gets in the way of connecting. Slightly slows the first connection',
+    'Включите, если VPN не подключается у вашего оператора. Делит начало соединения на две части, чтобы его не узнали. На скорость не влияет',
+    'Turn on if the VPN won’t connect with your provider. Splits the start of the connection in two so it isn’t recognised. Doesn’t affect speed',
   );
   static const dns = 'DNS';
   static String get dnsDefault => _t('Как в подписке', 'From the subscription');
-  static String get dnsDefaultHint => _t('Настройки провайдера VPN', 'Your VPN provider’s settings');
+  static String get dnsHint => _t(
+    'Находит сайты по имени. Смените, если с VPN сайты не открываются',
+    'Finds sites by name. Change it if sites don’t open with the VPN on',
+  );
+  static String get dnsDefaultHint => _t('Подходит почти всем', 'Works for almost everyone');
   static String get dnsOwn => _t('Свой DNS', 'Custom DNS');
   static String get dnsOwnHint =>
       _t('Адрес IPv4 или IPv6, например 1.1.1.1', 'An IPv4 or IPv6 address, such as 1.1.1.1');
   static String get dnsSafe => _t('без вредоносных сайтов', 'blocks malicious sites');
   static String get dnsClean => _t('без рекламы', 'blocks ads');
   static const ipv6 = 'IPv6';
-  static String get ipv6Hint => _t(
-    'Выключите, если сайты открываются долго: приложения сразу пойдут по IPv4',
-    'Turn it off if sites load slowly: apps will go straight to IPv4',
-  );
-  static String get lan => _t('Домашняя сеть без VPN', 'Local network outside the VPN');
+  static String get ipv6Hint => _t('Выключите, если сайты открываются долго', 'Turn it off if sites take long to open');
+  static String get ipv6Auto => _t('Авто', 'Auto');
+  static String get ipv6AutoHint => _t('Как в настройках подписки', 'As the subscription sets it');
+  static String get ipv6Off => _t('Выключен', 'Off');
+  static String get ipv6OffHint => _t('Только IPv4: сайты не ждут IPv6', 'IPv4 only: sites do not wait for IPv6');
+  static String get lan => _t('Домашняя сеть', 'Local network');
   static String get lanHint => _t(
-    'Принтеры, телевизоры и роутер доступны при включённом VPN',
-    'Printers, TVs and your router stay reachable while the VPN is on',
+    'Включите, если с VPN не видно принтер, телевизор или роутер',
+    'Turn on if your printer, TV or router can’t be reached with the VPN on',
   );
   static String get save => _t('Сохранить', 'Save');
   static String get badValue => _t('Такое значение не подходит', 'This value won’t work');
   static String get logs => _t('Журнал', 'Log');
   static String get logsHint => _t(
-    'Что делало приложение. Адресов серверов, ключей и ссылки на подписку в нём нет',
-    'What the app has been doing. It has no server addresses, keys or subscription link',
+    'Что делало приложение. Без ключей, ссылок и адресов серверов',
+    'What the app did. No keys, links or server addresses',
   );
   static String get logsDetailed => _t('Подробный журнал', 'Detailed log');
   static String get logsDetailedHint => _t(
@@ -300,8 +321,6 @@ abstract final class S {
   static String get coreSource => _t('Исходный код ядра в Spofy', 'Source code of the core in Spofy');
   static String get coreModules => _t('Модули ядра', 'Core modules');
   static String get coreModulesHint => _t('Список и версии', 'List and versions');
-  static String get sortSpeed => _t('По скорости', 'By speed');
-  static String get sortName => _t('По стране', 'By country');
   static String get search => _t('Поиск страны или сервера', 'Search for a country or server');
   static String get nothingFound => _t('Ничего не найдено', 'Nothing found');
 
@@ -497,7 +516,7 @@ abstract final class S {
   static String get measure => _t('Проверить скорость', 'Test speed');
   static String get measuring => _t('Проверяем серверы', 'Testing servers');
   static String get forever => _t('Навсегда', 'Forever');
-  static String get unlimited => _t('Без ограничений', 'Unlimited');
+  static String get unlimited => _t('Без лимита', 'Unlimited');
   static String get traffic => _t('Трафик', 'Data');
   static String get validUntil => _t('Действует', 'Valid');
   static String get endedOn => _t('Закончилась', 'Ended');
@@ -563,6 +582,15 @@ abstract final class S {
   static String _count(int n, String one, String other) => '$n ${n.abs() == 1 ? one : other}';
 
   static String days(int n) => _t('$n ${plural(n, 'день', 'дня', 'дней')}', _count(n, 'day', 'days'));
+
+  static String fetched(int at, DateTime now) {
+    if (at <= 0) return '';
+    final ago = now.difference(DateTime.fromMillisecondsSinceEpoch(at * 1000));
+    if (ago.inMinutes < 1) return _t('Обновлено только что', 'Updated just now');
+    if (ago.inHours < 1) return _t('Обновлено ${ago.inMinutes} мин назад', 'Updated ${ago.inMinutes} min ago');
+    if (ago.inDays < 1) return _t('Обновлено ${ago.inHours} ч назад', 'Updated ${ago.inHours} h ago');
+    return _t('Обновлено ${days(ago.inDays)} назад', 'Updated ${days(ago.inDays)} ago');
+  }
 
   static String delay(int ms) => ms > 0 ? _t('$ms мс', '$ms ms') : noDelay;
   static String answer(Server s) => s.silent ? silent : delay(s.delayMs);
@@ -646,7 +674,7 @@ abstract final class S {
 
   static String usage(Subscription s) {
     if (!s.limited) {
-      return unlimited;
+      return s.used > 0 ? _t('${bytes(s.used)}, без лимита', '${bytes(s.used)}, unlimited') : unlimited;
     }
     final total = bytes(s.total);
     final unit = _units.indexOf(total.substring(total.indexOf(' ') + 1));
@@ -656,6 +684,23 @@ abstract final class S {
     }
     return _t('${_decimal(s.used / scale)} из $total', '${_decimal(s.used / scale)} of $total');
   }
+
+  static bool endless(Subscription s) => !s.limited && (s.expire <= 0 || lifetime(s));
+
+  static String plan(Subscription s) {
+    if (!endless(s)) {
+      return s.limited ? usage(s) : unlimited;
+    }
+    final used = s.used > 0 ? ' · ${bytes(s.used)}' : '';
+    return _t('Навсегда, без лимита$used', 'Forever, unlimited$used');
+  }
+
+  static String rate(int value) => _t('${bytes(value)}/с', '${bytes(value)}/s');
+
+  static String speed(Traffic t) => _t(
+    'Скорость: загрузка ${rate(t.down)}, отдача ${rate(t.up)}',
+    'Speed: download ${rate(t.down)}, upload ${rate(t.up)}',
+  );
 
   static String day(Subscription s, DateTime now) =>
       _day(DateTime.fromMillisecondsSinceEpoch(s.expire * 1000), now, _short);
@@ -723,7 +768,7 @@ abstract final class S {
       'This isn’t a subscription link or a key. A link starts with https://, a key with vless://, trojan:// or ss://',
     ),
     'sub_unreachable' => _t(
-      'Сервер подписки не отвечает. Проверьте интернет',
+      'Сервер подписки не отвечает. Проверьте\u00A0интернет',
       'The subscription server isn’t responding. Check your internet',
     ),
     'sub_status' => _t('Ссылка не принята. Скопируйте её заново', 'The link wasn’t accepted. Copy it again'),

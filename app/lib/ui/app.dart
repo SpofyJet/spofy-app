@@ -16,6 +16,7 @@ import 'subscription.dart';
 import 'support.dart';
 import 'theme.dart';
 import 'update.dart';
+import 'widgets.dart';
 
 class SpofyApp extends StatefulWidget {
   const SpofyApp({super.key, required this.model, this.now = DateTime.now, this.dress, this.hold = false});
@@ -155,6 +156,7 @@ class _SpofyAppState extends State<SpofyApp> with WidgetsBindingObserver {
     } else if (!wanted && _poll != null) {
       _poll!.cancel();
       _poll = null;
+      widget.model.rest();
     }
   }
 
@@ -208,6 +210,9 @@ class _SpofyAppState extends State<SpofyApp> with WidgetsBindingObserver {
       reverseTransitionDuration: const Duration(milliseconds: 140),
       pageBuilder: (context, _, _) => builder(context),
       transitionsBuilder: (context, animation, _, child) {
+        if (MediaQuery.disableAnimationsOf(context)) {
+          return child;
+        }
         final curved = CurvedAnimation(parent: animation, curve: Curves.easeOutCubic);
         return FadeTransition(
           opacity: curved,
@@ -234,6 +239,12 @@ class _SpofyAppState extends State<SpofyApp> with WidgetsBindingObserver {
         debugShowCheckedModeBanner: false,
         textStyle: Ink.body,
         pageRouteBuilder: <T>(RouteSettings settings, WidgetBuilder builder) => _route<T>(builder, settings),
+        builder: (context, child) => Stack(
+          children: [
+            child!,
+            ReconnectAsk(model: model),
+          ],
+        ),
         home: HomeScreen(
           model: model,
           now: widget.now,
@@ -248,6 +259,57 @@ class _SpofyAppState extends State<SpofyApp> with WidgetsBindingObserver {
           },
         ),
       ),
+    );
+  }
+}
+
+class ReconnectAsk extends StatelessWidget {
+  const ReconnectAsk({super.key, required this.model});
+
+  final AppModel model;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: model,
+      builder: (context, _) {
+        if (model.pending == null) {
+          return const SizedBox.shrink();
+        }
+        return Align(
+          alignment: Alignment.bottomCenter,
+          child: SafeArea(
+            minimum: const EdgeInsets.all(Ink.gutter),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 600),
+              child: Semantics(
+                liveRegion: true,
+                child: Panel(
+                  color: Ink.raised,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(S.reconnectAsk, style: Ink.body),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: QuietButton(label: S.cancel, onTap: model.keep),
+                          ),
+                          Expanded(
+                            child: QuietButton(label: S.apply, color: Ink.accent, onTap: () => model.apply()),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 }

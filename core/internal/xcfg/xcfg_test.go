@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -38,7 +40,7 @@ func TestBuildTunKeepsServerLogic(t *testing.T) {
 			t.Fatalf("server %d: %v", i, err)
 		}
 		for _, k := range []string{"outbounds", "dns", "routing", "fakedns", "burstObservatory"} {
-			if !bytes.Equal(in[k], out[k]) {
+			if !bytes.Equal(in[k], out[k]) && !(onlyIPv4(in["dns"]) && sameButIPv6Block(in[k], out[k])) {
 				t.Fatalf("server %d: section %s changed", i, k)
 			}
 		}
@@ -66,13 +68,49 @@ func TestBuildTunKeepsServerLogic(t *testing.T) {
 			Sniffing json.RawMessage `json:"sniffing"`
 		}
 		json.Unmarshal(in["inbounds"], &orig)
-		if !bytes.Equal(orig[0].Sniffing, inbounds[0].Sniffing) {
-			t.Fatalf("server %d: sniffing changed", i)
+		var was, now map[string]any
+		json.Unmarshal(orig[0].Sniffing, &was)
+		json.Unmarshal(inbounds[0].Sniffing, &now)
+		excluded, _ := now["ipsExcluded"].([]any)
+		delete(now, "ipsExcluded")
+		if !reflect.DeepEqual(was, now) || len(excluded) != len(nearby) || excluded[2] != "192.168.0.0/16" {
+			t.Fatalf("server %d: sniffing = %s", i, inbounds[0].Sniffing)
 		}
 		if string(out["log"]) != `{"access":"none","loglevel":"warning"}` {
 			t.Fatalf("server %d: log = %s", i, out["log"])
 		}
 	}
+}
+
+func sameButIPv6Block(in, out json.RawMessage) bool {
+	var a, b any
+	if json.Unmarshal(in, &a) != nil || json.Unmarshal(out, &b) != nil {
+		return false
+	}
+	return reflect.DeepEqual(withoutIPv6Block(a), withoutIPv6Block(b))
+}
+
+func withoutIPv6Block(v any) any {
+	if m, ok := v.(map[string]any); ok && m["rules"] != nil {
+		m["rules"] = withoutIPv6Block(m["rules"])
+		return m
+	}
+	list, ok := v.([]any)
+	if !ok {
+		return v
+	}
+	var kept []any
+	for _, e := range list {
+		m, ok := e.(map[string]any)
+		if ok && (m["tag"] == TagBlock || m["outboundTag"] == TagBlock) {
+			continue
+		}
+		if s, ok := m["settings"].(map[string]any); ok && m["protocol"] == "dns" {
+			delete(s, "blockTypes")
+		}
+		kept = append(kept, e)
+	}
+	return kept
 }
 
 func TestBuildTunGivesTheResolverAddressToTheNameHandlerAndRefusesTheRest(t *testing.T) {
@@ -240,6 +278,117 @@ func TestBuildRejectsGarbage(t *testing.T) {
 	}
 }
 
+func TestIPv6FollowsTheSubscriptionUnlessItIsSwitchedOff(t *testing.T) {
+	tun := Options{Mode: ModeTun, Tun: Tun{Name: "spofy0", Resolver: []string{"172.19.0.2"}}}
+	blocked := func(dns string, off bool) bool {
+		t.Helper()
+		o := tun
+		o.Tweaks.NoIPv6 = off
+		b, err := Build(json.RawMessage(`{"outbounds":[{"tag":"proxy","protocol":"vless"}],"dns":`+dns+`}`), o)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var c struct {
+			Routing struct {
+				Rules []struct {
+					IP  []string `json:"ip"`
+					Out string   `json:"outboundTag"`
+				} `json:"rules"`
+			} `json:"routing"`
+		}
+		if err := json.Unmarshal(b, &c); err != nil {
+			t.Fatal(err)
+		}
+		for _, r := range c.Routing.Rules {
+			if len(r.IP) == 1 && r.IP[0] == "::/0" && r.Out == TagBlock {
+				return true
+			}
+		}
+		return false
+	}
+	for _, c := range []struct {
+		dns  string
+		off  bool
+		want bool
+	}{
+		{`{"servers":["1.1.1.1"],"queryStrategy":"UseIPv4"}`, false, true},
+		{`{"servers":["1.1.1.1"],"queryStrategy":"UseIP"}`, false, false},
+		{`{"servers":["1.1.1.1"]}`, false, false},
+		{`null`, false, false},
+		{`{"servers":["1.1.1.1"]}`, true, true},
+	} {
+		if got := blocked(c.dns, c.off); got != c.want {
+			t.Errorf("dns %s, switched off %v: IPv6 blocked %v, want %v", c.dns, c.off, got, c.want)
+		}
+	}
+	probe, err := Build(json.RawMessage(`{"outbounds":[{"tag":"proxy","protocol":"vless"}],"dns":{"queryStrategy":"UseIPv4"}}`), Options{Mode: ModeProbe})
+	if err != nil || strings.Contains(string(probe), "::/0") {
+		t.Fatalf("a probe stays as the server gave it: %v %s", err, probe)
+	}
+}
+
+func TestLocalAddressesAreNotSniffed(t *testing.T) {
+	var s struct {
+		Enabled bool     `json:"enabled"`
+		IPs     []string `json:"ipsExcluded"`
+	}
+	if err := json.Unmarshal(local(json.RawMessage(`{"enabled":true,"ipsExcluded":["192.168.0.0/16","203.0.113.7/32"]}`)), &s); err != nil {
+		t.Fatal(err)
+	}
+	if !s.Enabled || len(s.IPs) != len(nearby)+1 || s.IPs[1] != "203.0.113.7/32" {
+		t.Fatalf("kept and added: %+v", s)
+	}
+	if got := string(local(json.RawMessage(`null`))); got != "null" {
+		t.Fatalf("no sniffing stays none: %s", got)
+	}
+}
+
+func TestWithoutIPv6TheNameHandlerAnswersAAAAEmptyNotRefused(t *testing.T) {
+	tun := Options{Mode: ModeTun, Tun: Tun{Name: "spofy0", Resolver: []string{"172.19.0.2"}}}
+	types := func(block string, off bool) string {
+		t.Helper()
+		o := tun
+		o.Tweaks.NoIPv6 = off
+		b, err := Build(json.RawMessage(`{"outbounds":[{"tag":"proxy","protocol":"vless"},{"tag":"dns-out","protocol":"dns","settings":{"nonIPQuery":"reject"`+block+`}}],"dns":{"servers":["1.1.1.1"]}}`), o)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var c struct {
+			Outbounds []struct {
+				Protocol string                     `json:"protocol"`
+				Settings map[string]json.RawMessage `json:"settings"`
+			} `json:"outbounds"`
+		}
+		if err := json.Unmarshal(b, &c); err != nil {
+			t.Fatal(err)
+		}
+		for _, ob := range c.Outbounds {
+			if ob.Protocol == "dns" {
+				if string(ob.Settings["nonIPQuery"]) != `"reject"` {
+					t.Fatalf("the rest of the handler is kept: %s", ob.Settings)
+				}
+				return string(ob.Settings["blockTypes"])
+			}
+		}
+		t.Fatal("no name handler")
+		return ""
+	}
+	for _, c := range []struct {
+		block string
+		off   bool
+		want  string
+	}{
+		{`,"blockTypes":[28]`, true, ""},
+		{`,"blockTypes":[28,65]`, true, "[65]"},
+		{`,"blockTypes":[28]`, false, "[28]"},
+		{``, true, ""},
+	} {
+		if got := types(c.block, c.off); got != c.want {
+			t.Errorf("%s, switched off %v: blockTypes %q, want %q", c.block, c.off, got, c.want)
+		}
+	}
+}
+
 func TestBuildIsDeterministic(t *testing.T) {
 	raw := servers(t, "../../testdata/sub/sub.json")[0]
 	a, _ := Build(raw, tunOptions)
@@ -270,6 +419,7 @@ func TestTweaksChangeOnlyWhatTheyName(t *testing.T) {
 			Settings struct {
 				Fragment *struct {
 					Packets string `json:"packets"`
+					Split   string `json:"maxSplit"`
 				} `json:"fragment"`
 			} `json:"settings"`
 			Stream struct {
@@ -306,7 +456,7 @@ func TestTweaksChangeOnlyWhatTheyName(t *testing.T) {
 	f := read(o)
 	cut := false
 	for _, out := range f.Outbounds {
-		cut = cut || (out.Tag == TagFragment && out.Protocol == "freedom" && out.Settings.Fragment != nil && out.Settings.Fragment.Packets == "tlshello")
+		cut = cut || (out.Tag == TagFragment && out.Protocol == "freedom" && out.Settings.Fragment != nil && out.Settings.Fragment.Packets == "1-1" && out.Settings.Fragment.Split == "2-2")
 	}
 	if f.Outbounds[0].Stream.Sockopt.Dialer != TagFragment || f.Outbounds[1].Stream.Sockopt.Dialer != "" || !cut {
 		t.Fatalf("fragment: %+v", f.Outbounds)

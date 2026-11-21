@@ -7,32 +7,6 @@ import 'strings.dart';
 import 'theme.dart';
 import 'widgets.dart';
 
-const serverSortKey = 'serverSort';
-const sortSpeed = 'speed';
-const sortName = 'name';
-
-List<Server> ordered(List<Server> servers) {
-  final indexed = [for (var i = 0; i < servers.length; i++) (i, servers[i])];
-  indexed.sort((a, b) {
-    final (ai, x) = a;
-    final (bi, y) = b;
-    if (x.tier != y.tier) {
-      return x.tier.compareTo(y.tier);
-    }
-    if (x.measured != y.measured) {
-      return x.measured ? -1 : 1;
-    }
-    if (x.silent != y.silent) {
-      return x.silent ? 1 : -1;
-    }
-    if (x.measured && x.delayMs != y.delayMs) {
-      return x.delayMs.compareTo(y.delayMs);
-    }
-    return ai.compareTo(bi);
-  });
-  return [for (final (_, s) in indexed) s];
-}
-
 class Place {
   const Place(this.key, this.name, this.country, this.servers);
 
@@ -51,8 +25,6 @@ class Place {
     return best;
   }
 
-  int get tier => servers.map((s) => s.tier).reduce((a, b) => a < b ? a : b);
-
   bool get silent => servers.every((s) => s.silent);
 }
 
@@ -64,11 +36,11 @@ String placeName(Server s) {
   return stem;
 }
 
-List<Place> places(List<Server> servers, {required String sort, String query = ''}) {
+List<Place> places(List<Server> servers, {String query = ''}) {
   final wanted = query.trim().toLowerCase();
   final groups = <String, List<Server>>{};
   final names = <String, String>{};
-  for (final s in ordered(servers)) {
+  for (final s in servers) {
     final name = placeName(s);
     final key = '${s.country.toUpperCase()}|${name.toLowerCase()}';
     final found =
@@ -79,26 +51,9 @@ List<Place> places(List<Server> servers, {required String sort, String query = '
       names[key] = name;
     }
   }
-  final list = [
+  return [
     for (final e in groups.entries) Place(e.key, names[e.key]!, e.value.first.country, List.unmodifiable(e.value)),
   ];
-  list.sort((a, b) {
-    if (sort == sortName) {
-      return a.name.toLowerCase().compareTo(b.name.toLowerCase());
-    }
-    if (a.tier != b.tier) {
-      return a.tier.compareTo(b.tier);
-    }
-    final x = a.best, y = b.best;
-    if ((x > 0) != (y > 0)) {
-      return x > 0 ? -1 : 1;
-    }
-    if (a.silent != b.silent) {
-      return a.silent ? 1 : -1;
-    }
-    return x != y ? x.compareTo(y) : a.name.compareTo(b.name);
-  });
-  return list;
 }
 
 String? noteLink(List<String> lines) {
@@ -158,9 +113,8 @@ class _ServersScreenState extends State<ServersScreen> {
         builder: (context, _) {
           final connection = model.connection;
           final servers = model.snapshot.servers;
-          final sort = model.snapshot.settings[serverSortKey] == sortName ? sortName : sortSpeed;
           final query = _query.text;
-          final groups = places(servers, sort: sort, query: query);
+          final groups = places(servers, query: query);
           final failure = model.failure;
           final measuring = model.running(Task.measure);
           final subscription = model.snapshot.subscription;
@@ -171,15 +125,9 @@ class _ServersScreenState extends State<ServersScreen> {
           final rows = <Widget>[
             if (failure?.task == Task.measure) Notice(S.failure(failure!)),
             if (servers.length > 6) SearchField(controller: _query, hint: S.search, clear: S.appsClear),
-            if (servers.length > 3)
-              Segments<String>(
-                options: [(sortSpeed, S.sortSpeed), (sortName, S.sortName)],
-                value: sort,
-                onChanged: (value) => model.set(serverSortKey, value == sortSpeed ? null : value),
-              ),
             if (query.isEmpty)
               Tile(
-                leading: const CountryMark('A'),
+                leading: GlyphMark(Glyph.bolt, color: Ink.accent),
                 title: S.auto,
                 subtitle: S.autoHint,
                 selected: connection.auto,
@@ -321,14 +269,14 @@ class ServerTile extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     mainAxisSize: MainAxisSize.min,
                     children: [
+                      Text(title, style: Ink.strong, maxLines: 1, overflow: TextOverflow.ellipsis),
+                      const SizedBox(height: 2),
                       Text(
                         via,
-                        style: Ink.type(11, 600, selected ? Ink.accent : Ink.faint, spacing: 0.6),
+                        style: Ink.type(12, 400, selected ? Ink.accent : Ink.faint),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
-                      const SizedBox(height: 2),
-                      Text(title, style: Ink.strong, maxLines: 1, overflow: TextOverflow.ellipsis),
                     ],
                   ),
                 ),

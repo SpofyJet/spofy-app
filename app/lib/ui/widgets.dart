@@ -140,13 +140,15 @@ class SwitchTile extends StatelessWidget {
   const SwitchTile({
     super.key,
     required this.title,
-    required this.subtitle,
+    this.subtitle = '',
+    this.leading,
     required this.value,
     required this.onChanged,
   });
 
   final String title;
   final String subtitle;
+  final Widget? leading;
   final bool value;
   final ValueChanged<bool> onChanged;
 
@@ -154,28 +156,38 @@ class SwitchTile extends StatelessWidget {
   Widget build(BuildContext context) {
     return Semantics(
       toggled: value,
-      hint: subtitle,
+      hint: subtitle.isEmpty ? null : subtitle,
       child: Pressable(
         label: title,
         onTap: () => onChanged(!value),
         child: Panel(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          padding: EdgeInsets.symmetric(horizontal: 16, vertical: leading == null ? 14 : 12),
           child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              if (leading != null) ...[leading!, const SizedBox(width: 12)],
               Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(title, style: Ink.strong),
-                    Padding(
-                      padding: const EdgeInsets.only(top: 3),
-                      child: Text(subtitle, style: Ink.note),
-                    ),
-                  ],
+                child: Padding(
+                  padding: EdgeInsets.only(top: leading == null ? 0 : 6),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(child: Text(title, style: Ink.strong)),
+                          const SizedBox(width: 12),
+                          Toggle(value: value),
+                        ],
+                      ),
+                      if (subtitle.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 2),
+                          child: Text(subtitle, style: Ink.note),
+                        ),
+                    ],
+                  ),
                 ),
               ),
-              const SizedBox(width: 14),
-              Toggle(value: value),
             ],
           ),
         ),
@@ -464,9 +476,10 @@ class CountryMark extends StatelessWidget {
 }
 
 class GlyphMark extends StatelessWidget {
-  const GlyphMark(this.glyph, {super.key});
+  const GlyphMark(this.glyph, {super.key, this.color});
 
   final Glyph glyph;
+  final Color? color;
 
   @override
   Widget build(BuildContext context) {
@@ -474,7 +487,7 @@ class GlyphMark extends StatelessWidget {
       decoration: BoxDecoration(color: Ink.raised, borderRadius: const BorderRadius.all(Radius.circular(12))),
       child: SizedBox.square(
         dimension: 40,
-        child: Center(child: GlyphIcon(glyph, color: Ink.muted, size: 20)),
+        child: Center(child: GlyphIcon(glyph, color: color ?? Ink.muted, size: 20)),
       ),
     );
   }
@@ -673,11 +686,12 @@ class Backdrop extends StatelessWidget {
 }
 
 class Header extends StatelessWidget {
-  const Header({super.key, required this.title, this.onBack, this.action});
+  const Header({super.key, required this.title, this.onBack, this.action, this.note = ''});
 
   final String title;
   final VoidCallback? onBack;
   final Widget? action;
+  final String note;
 
   @override
   Widget build(BuildContext context) {
@@ -695,8 +709,23 @@ class Header extends StatelessWidget {
           Expanded(
             child: Semantics(
               header: true,
-              child: Text(
-                title,
+              child: Text.rich(
+                TextSpan(
+                  text: title,
+                  children: [
+                    if (note.isNotEmpty) ...[
+                      const WidgetSpan(
+                        alignment: PlaceholderAlignment.baseline,
+                        baseline: TextBaseline.alphabetic,
+                        child: SizedBox(width: 8),
+                      ),
+                      TextSpan(
+                        text: note,
+                        style: Ink.label.copyWith(color: Ink.faint),
+                      ),
+                    ],
+                  ],
+                ),
                 style: onBack == null ? Ink.wordmark : Ink.heading,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,

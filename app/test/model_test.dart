@@ -10,6 +10,7 @@ import 'package:spofy/core/socket_transport.dart';
 import 'package:spofy/state/model.dart';
 
 import 'replay.dart';
+import 'scenes.dart';
 import 'transcript.dart';
 
 Object? normal(Object? json) => jsonDecode(jsonEncode(json));
@@ -137,6 +138,50 @@ void main() {
     await expectLater(client.call(const Request.hello()), throwsA(isA<CoreClosed>()));
     expect(await model.connect(), isFalse);
   });
+
+  test(
+    'speed comes from two samples of the counters and is forgotten when polling rests or the tunnel stops',
+    () async {
+      final transport = SilentTransport();
+      var now = DateTime.utc(2026, 11, 21);
+      final model = AppModel(CoreClient(transport), clock: () => now);
+      var id = 0;
+      Future<void> sample(int up, int down, {Duration after = const Duration(seconds: 2), bool rest = false}) async {
+        now = now.add(after);
+        final done = model.poll();
+        if (rest) {
+          model.rest();
+        }
+        transport.answer('{"re":${++id},"ok":true,"traffic":{"up":$up,"down":$down}}');
+        await done;
+      }
+
+      await sample(1000, 5000);
+      expect(model.speed, isNull);
+      await sample(3000, 2005000);
+      expect([model.speed!.up, model.speed!.down], [1000, 1000000]);
+      await sample(3000, 2005000, after: const Duration(milliseconds: 2500));
+      expect([model.speed!.up, model.speed!.down], [0, 0]);
+      await sample(0, 10);
+      expect(model.speed, isNull, reason: 'counters started again');
+      await sample(500, 2010);
+      expect([model.speed!.up, model.speed!.down], [250, 1000]);
+      model.rest();
+      expect(model.speed, isNull);
+      await sample(900500, 9002010, after: const Duration(minutes: 10));
+      expect(model.speed, isNull, reason: 'first sample after a rest');
+      await sample(901500, 9004010, rest: true);
+      expect(model.speed, isNull, reason: 'a reply that comes after the rest is not a sample');
+      expect(model.traffic.up, 900500);
+      await sample(902500, 9006010);
+      await sample(904500, 9008010);
+      expect([model.speed!.up, model.speed!.down], [1000, 1000]);
+      model.snapshot = model.snapshot.apply(const ConnectionEvent(Connection(state: VpnState.connected)));
+      transport.answer(jsonEncode(const ConnectionEvent(Connection()).toJson()));
+      await Future<void>.delayed(Duration.zero);
+      expect([model.connection.state, model.speed, model.traffic.up], [VpnState.idle, null, 0]);
+    },
+  );
 
   test('a second tap while the first request is running sends nothing', () async {
     final transcript = Transcript.load();

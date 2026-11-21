@@ -126,7 +126,8 @@ void main() {
     expect(S.until(subscription(days: -2), clock), 'ended');
     expect(S.usage(subscription(used: 96000)), '93.8 of 100 GB');
     expect(S.usage(subscription()), '13 of 100 GB');
-    expect(S.usage(subscription(total: 0)), 'Unlimited');
+    expect(S.usage(subscription(total: 0)), '13 GB, unlimited');
+    expect(S.plan(subscription(total: 0, expire: 0)), 'Forever, unlimited · 13 GB');
     expect(S.expiry(subscription(days: 42), clock), '42 days left · until 31 December');
     expect(S.expiry(subscription(days: 60), clock), '60 days left · until 18 January 2027');
     expect(S.expiry(subscription(days: 3), clock), '3 days left');
@@ -223,7 +224,7 @@ void main() {
     expect(find.text('Follows the system: Русский'), findsOneWidget);
     expect(tester.widget<WidgetsApp>(find.byType(WidgetsApp)).locale, const Locale('en'));
     await open(tester, 'Back');
-    expect(find.text('INTERFACE'), findsOneWidget);
+    expect(find.text('APPEARANCE'), findsOneWidget);
     expect(find.text('English'), findsOneWidget);
     await open(tester, 'Back');
     expect(find.text('VPN is off'), findsOneWidget);

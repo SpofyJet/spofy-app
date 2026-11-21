@@ -95,8 +95,10 @@ class _ChoiceScreenState extends State<ChoiceScreen> {
       child: ListenableBuilder(
         listenable: widget.model,
         builder: (context, _) {
-          final value = widget.model.snapshot.settings[widget.setting];
-          final custom = value is String && !widget.choices.any((c) => c.value == value);
+          final stored = widget.model.snapshot.settings[widget.setting];
+          final known = widget.choices.any((c) => c.value == stored);
+          final custom = stored is String && !known;
+          final value = known || custom ? stored : widget.choices.first.value;
           final own = widget.own;
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -106,7 +108,11 @@ class _ChoiceScreenState extends State<ChoiceScreen> {
                 child: ListView(
                   padding: const EdgeInsets.fromLTRB(Ink.gutter, 4, Ink.gutter, 16),
                   children: [
-                    if (widget.hint.isNotEmpty) ...[Text(widget.hint, style: Ink.note), const SizedBox(height: 12)],
+                    if (widget.hint.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(4, 0, 4, 12),
+                        child: Text(widget.hint, style: Ink.note),
+                      ),
                     for (final c in widget.choices) ...[
                       Tile(
                         title: c.title,
@@ -121,7 +127,7 @@ class _ChoiceScreenState extends State<ChoiceScreen> {
                     if (own != null) ...[
                       Tile(
                         title: own,
-                        subtitle: custom ? value : widget.ownHint,
+                        subtitle: custom ? stored : widget.ownHint,
                         selected: custom && !_typing,
                         arrow: !custom,
                         wrap: true,

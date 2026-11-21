@@ -28,12 +28,28 @@ class Failure {
 }
 
 class AppModel extends ChangeNotifier {
-  AppModel(CoreClient client, {this.reopen, this.permit, this.always, this.apps, this.browse, this.install}) {
+  AppModel(
+    CoreClient client, {
+    this.reopen,
+    this.permit,
+    this.always,
+    this.apps,
+    this.browse,
+    this.install,
+    this.clock = DateTime.now,
+  }) {
     _attach(client);
   }
 
-  AppModel.opening(Future<CoreClient> Function() open, {this.permit, this.always, this.apps, this.browse, this.install})
-    : reopen = open {
+  AppModel.opening(
+    Future<CoreClient> Function() open, {
+    this.permit,
+    this.always,
+    this.apps,
+    this.browse,
+    this.install,
+    this.clock = DateTime.now,
+  }) : reopen = open {
     unawaited(revive());
   }
 
@@ -47,6 +63,7 @@ class AppModel extends ChangeNotifier {
   final AppList? apps;
   final void Function(String address)? browse;
   final Future<bool> Function(String file)? install;
+  final DateTime Function() clock;
 
   CoreClient? _client;
   StreamSubscription<Event>? _events;
@@ -54,9 +71,12 @@ class AppModel extends ChangeNotifier {
   final _running = <Task>{};
   bool _disposed = false;
   bool _reviving = false;
+  (Traffic, DateTime)? _sample;
+  int _samples = 0;
 
   Snapshot snapshot = const Snapshot();
   Traffic traffic = const Traffic();
+  Traffic? speed;
   bool ready = false;
   String fault = '';
   Failure? failure;
@@ -217,7 +237,38 @@ class AppModel extends ChangeNotifier {
     await _ask(Request.online(online: online));
   }
 
-  Future<bool> set(String key, Object? value) async => (await _ask(Request.set(key, value)))?.ok ?? false;
+  static const reconnecting = {'fragment', 'dns', 'ipv6', 'lan', 'logLevel'};
+
+  (String, Object?)? pending;
+
+  Future<bool> set(String key, Object? value) async {
+    final state = connection.state;
+    if (reconnecting.contains(key) && (state.protecting || state == VpnState.connecting)) {
+      pending = (key, value);
+      notifyListeners();
+      return false;
+    }
+    return _set(key, value);
+  }
+
+  Future<bool> apply() async {
+    final change = pending;
+    if (change == null) {
+      return false;
+    }
+    pending = null;
+    notifyListeners();
+    return _set(change.$1, change.$2);
+  }
+
+  void keep() {
+    if (pending != null) {
+      pending = null;
+      notifyListeners();
+    }
+  }
+
+  Future<bool> _set(String key, Object? value) async => (await _ask(Request.set(key, value)))?.ok ?? false;
 
   Future<Report?> report() async => (await _ask(const Request.report()))?.report;
 
@@ -228,11 +279,36 @@ class AppModel extends ChangeNotifier {
   }
 
   Future<void> poll() async {
+    final series = _samples;
     final seen = (await _ask(const Request.traffic()))?.traffic;
-    if (seen != null && (seen.up != traffic.up || seen.down != traffic.down)) {
+    if (seen == null || series != _samples) {
+      return;
+    }
+    final at = clock();
+    final last = _sample;
+    _sample = (seen, at);
+    final ms = last == null ? 0 : at.difference(last.$2).inMilliseconds;
+    final rate = last == null || ms <= 0 || seen.up < last.$1.up || seen.down < last.$1.down
+        ? null
+        : Traffic(up: (seen.up - last.$1.up) * 1000 ~/ ms, down: (seen.down - last.$1.down) * 1000 ~/ ms);
+    if (seen.up != traffic.up || seen.down != traffic.down || rate?.up != speed?.up || rate?.down != speed?.down) {
       traffic = seen;
+      speed = rate;
       _changed();
     }
+  }
+
+  void rest() {
+    _forget();
+    if (speed != null) {
+      speed = null;
+      _changed();
+    }
+  }
+
+  void _forget() {
+    _sample = null;
+    _samples++;
   }
 
   void dismiss() {
@@ -297,8 +373,10 @@ class AppModel extends ChangeNotifier {
 
   void _apply(Event event) {
     snapshot = snapshot.apply(event);
-    if (event is ConnectionEvent && !event.connection.state.protecting && (traffic.up != 0 || traffic.down != 0)) {
+    if (event is ConnectionEvent && !event.connection.state.protecting) {
       traffic = const Traffic();
+      speed = null;
+      _forget();
     }
     _changed();
   }

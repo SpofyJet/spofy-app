@@ -163,7 +163,7 @@ func inboundFor(o Options, sniffing json.RawMessage) (map[string]any, string, er
 		if t.OutIface != "" {
 			settings["autoOutboundsInterface"] = t.OutIface
 		}
-		return map[string]any{"tag": TagTun, "protocol": "tun", "port": 0, "settings": settings, "sniffing": sniffing}, TagTun, nil
+		return map[string]any{"tag": TagTun, "protocol": "tun", "port": 0, "settings": settings, "sniffing": local(sniffing)}, TagTun, nil
 	}
 	return nil, "", ErrConfig
 }
@@ -274,4 +274,22 @@ func mustJSON(v any) json.RawMessage {
 		panic(err)
 	}
 	return b
+}
+
+var nearby = []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "100.64.0.0/10", "fc00::/7", "fe80::/10"}
+
+func local(sniffing json.RawMessage) json.RawMessage {
+	var s map[string]json.RawMessage
+	if json.Unmarshal(sniffing, &s) != nil || s == nil {
+		return sniffing
+	}
+	var kept []string
+	json.Unmarshal(s["ipsExcluded"], &kept)
+	for _, r := range nearby {
+		if !slices.Contains(kept, r) {
+			kept = append(kept, r)
+		}
+	}
+	s["ipsExcluded"] = mustJSON(kept)
+	return mustJSON(s)
 }

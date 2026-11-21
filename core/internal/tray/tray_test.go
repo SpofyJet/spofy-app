@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"unicode/utf16"
@@ -26,6 +27,15 @@ const said = `_t\(\s*'([^'$]*)',\s*'([^'$]*)',?\s*\)`
 
 var entry = regexp.MustCompile(`(?m)^\s+((?:'\w+'(?:\s*\|\|\s*)?)+|VpnState\.\w+|_) =>\s+(\w+|` + said + `),?$`)
 
+var escaped = regexp.MustCompile(`\\u([0-9A-Fa-f]{4})`)
+
+func unescape(s string) string {
+	return escaped.ReplaceAllStringFunc(s, func(m string) string {
+		n, _ := strconv.ParseUint(m[2:], 16, 32)
+		return string(rune(n))
+	})
+}
+
 type window struct {
 	words map[string][2]string
 }
@@ -33,7 +43,7 @@ type window struct {
 func (w window) text(t *testing.T, l Lang, m []string) string {
 	t.Helper()
 	if m[3] != "" || m[4] != "" {
-		return m[3+int(l)]
+		return unescape(m[3+int(l)])
 	}
 	v, ok := w.words[m[2]]
 	if !ok {
@@ -64,10 +74,10 @@ func readWindow(t *testing.T) (window, string) {
 	src := string(raw)
 	w := window{words: map[string][2]string{}}
 	for _, m := range regexp.MustCompile(`static const (\w+) = '([^']*)';`).FindAllStringSubmatch(src, -1) {
-		w.words[m[1]] = [2]string{m[2], m[2]}
+		w.words[m[1]] = [2]string{unescape(m[2]), unescape(m[2])}
 	}
 	for _, m := range regexp.MustCompile(`static String get (\w+) =>\s+`+said+`;`).FindAllStringSubmatch(src, -1) {
-		w.words[m[1]] = [2]string{m[2], m[3]}
+		w.words[m[1]] = [2]string{unescape(m[2]), unescape(m[3])}
 	}
 	return w, src
 }

@@ -19,14 +19,15 @@ const (
 )
 
 var (
-	fragment = json.RawMessage(`{"tag":"` + TagFragment + `","protocol":"freedom","settings":{"fragment":{"packets":"tlshello","length":"100-200","interval":"10-20"}}}`)
+	fragment = json.RawMessage(`{"tag":"` + TagFragment + `","protocol":"freedom","settings":{"fragment":{"packets":"1-1","length":"128-137","interval":"0-0","maxSplit":"2-2"}}}`)
 	private  = []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "fc00::/7", "fe80::/10"}
 )
 
 func tweak(out map[string]json.RawMessage, o Options) error {
 	t := o.Tweaks
 	tun := o.Mode == ModeTun
-	if !t.Fragment && !(tun && (len(t.DNS) > 0 || t.NoIPv6 || t.LAN)) {
+	noIPv6 := t.NoIPv6 || onlyIPv4(out["dns"])
+	if !t.Fragment && !(tun && (len(t.DNS) > 0 || noIPv6 || t.LAN)) {
 		return nil
 	}
 	var outbounds []map[string]json.RawMessage
@@ -54,14 +55,14 @@ func tweak(out map[string]json.RawMessage, o Options) error {
 			return ErrConfig
 		}
 		dns["servers"] = mustJSON(t.DNS)
-		if t.NoIPv6 {
+		if noIPv6 {
 			dns["queryStrategy"] = mustJSON("UseIPv4")
 		}
 		out["dns"] = mustJSON(dns)
 		if main != "" {
 			rules = append(rules, mustJSON(map[string]any{"type": "field", "ip": t.DNS, "outboundTag": main}))
 		}
-	} else if tun && t.NoIPv6 && len(out["dns"]) > 0 && string(out["dns"]) != "null" {
+	} else if tun && noIPv6 && len(out["dns"]) > 0 && string(out["dns"]) != "null" && !onlyIPv4(out["dns"]) {
 		dns := map[string]json.RawMessage{}
 		if json.Unmarshal(out["dns"], &dns) != nil {
 			return ErrConfig
@@ -69,7 +70,13 @@ func tweak(out map[string]json.RawMessage, o Options) error {
 		dns["queryStrategy"] = mustJSON("UseIPv4")
 		out["dns"] = mustJSON(dns)
 	}
-	if tun && t.NoIPv6 {
+	if tun && noIPv6 {
+		for _, ob := range outbounds {
+			var protocol string
+			if json.Unmarshal(ob["protocol"], &protocol) == nil && protocol == "dns" {
+				answerEmpty(ob)
+			}
+		}
 		rules = append(rules, mustJSON(map[string]any{"type": "field", "inboundTag": []string{TagTun}, "ip": []string{"::/0"}, "outboundTag": TagBlock}))
 		outbounds = append(outbounds, map[string]json.RawMessage{"tag": mustJSON(TagBlock), "protocol": mustJSON("blackhole")})
 	}
@@ -121,4 +128,26 @@ func shield(ob map[string]json.RawMessage) bool {
 	stream["sockopt"] = mustJSON(sockopt)
 	ob["streamSettings"] = mustJSON(stream)
 	return true
+}
+
+func onlyIPv4(raw json.RawMessage) bool {
+	var dns struct {
+		Strategy string `json:"queryStrategy"`
+	}
+	return json.Unmarshal(raw, &dns) == nil && dns.Strategy == "UseIPv4"
+}
+
+func answerEmpty(ob map[string]json.RawMessage) {
+	var settings map[string]json.RawMessage
+	var types []int
+	if json.Unmarshal(ob["settings"], &settings) != nil || json.Unmarshal(settings["blockTypes"], &types) != nil {
+		return
+	}
+	kept := slices.DeleteFunc(types, func(t int) bool { return t == 28 })
+	if len(kept) == 0 {
+		delete(settings, "blockTypes")
+	} else {
+		settings["blockTypes"] = mustJSON(kept)
+	}
+	ob["settings"] = mustJSON(settings)
 }
