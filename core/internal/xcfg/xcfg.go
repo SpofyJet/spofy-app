@@ -120,6 +120,15 @@ func Build(server json.RawMessage, o Options) ([]byte, error) {
 	return json.Marshal(out)
 }
 
+func Local(cfg []byte) bool {
+	var c struct {
+		Inbounds []struct {
+			Protocol string `json:"protocol"`
+		} `json:"inbounds"`
+	}
+	return json.Unmarshal(cfg, &c) == nil && len(c.Inbounds) == 1 && c.Inbounds[0].Protocol == "mixed"
+}
+
 func MainTag(server json.RawMessage) string {
 	var in struct {
 		Outbounds []struct {
