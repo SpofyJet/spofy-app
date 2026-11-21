@@ -106,6 +106,13 @@ class MainActivity : FlutterActivity() {
                     result.success(null)
                 }
                 "install" -> install(call.arguments as? String, result)
+                "drawn" -> {
+                    try {
+                        reportFullyDrawn()
+                    } catch (e: Exception) {
+                    }
+                    result.success(null)
+                }
                 "always" -> {
                     try {
                         startActivity(Intent(Settings.ACTION_VPN_SETTINGS))

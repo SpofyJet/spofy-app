@@ -26,6 +26,8 @@ abstract interface class Host {
 
   void Function(bool dark, Color background)? get dress;
 
+  void Function()? get drawn;
+
   void links(void Function(String link) hear);
 }
 
@@ -70,6 +72,10 @@ class AndroidHost implements Host {
 
   @override
   void Function(bool dark, Color background)? get dress => null;
+
+  @override
+  void Function()? get drawn =>
+      () => unawaited(_channel.invokeMethod<void>('drawn'));
 
   @override
   void links(void Function(String link) hear) {
@@ -181,6 +187,9 @@ class DesktopHost implements Host {
 
   @override
   void Function(bool dark, Color background)? get dress => null;
+
+  @override
+  void Function()? get drawn => null;
 
   @override
   void links(void Function(String link) hear) {}

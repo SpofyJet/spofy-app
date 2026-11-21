@@ -19,11 +19,12 @@ import 'update.dart';
 import 'widgets.dart';
 
 class SpofyApp extends StatefulWidget {
-  const SpofyApp({super.key, required this.model, this.now = DateTime.now, this.dress, this.hold = false});
+  const SpofyApp({super.key, required this.model, this.now = DateTime.now, this.dress, this.drawn, this.hold = false});
 
   final AppModel model;
   final DateTime Function() now;
   final void Function(bool dark, Color background)? dress;
+  final VoidCallback? drawn;
   final bool hold;
 
   @override
@@ -41,10 +42,12 @@ class _SpofyAppState extends State<SpofyApp> with WidgetsBindingObserver {
   Lang? _lang;
   Palette? _dressed;
   Timer? _held;
+  VoidCallback? _drawn;
 
   @override
   void initState() {
     super.initState();
+    _drawn = widget.drawn;
     if (widget.hold) {
       WidgetsBinding.instance.deferFirstFrame();
       _held = Timer(const Duration(milliseconds: 300), _show);
@@ -138,6 +141,12 @@ class _SpofyAppState extends State<SpofyApp> with WidgetsBindingObserver {
     _look();
     if (widget.model.ready || widget.model.fault.isNotEmpty) {
       _show();
+      final drawn = _drawn;
+      if (drawn != null) {
+        _drawn = null;
+        WidgetsBinding.instance.addPostFrameCallback((_) => drawn());
+        WidgetsBinding.instance.scheduleFrame();
+      }
     }
     if (widget.model.ready && widget.model.offered != null && !_subscription) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _subscribe());

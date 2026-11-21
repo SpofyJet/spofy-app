@@ -23,5 +23,5 @@ void main() {
     install: platform.install,
   );
   platform.links(model.offer);
-  runApp(SpofyApp(model: model, dress: platform.dress, hold: Platform.isWindows));
+  runApp(SpofyApp(model: model, dress: platform.dress, drawn: platform.drawn, hold: Platform.isWindows));
 }
