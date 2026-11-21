@@ -16,6 +16,7 @@ import (
 
 	"golang.org/x/sys/windows"
 
+	"github.com/SpofyJet/spofy-app/core/internal/sysproxy"
 	"github.com/SpofyJet/spofy-app/core/internal/tray"
 )
 
@@ -171,7 +172,26 @@ func init() {
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "proxy" {
+		os.Exit(proxy(os.Args[2:]))
+	}
 	os.Exit(run())
+}
+
+func proxy(args []string) int {
+	var err error
+	switch {
+	case len(args) == 2 && args[0] == "on" && sysproxy.Local(args[1]):
+		err = sysproxy.Apply(args[1])
+	case len(args) == 1 && args[0] == "off":
+		err = sysproxy.Restore()
+	default:
+		return 2
+	}
+	if err != nil {
+		return 1
+	}
+	return 0
 }
 
 func run() int {
@@ -189,7 +209,7 @@ func run() int {
 	}
 	defer windows.CloseHandle(single)
 	registerApplicationRestart.Call(0, 1|2|8)
-	s := &shell{}
+	s := &shell{restore: func() { sysproxy.Restore() }}
 	s.model.System, _ = windows.GetUserPreferredUILanguages(windows.MUI_LANGUAGE_NAME)
 	if err := s.create(); err != nil {
 		return 1

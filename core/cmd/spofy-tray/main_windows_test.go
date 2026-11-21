@@ -411,3 +411,52 @@ func TestTheTrayFollowsTheServiceAndLetsGo(t *testing.T) {
 	}
 	t.Logf("let go in %v", time.Since(at))
 }
+
+func TestWithoutTheServiceTheTrayGivesTheSystemProxyBackOncePerOutage(t *testing.T) {
+	was := orphaned
+	orphaned = 300 * time.Millisecond
+	defer func() { orphaned = was }()
+	var given atomic.Int32
+	s := &shell{wake: func() {}, restore: func() { given.Add(1) }}
+	path := fmt.Sprintf(`\\.\pipe\spofy-tray-test-%d-%d`, os.Getpid(), pipes.Add(1))
+	ctx, cancel := context.WithCancel(context.Background())
+	served := make(chan struct{})
+	go func() {
+		defer close(served)
+		s.serve(ctx, path)
+	}()
+	defer func() {
+		cancel()
+		<-served
+	}()
+	time.Sleep(200 * time.Millisecond)
+	if given.Load() != 0 {
+		t.Fatal("given back before the service was missed for long")
+	}
+	time.Sleep(2 * time.Second)
+	if n := given.Load(); n != 1 {
+		t.Fatalf("given back %d times in one outage", n)
+	}
+	sd, err := windows.SecurityDescriptorFromString("O:BAD:P(A;;GA;;;WD)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	l, err := (&namedpipe.ListenConfig{SecurityDescriptor: sd}).Listen(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := <-accept(t, l)
+	l.Close()
+	if c == nil {
+		t.Fatal("the tray did not come to the service")
+	}
+	f := &fake{t: t, c: c}
+	f.r = bufio.NewReader(c)
+	f.read()
+	c.Close()
+	for end := time.Now().Add(10 * time.Second); given.Load() != 2 && time.Now().Before(end); time.Sleep(20 * time.Millisecond) {
+	}
+	if n := given.Load(); n != 2 {
+		t.Fatalf("the next outage gave back %d times in all", n)
+	}
+}

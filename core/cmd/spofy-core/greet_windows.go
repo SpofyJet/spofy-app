@@ -30,39 +30,47 @@ func greet(root string, logs io.Writer) {
 }
 
 func startIn(session uint32, path string) error {
+	h, err := spawnIn(session, path)
+	if err != nil {
+		return err
+	}
+	windows.CloseHandle(h)
+	return nil
+}
+
+func spawnIn(session uint32, path string, args ...string) (windows.Handle, error) {
 	var token windows.Token
 	if err := windows.WTSQueryUserToken(session, &token); err != nil {
-		return err
+		return 0, err
 	}
 	defer token.Close()
 	var env *uint16
 	if err := windows.CreateEnvironmentBlock(&env, token, false); err != nil {
-		return err
+		return 0, err
 	}
 	defer windows.DestroyEnvironmentBlock(env)
 	desktop, err := windows.UTF16PtrFromString(`winsta0\default`)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	si := windows.StartupInfo{Desktop: desktop}
 	si.Cb = uint32(unsafe.Sizeof(si))
 	app, err := windows.UTF16PtrFromString(path)
 	if err != nil {
-		return err
+		return 0, err
 	}
-	line, err := windows.UTF16PtrFromString(windows.EscapeArg(path))
+	line, err := windows.UTF16PtrFromString(windows.ComposeCommandLine(append([]string{path}, args...)))
 	if err != nil {
-		return err
+		return 0, err
 	}
 	dir, err := windows.UTF16PtrFromString(filepath.Dir(path))
 	if err != nil {
-		return err
+		return 0, err
 	}
 	var pi windows.ProcessInformation
 	if err := windows.CreateProcessAsUser(token, app, line, nil, nil, false, windows.CREATE_UNICODE_ENVIRONMENT, env, dir, &si, &pi); err != nil {
-		return err
+		return 0, err
 	}
 	windows.CloseHandle(pi.Thread)
-	windows.CloseHandle(pi.Process)
-	return nil
+	return pi.Process, nil
 }

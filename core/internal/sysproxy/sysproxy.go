@@ -49,6 +49,10 @@ func Ours(address string) Settings {
 
 var loopback = regexp.MustCompile(`^127\.0\.0\.1:[0-9]{1,5}$`)
 
+func Local(address string) bool {
+	return loopback.MatchString(address)
+}
+
 func leftover(s Settings) bool {
 	return loopback.MatchString(s.Server) && s.Bypass == Bypass
 }
