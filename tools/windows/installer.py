@@ -17,6 +17,8 @@ from stand import PIPE, Pipe, expect, failed, past, pipe_open, ps, until
 
 PACK, STUB, BUNDLE, OUT = (os.path.abspath(a) for a in sys.argv[2:6])
 VERSION = sys.argv[6]
+AGAIN = os.environ.get("STAND_AGAIN", "plain")
+SKIP = set(os.environ.get("STAND_SKIP", "").split(","))
 RELEASE = os.path.abspath(sys.argv[7])
 SERVICE = r"SYSTEM\CurrentControlSet\Services\Spofy"
 HOME = os.path.join(os.environ["ProgramFiles"], "Spofy")
@@ -241,7 +243,8 @@ def shut(hwnd):
 def launches(source, ui, installer):
     shots = os.path.join(OUT, "launch")
     runs = []
-    for name in ("first", "second", "third", "idle"):
+    print("     step: start menu launches", flush=True)
+    for name in () if "launch" in SKIP else ("first", "second", "third", "idle"):
         if name == "idle":
             ui.ask("disconnect", 30)
         r = stand.launch(lambda: os.startfile(SHORTCUT), name, shots)
@@ -250,6 +253,11 @@ def launches(source, ui, installer):
             shut(r["hwnd"])
         if name == "idle":
             ui.ask("connect", 60)
+    print("     step: setup again", flush=True)
+    if "again" in SKIP:
+        if os.path.exists(DESKTOP):
+            os.remove(DESKTOP)
+        return person(installer) if "person" not in SKIP else None
     clean = [r for r in runs if r["shown"] is not None and r["content"] is not None and r["frames"] and r["frames"][0][1] < 1]
     expect("opened from the Start menu, the window shows its final picture in its first frame, with no other window",
            len(clean) == len(runs) and not any(r["others"] for r in runs),
@@ -258,8 +266,12 @@ def launches(source, ui, installer):
     watch = Watch(source)
     began = time.time()
     started = []
-    seen = stand.launch(lambda: started.append(subprocess.Popen([installer])), "setup-again", shots, limit=20.0)
-    code = started[0].wait(120)
+    line = {"plain": [installer], "log": [installer, "-log", os.path.join(OUT, "again.log")], "window": [os.path.join(HOME, "spofy.exe")]}[AGAIN]
+    print("     step: again %s, start %s" % (AGAIN, time.strftime("%H:%M:%S")), flush=True)
+    seen = stand.launch(lambda: started.append(subprocess.Popen(line, cwd=HOME)), "setup-again", shots, limit=20.0)
+    print("     step: again measured %s" % time.strftime("%H:%M:%S"), flush=True)
+    code = started[0].wait(120) if AGAIN != "window" else 0
+    print("     step: again ended %s code %s" % (time.strftime("%H:%M:%S"), code), flush=True)
     outage, leaks = watch.stop(began)
     after = stand.service_pid()
     expect("the installer of the version that is installed opens the window with no window of its own and leaves the service and the VPN alone",
@@ -268,16 +280,24 @@ def launches(source, ui, installer):
            % (code, time.time() - began, seen["shown"], seen["front"], seen["content"], before, after, outage, leaks, seen["others"]))
     if seen["hwnd"]:
         shut(seen["hwnd"])
+    print("     step: again closed %s" % time.strftime("%H:%M:%S"), flush=True)
     os.remove(DESKTOP)
+    if "person" not in SKIP:
+        person(installer)
+
+
+def person(installer):
+    print("     step: setup as a person", flush=True)
     answer = []
 
-    def person():
+    def run():
         try:
             answer.append(stand.as_person([installer], 60))
         except OSError as e:
             answer.append("refused %s" % e.winerror)
     before = stand.service_pid()
-    seen = stand.launch(lambda: threading.Thread(target=person, daemon=True).start(), "setup-person", shots, limit=10.0)
+    shots = os.path.join(OUT, "launch")
+    seen = stand.launch(lambda: threading.Thread(target=run, daemon=True).start(), "setup-person", shots, limit=10.0)
     until(lambda: answer, 60, 0.1)
     expect("a person without administrator rights opens Spofy with the installer: no request for rights, the window opens, the service stays",
            answer == [0] and seen["shown"] is not None and stand.service_pid() == before,
@@ -327,7 +347,11 @@ def scenario():
            bool(added) and added.get("ok") and bool(on) and on.get("ok") and away() and Site.hits > hits and not past(source),
            "connect=%.2f s %s %s" % (took, str(added)[:200], str(on)[:200]))
     expect("the Wintun driver is in the system while the tunnel is up", traces()["driver"])
-    launches(source, ui, old)
+    if "all" not in SKIP:
+        launches(source, ui, old)
+    elif os.path.exists(DESKTOP):
+        os.remove(DESKTOP)
+    print("     step: after the launches", flush=True)
     ui.ask("set", key="killSwitch", value=True)
     ui.ask("set", key="autoConnect", value=False)
     ui.close()
@@ -431,7 +455,7 @@ def rescue(after):
 
 
 began = time.time()
-threading.Thread(target=rescue, args=(480,), daemon=True).start()
+threading.Thread(target=rescue, args=(360,), daemon=True).start()
 try:
     scenario()
 finally:

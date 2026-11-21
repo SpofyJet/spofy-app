@@ -4,6 +4,7 @@ on:
 permissions:
   actions: read
   contents: read
+  statuses: write
 jobs:
   installer:
     runs-on: windows-latest
@@ -11,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        round: [1, 2]
+        again: [plain, log, window]
     defaults:
       run:
         shell: bash
@@ -36,7 +37,20 @@ jobs:
           CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -H windowsgui -X main.version=$version" -o ../../built/dist/spofy-setup.exe ./cmd/spofy-setup
       - working-directory: spofy-app
         timeout-minutes: 14
+        env:
+          STAND_SKIP: person
+          STAND_AGAIN: ${{ matrix.again }}
+          GH_TOKEN: ${{ github.token }}
         run: |
+          mkdir -p dist/installer
+          touch dist/installer/stand.log
+          (while true; do
+             last=$(grep -E "^(ok  |FAIL|     step|STUCK|INSTALLER)" dist/installer/stand.log | tail -1 | cut -c1-110)
+             body=$(python -c "import json,sys,time; print(json.dumps({'state':'pending','context':'stand-'+sys.argv[1],'description':time.strftime('%H:%M:%S ')+sys.argv[2]}))" "$STAND_AGAIN" "$last")
+             curl -s -o /dev/null -m 5 -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" -d "$body"
+             sleep 4
+           done) > /dev/null 2>&1 &
+          beat=$!
           mkdir -p dist/installer dist/stand
           bundle=../built/app/build/windows/x64/runner/Release
           cp "$bundle/spofy-core.exe" dist/stand/
@@ -44,4 +58,5 @@ jobs:
           code=0
           timeout 12m python -u tools/windows/installer.py dist/stand/spofy-core.exe ../built/dist/spofy-pack.exe ../built/dist/spofy-setup.exe "$bundle" dist/installer "$version" ../built/dist/spofy-release.exe > dist/installer/stand.log 2>&1 < /dev/null || code=$?
           cat dist/installer/stand.log
+          kill $beat || true
           exit $code
