@@ -934,6 +934,38 @@ func TestThemeAndLanguageTakeOnlyKnownValues(t *testing.T) {
 	}
 }
 
+func TestMotionIsOnlyTurnedOffAndLeavesTheTunnelAlone(t *testing.T) {
+	b := newBench(t, nil).subscribed()
+	for _, bad := range []string{`true`, `"off"`, `0`, `""`, `[false]`, `{"motion":false}`} {
+		if err := b.app.Set(KeyMotion, json.RawMessage(bad)); code(err) != CodeValue {
+			t.Fatalf("%s: %v", bad, err)
+		}
+	}
+	if err := b.app.Connect("de"); err != nil {
+		t.Fatal(err)
+	}
+	starts := len(b.tunnel.Starts())
+	b.seen()
+	if err := b.app.Set(KeyMotion, json.RawMessage(`false`)); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(30 * time.Millisecond)
+	same(t, b.seen(), []string{EvSettings})
+	if got := len(b.tunnel.Starts()); got != starts || b.tunnel.Running() != "de" || b.app.Snapshot().Connection.State != session.Connected {
+		t.Fatalf("turning motion off touched the tunnel: starts %d → %d, running %q", starts, got, b.tunnel.Running())
+	}
+	b.open(nil)
+	if s := b.app.Snapshot().Settings; string(s[KeyMotion]) != "false" {
+		t.Fatalf("settings after restart: %s", s)
+	}
+	if err := b.app.Set(KeyMotion, json.RawMessage(`null`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, kept := b.app.Snapshot().Settings[KeyMotion]; kept {
+		t.Fatal("null did not bring motion back")
+	}
+}
+
 func TestChosenAppsAreCheckedAndKeptInOneForm(t *testing.T) {
 	b := newBench(t, nil)
 	many := make([]string, 513)

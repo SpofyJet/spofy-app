@@ -60,6 +60,7 @@ const (
 	KeyReminded     = "reminded"
 	KeyTheme        = "theme"
 	KeyLanguage     = "language"
+	KeyMotion       = "motion"
 )
 
 var Resolvers = map[string][]string{
@@ -83,6 +84,7 @@ var checks = map[string]func(json.RawMessage) bool{
 	KeyReminded:     validReminded,
 	KeyTheme:        oneOf("light", "dark"),
 	KeyLanguage:     oneOf("ru", "en"),
+	KeyMotion:       off,
 }
 
 func validRemind(v json.RawMessage) bool {
@@ -134,6 +136,10 @@ func validDNS(v json.RawMessage) bool {
 
 func flag(v json.RawMessage) bool {
 	return string(v) == "true" || string(v) == "false"
+}
+
+func off(v json.RawMessage) bool {
+	return string(v) == "false"
 }
 
 func text(v json.RawMessage) (string, bool) {
