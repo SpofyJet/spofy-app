@@ -1,6 +1,7 @@
 package tray
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 )
@@ -39,6 +40,9 @@ type words struct {
 	connect, disconnect, stop, addSubscription, renew, manage string
 	stale, lost, quit, quitOff, open, failure, stopped        string
 	titles, hints, reasons, stopTitles, stopActions           map[string]string
+	remindToday, remindTomorrow, remindEnded                  string
+	remindSoonHint, remindEndedHint                           string
+	remindSoon                                                [3]string
 }
 
 var texts = [...]words{
@@ -106,6 +110,12 @@ var texts = [...]words{
 			"spent":   "Докупить трафик",
 			"devices": "Добавить устройство",
 		},
+		remindToday:     "Подписка закончится сегодня",
+		remindTomorrow:  "Подписка закончится завтра",
+		remindEnded:     "Подписка закончилась",
+		remindSoonHint:  "Продлите её, чтобы VPN работал без перерыва",
+		remindEndedHint: "Продлите её, чтобы VPN снова заработал",
+		remindSoon:      [3]string{"Подписка закончится через %d день", "Подписка закончится через %d дня", "Подписка закончится через %d дней"},
 	},
 	En: {
 		connect:         "Turn VPN on",
@@ -171,7 +181,36 @@ var texts = [...]words{
 			"spent":   "Buy more data",
 			"devices": "Add a device",
 		},
+		remindToday:     "Your subscription ends today",
+		remindTomorrow:  "Your subscription ends tomorrow",
+		remindEnded:     "Your subscription has ended",
+		remindSoonHint:  "Renew it to keep the VPN running without a break",
+		remindEndedHint: "Renew it to turn the VPN back on",
+		remindSoon:      [3]string{"Your subscription ends in %d day", "Your subscription ends in %d days", "Your subscription ends in %d days"},
 	},
+}
+
+func (l Lang) Remind(r Reminder) Note {
+	w := texts[l]
+	switch {
+	case r.Ended:
+		return Note{Title: w.remindEnded, Text: w.remindEndedHint}
+	case r.Left == 0:
+		return Note{Title: w.remindToday, Text: w.remindSoonHint}
+	case r.Left == 1:
+		return Note{Title: w.remindTomorrow, Text: w.remindSoonHint}
+	}
+	return Note{Title: fmt.Sprintf(w.remindSoon[l.form(r.Left)], r.Left), Text: w.remindSoonHint}
+}
+
+func (l Lang) form(n int) int {
+	switch {
+	case l == En && n == 1, l == Ru && n%10 == 1 && n%100 != 11:
+		return 0
+	case l == En, n%10 >= 2 && n%10 <= 4 && (n%100 < 12 || n%100 > 14):
+		return 1
+	}
+	return 2
 }
 
 func (l Lang) Title(state string) string {

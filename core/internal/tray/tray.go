@@ -3,6 +3,7 @@ package tray
 import (
 	"encoding/json"
 	"strings"
+	"time"
 	"unicode/utf16"
 )
 
@@ -65,11 +66,14 @@ type server struct {
 }
 
 type subscription struct {
-	Stop string `json:"stop"`
+	Stop   string `json:"stop"`
+	Expire int64  `json:"expire"`
 }
 
 type settings struct {
 	Language string `json:"language"`
+	Remind   *int   `json:"remind"`
+	Reminded string `json:"reminded"`
 }
 
 type snapshot struct {
@@ -103,6 +107,8 @@ type Model struct {
 	servers  []server
 	asked    map[uint64]Action
 	told     bool
+	remind   *int
+	reminded string
 }
 
 func (m *Model) Link(hello uint64) {
@@ -152,6 +158,7 @@ func (m *Model) Read(line []byte) (Result, error) {
 		}
 		m.linked = true
 		m.language = msg.Snapshot.Settings.Language
+		m.remind, m.reminded = msg.Snapshot.Settings.Remind, msg.Snapshot.Settings.Reminded
 		m.conn = msg.Snapshot.Connection
 		m.sub = msg.Snapshot.Subscription
 		m.servers = msg.Snapshot.Servers
@@ -197,13 +204,37 @@ func (m *Model) event(msg message) Result {
 		m.servers = msg.Servers
 		return Result{Changed: true}
 	case "settings":
-		if msg.Settings == nil || msg.Settings.Language == m.language {
+		if msg.Settings == nil {
+			return Result{}
+		}
+		m.remind, m.reminded = msg.Settings.Remind, msg.Settings.Reminded
+		if msg.Settings.Language == m.language {
 			return Result{}
 		}
 		m.language = msg.Settings.Language
 		return Result{Changed: true}
 	}
 	return Result{}
+}
+
+func (m *Model) Reminder(now time.Time) (string, *Note) {
+	if !m.linked || m.sub == nil {
+		return "", nil
+	}
+	days := RemindDefault
+	if m.remind != nil {
+		days = *m.remind
+	}
+	r, due := Due(m.sub.Expire, days, now)
+	if !due || r.Key == m.reminded {
+		return "", nil
+	}
+	n := m.Lang().Remind(r)
+	return r.Key, &n
+}
+
+func (m *Model) Reminded(key string) {
+	m.reminded = key
 }
 
 func (m *Model) StalledNote() *Note {

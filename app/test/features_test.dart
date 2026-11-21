@@ -233,6 +233,27 @@ void main() {
     );
   });
 
+  testWidgets('the subscription reminder is chosen in settings: three days unless changed, or off', (tester) async {
+    final scene = home(VpnState.idle);
+    await show(tester, scene, phone);
+    await open(tester, S.settings);
+    await scrollTo(tester, find.text(S.remind));
+    expect(find.text(S.remindBefore(3)), findsOneWidget);
+    await open(tester, S.remind);
+    expect(find.text(S.remindHint), findsOneWidget);
+    await tester.tap(find.text(S.remindOff));
+    await tester.pump();
+    expect(scene.transport.sent.last, '{"id":1,"op":"set","key":"remind","value":0}');
+    await tester.tap(find.text(S.remindBefore(7)));
+    await tester.pump();
+    expect(scene.transport.sent.last, '{"id":2,"op":"set","key":"remind","value":7}');
+    await tester.tap(find.text(S.remindBefore(3)));
+    await tester.pump();
+    expect(scene.transport.sent.last, '{"id":3,"op":"set","key":"remind","value":null}');
+    expect(S.remindBefore(1), 'За день');
+    expect(S.remindBefore(5), 'За 5 дней');
+  });
+
   testWidgets('the log is read from the core, copied whole and cleared', (tester) async {
     final copied = copies(tester);
     final scene = home(VpnState.idle);

@@ -214,6 +214,15 @@ abstract final class S {
   static String get support => _t('Поддержка', 'Support');
   static String get connection => _t('Подключение', 'Connection');
   static String get look => _t('Интерфейс', 'Interface');
+  static String get notices => _t('Уведомления', 'Notifications');
+  static String get remind => _t('Напоминание о подписке', 'Subscription reminder');
+  static String get remindHint => _t(
+    'Уведомление перед концом подписки и в день, когда она закончится',
+    'A notice before the subscription ends and on the day it does',
+  );
+  static String remindBefore(int n) =>
+      n == 1 ? _t('За день', 'A day before') : _t('За ${days(n)}', '${days(n)} before');
+  static String get remindOff => _t('Не напоминать', 'Don’t remind');
   static String get theme => _t('Тема', 'Theme');
   static String get themeSystem => _t('Системная', 'System');
   static String get themeLight => _t('Светлая', 'Light');

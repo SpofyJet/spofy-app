@@ -6,6 +6,7 @@ import (
 )
 
 const (
+	RemindedKey   = "reminded"
 	RemindDefault = 3
 	lifetime      = 4070908800
 	late          = 3 * 24 * time.Hour

@@ -15,6 +15,7 @@ const dnsKey = 'dns';
 const ipv6Key = 'ipv6';
 const lanKey = 'lan';
 const logLevelKey = 'logLevel';
+const remindKey = 'remind';
 
 const probeGoogle = 'http://www.gstatic.com/generate_204';
 const probeCloudflare = 'http://cp.cloudflare.com/generate_204';
@@ -46,6 +47,14 @@ List<Choice> get languageChoices => [
   Choice(null, S.languageSystem, S.languageNow(langFor(null, WidgetsBinding.instance.platformDispatcher.locales))),
   const Choice('ru', S.russian),
   const Choice('en', S.english),
+];
+
+List<Choice> get remindChoices => [
+  Choice(1, S.remindBefore(1)),
+  Choice(null, S.remindBefore(3)),
+  Choice(5, S.remindBefore(5)),
+  Choice(7, S.remindBefore(7)),
+  Choice(0, S.remindOff),
 ];
 
 String chosen(List<Choice> choices, Object? value) {
@@ -180,6 +189,21 @@ class SettingsScreen extends StatelessWidget {
                       ],
                       value: wait,
                       onChanged: (value) => model.set(probeTimeoutKey, value == 4 ? null : value),
+                    ),
+                    SectionTitle(S.notices),
+                    Tile(
+                      title: S.remind,
+                      subtitle: chosen(remindChoices, settings[remindKey]),
+                      onTap: () => open(
+                        (done) => ChoiceScreen(
+                          model: model,
+                          title: S.remind,
+                          setting: remindKey,
+                          choices: remindChoices,
+                          hint: S.remindHint,
+                          onDone: done,
+                        ),
+                      ),
                     ),
                     SectionTitle(S.look),
                     Tile(

@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -56,6 +57,7 @@ const (
 	KeyLAN          = "lan"
 	KeyLogLevel     = "logLevel"
 	KeyRemind       = "remind"
+	KeyReminded     = "reminded"
 	KeyTheme        = "theme"
 	KeyLanguage     = "language"
 )
@@ -78,6 +80,7 @@ var checks = map[string]func(json.RawMessage) bool{
 	KeyProbeURL:     validURL,
 	KeyDNS:          validDNS,
 	KeyRemind:       validRemind,
+	KeyReminded:     validReminded,
 	KeyTheme:        oneOf("light", "dark"),
 	KeyLanguage:     oneOf("ru", "en"),
 }
@@ -88,6 +91,13 @@ func validRemind(v json.RawMessage) bool {
 		return true
 	}
 	return false
+}
+
+var reminded = regexp.MustCompile(`^[01]:[0-9]{1,12}$`)
+
+func validReminded(v json.RawMessage) bool {
+	t, ok := text(v)
+	return ok && reminded.MatchString(t)
 }
 
 func oneOf(allowed ...string) func(json.RawMessage) bool {

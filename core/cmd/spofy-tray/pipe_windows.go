@@ -276,6 +276,24 @@ func (s *shell) ask(op string, a tray.Action) uint64 {
 	}
 }
 
+func (s *shell) set(key, value string) {
+	b, _ := json.Marshal(struct {
+		ID    uint64 `json:"id"`
+		Op    string `json:"op"`
+		Key   string `json:"key"`
+		Value string `json:"value"`
+	}{s.next.Add(1), "set", key, value})
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.out == nil || !s.model.Linked() {
+		return
+	}
+	select {
+	case s.out <- append(b, '\n'):
+	default:
+	}
+}
+
 func request(id uint64, op string) []byte {
 	b, _ := json.Marshal(struct {
 		ID uint64 `json:"id"`

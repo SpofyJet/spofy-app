@@ -1760,4 +1760,14 @@ func TestTheReminderTakesOnlyTheOfferedDays(t *testing.T) {
 	if _, kept := b.app.Snapshot().Settings[KeyRemind]; kept {
 		t.Fatal("null did not bring back the default")
 	}
+	for _, bad := range []string{`"2:1798761600"`, `"0:"`, `"0:1798761600 "`, `1`, `""`, `"0:1234567890123"`} {
+		if err := b.app.Set(KeyReminded, json.RawMessage(bad)); code(err) != CodeValue {
+			t.Fatalf("reminded = %s: %v", bad, err)
+		}
+	}
+	for _, good := range []string{`"0:1798761600"`, `"1:1798761600"`, `null`} {
+		if err := b.app.Set(KeyReminded, json.RawMessage(good)); err != nil {
+			t.Fatalf("reminded = %s: %v", good, err)
+		}
+	}
 }
