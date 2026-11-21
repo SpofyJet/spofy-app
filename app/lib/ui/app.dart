@@ -9,6 +9,7 @@ import 'about.dart';
 import 'apps.dart';
 import 'home.dart';
 import 'logs.dart';
+import 'motion.dart';
 import 'servers.dart';
 import 'settings.dart';
 import 'strings.dart';
@@ -39,6 +40,7 @@ class _SpofyAppState extends State<SpofyApp> with WidgetsBindingObserver {
   int _offered = 0;
   Palette? _palette;
   Lang? _lang;
+  bool _still = false;
   Palette? _dressed;
   Timer? _held;
 
@@ -93,6 +95,13 @@ class _SpofyAppState extends State<SpofyApp> with WidgetsBindingObserver {
     final settings = widget.model.snapshot.settings;
     final palette = paletteFor(settings[themeKey], system.platformBrightness);
     final lang = langFor(settings[languageKey], system.locales);
+    final still = settings[motionKey] == false;
+    if (still != _still) {
+      _still = still;
+      if (_palette != null) {
+        setState(() {});
+      }
+    }
     final first = _palette == null;
     if (!again && palette == _palette && lang == _lang) {
       return;
@@ -203,27 +212,8 @@ class _SpofyAppState extends State<SpofyApp> with WidgetsBindingObserver {
     );
   }
 
-  static PageRoute<T> _route<T>(WidgetBuilder builder, [RouteSettings? settings]) {
-    return PageRouteBuilder<T>(
-      settings: settings,
-      transitionDuration: const Duration(milliseconds: 180),
-      reverseTransitionDuration: const Duration(milliseconds: 140),
-      pageBuilder: (context, _, _) => builder(context),
-      transitionsBuilder: (context, animation, _, child) {
-        if (MediaQuery.disableAnimationsOf(context)) {
-          return child;
-        }
-        final curved = CurvedAnimation(parent: animation, curve: Curves.easeOutCubic);
-        return FadeTransition(
-          opacity: curved,
-          child: SlideTransition(
-            position: Tween(begin: const Offset(0.04, 0), end: Offset.zero).animate(curved),
-            child: child,
-          ),
-        );
-      },
-    );
-  }
+  PageRoute<T> _route<T>(WidgetBuilder builder, [RouteSettings? settings]) =>
+      _Page<T>(builder, () => _still || Motion.system, settings: settings);
 
   @override
   Widget build(BuildContext context) {
@@ -239,11 +229,14 @@ class _SpofyAppState extends State<SpofyApp> with WidgetsBindingObserver {
         debugShowCheckedModeBanner: false,
         textStyle: Ink.body,
         pageRouteBuilder: <T>(RouteSettings settings, WidgetBuilder builder) => _route<T>(builder, settings),
-        builder: (context, child) => Stack(
-          children: [
-            child!,
-            ReconnectAsk(model: model),
-          ],
+        builder: (context, child) => MotionScope(
+          off: _still,
+          child: Stack(
+            children: [
+              child!,
+              ReconnectAsk(model: model),
+            ],
+          ),
         ),
         home: HomeScreen(
           model: model,
@@ -284,25 +277,27 @@ class ReconnectAsk extends StatelessWidget {
               constraints: const BoxConstraints(maxWidth: 600),
               child: Semantics(
                 liveRegion: true,
-                child: Panel(
-                  color: Ink.raised,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Text(S.reconnectAsk, style: Ink.body),
-                      const SizedBox(height: 8),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: QuietButton(label: S.cancel, onTap: model.keep),
-                          ),
-                          Expanded(
-                            child: QuietButton(label: S.apply, color: Ink.accent, onTap: () => model.apply()),
-                          ),
-                        ],
-                      ),
-                    ],
+                child: Rise(
+                  child: Panel(
+                    color: Ink.raised,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Text(S.reconnectAsk, style: Ink.body),
+                        const SizedBox(height: 8),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: QuietButton(label: S.cancel, onTap: model.keep),
+                            ),
+                            Expanded(
+                              child: QuietButton(label: S.apply, color: Ink.accent, onTap: () => model.apply()),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -310,6 +305,58 @@ class ReconnectAsk extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+}
+
+class _Page<T> extends PageRoute<T> {
+  _Page(this._build, this._still, {super.settings});
+
+  final WidgetBuilder _build;
+  final bool Function() _still;
+
+  @override
+  Color? get barrierColor => null;
+
+  @override
+  String? get barrierLabel => null;
+
+  @override
+  bool get maintainState => true;
+
+  @override
+  Duration get transitionDuration => _still() ? Duration.zero : Motion.large;
+
+  @override
+  Duration get reverseTransitionDuration => _still() ? Duration.zero : Motion.medium;
+
+  @override
+  bool didPop(T? result) {
+    controller?.reverseDuration = reverseTransitionDuration;
+    return super.didPop(result);
+  }
+
+  @override
+  Widget buildPage(BuildContext context, Animation<double> animation, Animation<double> secondaryAnimation) =>
+      _build(context);
+
+  @override
+  Widget buildTransitions(
+    BuildContext context,
+    Animation<double> animation,
+    Animation<double> secondaryAnimation,
+    Widget child,
+  ) {
+    if (Motion.still(context)) {
+      return child;
+    }
+    final eased = CurvedAnimation(parent: animation, curve: Motion.enter);
+    return FadeTransition(
+      opacity: eased,
+      child: SlideTransition(
+        position: Tween(begin: const Offset(0.04, 0), end: Offset.zero).animate(eased),
+        child: child,
+      ),
     );
   }
 }

@@ -5,6 +5,7 @@ import 'package:flutter/widgets.dart';
 
 import 'flags.dart';
 import 'icons.dart';
+import 'motion.dart';
 import 'strings.dart';
 import 'theme.dart';
 
@@ -72,7 +73,7 @@ class _PressableState extends State<Pressable> {
               : null,
           child: AnimatedOpacity(
             opacity: _down ? 0.72 : 1,
-            duration: const Duration(milliseconds: 90),
+            duration: Motion.of(context, Motion.tap),
             child: DecoratedBox(
               position: DecorationPosition.foreground,
               decoration: BoxDecoration(
@@ -111,7 +112,7 @@ class Toggle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const time = Duration(milliseconds: 140);
+    final time = Motion.of(context, Motion.small);
     return AnimatedContainer(
       duration: time,
       width: 48,
@@ -123,7 +124,7 @@ class Toggle extends StatelessWidget {
       ),
       child: AnimatedAlign(
         duration: time,
-        curve: Curves.easeOutCubic,
+        curve: Motion.move,
         alignment: value ? Alignment.centerRight : Alignment.centerLeft,
         child: AnimatedContainer(
           duration: time,
@@ -319,7 +320,7 @@ class Segments<T> extends StatelessWidget {
                   radius: _radius,
                   onTap: () => onChanged(id),
                   child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 140),
+                    duration: Motion.of(context, Motion.small),
                     constraints: const BoxConstraints(minHeight: 44),
                     alignment: Alignment.center,
                     padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
@@ -508,7 +509,12 @@ class RemainderMark extends StatelessWidget {
         child: Center(
           child: SizedBox.square(
             dimension: 20,
-            child: CustomPaint(painter: _RingPainter(left.clamp(0.0, 1.0), low ? Ink.warning : Ink.accent)),
+            child: TweenAnimationBuilder<double>(
+              tween: Tween(end: left.clamp(0.0, 1.0)),
+              duration: Motion.of(context, Motion.settle),
+              curve: Motion.move,
+              builder: (context, left, _) => CustomPaint(painter: _RingPainter(left, low ? Ink.warning : Ink.accent)),
+            ),
           ),
         ),
       ),
@@ -595,12 +601,12 @@ class Spinner extends StatefulWidget {
 }
 
 class _SpinnerState extends State<Spinner> with SingleTickerProviderStateMixin {
-  late final AnimationController _turn = AnimationController(vsync: this, duration: const Duration(milliseconds: 1100));
+  late final AnimationController _turn = AnimationController(vsync: this, duration: Motion.turn);
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    if (MediaQuery.disableAnimationsOf(context)) {
+    if (Motion.still(context)) {
       _turn.stop();
     } else if (!_turn.isAnimating) {
       _turn.repeat();

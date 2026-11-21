@@ -3,6 +3,7 @@ import 'package:flutter/widgets.dart';
 import '../core/protocol.dart';
 import '../state/model.dart';
 import 'icons.dart';
+import 'motion.dart';
 import 'strings.dart';
 import 'theme.dart';
 import 'widgets.dart';
@@ -139,7 +140,7 @@ class _ServersScreenState extends State<ServersScreen> {
                 padding: const EdgeInsets.symmetric(vertical: 24),
                 child: Text(S.nothingFound, style: Ink.note, textAlign: TextAlign.center),
               ),
-            for (final place in groups) ..._place(place, connection, query.isNotEmpty),
+            for (final place in groups) _place(place, connection, query.isNotEmpty),
             if (notes.isNotEmpty)
               Tile(
                 leading: const GlyphMark(Glyph.warning),
@@ -177,52 +178,62 @@ class _ServersScreenState extends State<ServersScreen> {
     );
   }
 
-  List<Widget> _place(Place place, Connection connection, bool searching) {
+  Widget _place(Place place, Connection connection, bool searching) {
     if (place.servers.length == 1) {
       final s = place.servers.single;
-      return [
-        ServerTile(
-          server: s,
-          title: S.place(s),
-          selected: connection.choice == s.id,
-          active: connection.server == s.id,
-          onTap: () => _pick(s.id),
-        ),
-      ];
+      return ServerTile(
+        key: ValueKey(place.key),
+        server: s,
+        title: S.place(s),
+        selected: connection.choice == s.id,
+        active: connection.server == s.id,
+        onTap: () => _pick(s.id),
+      );
     }
     final chosen = place.servers.any((s) => s.id == connection.choice);
     final open = searching || _open.contains(place.key) || (chosen && !_open.contains('-${place.key}'));
-    return [
-      PlaceTile(
-        place: place,
-        open: open,
-        selected: chosen && !open,
-        onTap: () => setState(() {
-          if (open) {
-            _open
-              ..remove(place.key)
-              ..add('-${place.key}');
-          } else {
-            _open
-              ..add(place.key)
-              ..remove('-${place.key}');
-          }
-        }),
-      ),
-      if (open)
-        for (final s in place.servers)
-          Padding(
-            padding: const EdgeInsets.only(left: 20),
-            child: ServerTile(
-              server: s,
-              title: S.place(s),
-              selected: connection.choice == s.id,
-              active: connection.server == s.id,
-              mark: false,
-              onTap: () => _pick(s.id),
-            ),
+    return Column(
+      key: ValueKey(place.key),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        PlaceTile(
+          place: place,
+          open: open,
+          selected: chosen && !open,
+          onTap: () => setState(() {
+            if (open) {
+              _open
+                ..remove(place.key)
+                ..add('-${place.key}');
+            } else {
+              _open
+                ..add(place.key)
+                ..remove('-${place.key}');
+            }
+          }),
+        ),
+        Unfold(
+          open: open,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              for (final s in place.servers)
+                Padding(
+                  padding: const EdgeInsets.only(left: 20, top: 8),
+                  child: ServerTile(
+                    server: s,
+                    title: S.place(s),
+                    selected: connection.choice == s.id,
+                    active: connection.server == s.id,
+                    mark: false,
+                    onTap: () => _pick(s.id),
+                  ),
+                ),
+            ],
           ),
-    ];
+        ),
+      ],
+    );
   }
 }
 
@@ -362,7 +373,8 @@ class PlaceTile extends StatelessWidget {
                 ),
                 AnimatedRotation(
                   turns: open ? 0.25 : 0,
-                  duration: const Duration(milliseconds: 160),
+                  duration: Motion.of(context, Motion.small),
+                  curve: Motion.move,
                   child: GlyphIcon(Glyph.forward, color: Ink.faint, size: 20),
                 ),
               ],
